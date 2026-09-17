@@ -69,9 +69,11 @@ jobs:
           path = Path('packaging/flatpak/com.moonlight_stream.Moonlight.json')
           manifest = json.loads(path.read_text())
           module = next(m for m in manifest['modules'] if m['name'] == 'moonlight')
-          module['sources'][0]['url'] = 'https://github.com/' + os.environ['GITHUB_REPOSITORY'] + '.git'
-          module['sources'][0]['commit'] = os.environ['GITHUB_SHA']
-          module['sources'][1]['commands'] = ['echo ' + os.environ['CI_VERSION'] + ' > app/version.txt']
+          git_source = next(s for s in module['sources'] if s.get('type') == 'git')
+          version_source = next(s for s in module['sources'] if s.get('type') == 'shell')
+          git_source['url'] = 'https://github.com/' + os.environ['GITHUB_REPOSITORY'] + '.git'
+          git_source['commit'] = os.environ['GITHUB_SHA']
+          version_source['commands'] = ['echo ' + os.environ['CI_VERSION'] + ' > app/version.txt']
           path.write_text(json.dumps(manifest, indent=4) + '\n')
           PY
       - name: Build Flatpak
@@ -89,8 +91,9 @@ jobs:
           from pathlib import Path
           manifest = json.loads(Path('flatpak-build/files/manifest.json').read_text())
           modules = {m['name']: m for m in manifest['modules']}
-          assert modules['moonlight']['sources'][0]['url'] == 'https://github.com/' + os.environ['GITHUB_REPOSITORY'] + '.git'
-          assert modules['moonlight']['sources'][0]['commit'] == os.environ['GITHUB_SHA']
+          moonlight_git_source = next(s for s in modules['moonlight']['sources'] if s.get('type') == 'git')
+          assert moonlight_git_source['url'] == 'https://github.com/' + os.environ['GITHUB_REPOSITORY'] + '.git'
+          assert moonlight_git_source['commit'] == os.environ['GITHUB_SHA']
           assert any(s['type'] == 'patch' and 'libplacebo-disable-internally-synchronized-queues.patch' in s['path'] for s in modules['libplacebo']['sources'])
           PY
       - uses: actions/upload-artifact@v6
