@@ -10,6 +10,7 @@ import StreamingPreferences 1.0
 import SystemProperties 1.0
 import SdlGamepadKeyNavigation 1.0
 import InputModeTracker 1.0
+import TvTheme 1.0
 
 ApplicationWindow {
     property bool pollingActive: false
@@ -28,7 +29,10 @@ ApplicationWindow {
         // Override the background color to Material 2 colors for Qt 6.5+
         // in order to improve contrast between GFE's placeholder box art
         // and the background of the app grid.
-        if (SystemProperties.usesMaterial3Theme) {
+        if (SystemProperties.tvMode) {
+            Material.background = TvTheme.background
+        }
+        else if (SystemProperties.usesMaterial3Theme) {
             Material.background = "#303030"
         }
 
@@ -160,6 +164,21 @@ ApplicationWindow {
         }
         else {
             stackView.forceActiveFocus()
+        }
+    }
+
+    // TV mode draws a subtle gradient behind the whole window. Pages leave
+    // their backgrounds transparent, so it shows through everywhere.
+    background: Rectangle {
+        color: window.Material.backgroundColor
+
+        Rectangle {
+            anchors.fill: parent
+            visible: SystemProperties.tvMode
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: TvTheme.backgroundTop }
+                GradientStop { position: 1.0; color: TvTheme.backgroundBottom }
+            }
         }
     }
 
@@ -676,13 +695,42 @@ ApplicationWindow {
 
         property bool targetOnScreen: false
 
+        // In TV mode the ring glides to each newly focused control. It only
+        // animates briefly after the target changes, so it still tracks
+        // scrolling and layout changes without lagging behind.
+        property bool gliding: false
+
         parent: Overlay.overlay
         z: 1000000
         visible: target !== null && target.visible && targetOnScreen
         color: "transparent"
-        radius: 6
+        radius: SystemProperties.tvMode ? TvTheme.focusRingRadius : 6
         border.width: 3
         border.color: Material.accent
+
+        Behavior on x { enabled: focusRing.gliding; NumberAnimation { duration: TvTheme.animationFast; easing.type: Easing.OutCubic } }
+        Behavior on y { enabled: focusRing.gliding; NumberAnimation { duration: TvTheme.animationFast; easing.type: Easing.OutCubic } }
+        Behavior on width { enabled: focusRing.gliding; NumberAnimation { duration: TvTheme.animationFast; easing.type: Easing.OutCubic } }
+        Behavior on height { enabled: focusRing.gliding; NumberAnimation { duration: TvTheme.animationFast; easing.type: Easing.OutCubic } }
+
+        // A soft outer glow so the ring stands out from across the room
+        Rectangle {
+            visible: SystemProperties.tvMode
+            anchors.fill: parent
+            anchors.margins: -4
+            color: "transparent"
+            radius: parent.radius + 4
+            border.width: 4
+            border.color: Material.accent
+            opacity: 0.35
+        }
+
+        // Stops the glide once the ring has reached its new target
+        Timer {
+            id: glideTimer
+            interval: TvTheme.animationFast * 2
+            onTriggered: focusRing.gliding = false
+        }
 
         function updateGeometry() {
             if (target === null) {
@@ -715,7 +763,19 @@ ApplicationWindow {
             height = bottom - top
         }
 
-        onTargetChanged: updateGeometry()
+        onTargetChanged: {
+            // Only glide from a control that was showing the ring. Otherwise
+            // the ring would fly in from wherever it was last shown.
+            if (SystemProperties.tvMode && visible && target !== null) {
+                gliding = true
+                glideTimer.restart()
+            }
+            else {
+                gliding = false
+            }
+
+            updateGeometry()
+        }
 
         // Follow the target while it moves (scrolling, animations, layout changes)
         Timer {
