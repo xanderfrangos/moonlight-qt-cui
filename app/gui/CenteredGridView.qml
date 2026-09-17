@@ -1,6 +1,8 @@
 import QtQuick 2.9
 import QtQuick.Controls 2.2
 
+import SystemProperties 1.0
+
 GridView {
     property int minMargin: 10
     property real availableWidth: (parent.width - 2 * minMargin)
@@ -50,4 +52,8 @@ GridView {
     }
 
     boundsBehavior: Flickable.OvershootBounds
+
+    // The TV mode toolbar and hint bar are transparent, so cards must not
+    // scroll underneath them
+    clip: SystemProperties.tvMode
 }
