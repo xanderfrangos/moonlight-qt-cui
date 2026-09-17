@@ -7,7 +7,18 @@
 #include "settings/mappingmanager.h"
 #include "inputmodetracker.h"
 
-#define AXIS_NAVIGATION_REPEAT_DELAY 150
+// Holding a D-pad direction or the left stick repeats navigation after an
+// initial delay, starting slowly and speeding up the longer it is held.
+#define NAV_REPEAT_INITIAL_DELAY 400
+#define NAV_REPEAT_START_INTERVAL 100
+#define NAV_REPEAT_MIN_INTERVAL 50
+#define NAV_REPEAT_INTERVAL_STEP 10
+
+// The stick must pass the press threshold to start navigating, but only needs
+// to stay beyond the lower release threshold to keep repeating. This avoids
+// stuttering when the stick is held near the threshold.
+#define STICK_PRESS_THRESHOLD 20000
+#define STICK_RELEASE_THRESHOLD 12000
 
 SdlGamepadKeyNavigation::SdlGamepadKeyNavigation(StreamingPreferences* prefs)
     : m_Prefs(prefs),
@@ -15,7 +26,11 @@ SdlGamepadKeyNavigation::SdlGamepadKeyNavigation(StreamingPreferences* prefs)
       m_UiNavMode(false),
       m_FirstPoll(false),
       m_HasFocus(false),
-      m_LastAxisNavigationEventTime(0)
+      m_HeldDirection(ND_NONE),
+      m_HeldDirectionFromDpad(false),
+      m_HeldDirectionStartTime(0),
+      m_LastRepeatTime(0),
+      m_RepeatCount(0)
 {
     m_PollingTimer = new QTimer(this);
     connect(m_PollingTimer, &QTimer::timeout, this, &SdlGamepadKeyNavigation::onPollingTimerFired);
@@ -150,28 +165,27 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
             }
 
             switch (event.cbutton.button) {
+            // D-pad presses navigate immediately. Releases are detected by
+            // polling in updateHeldDirection(), which also handles repeat.
             case SDL_CONTROLLER_BUTTON_DPAD_UP:
-                if (m_UiNavMode) {
-                    // Back-tab
-                    sendKey(type, Qt::Key_Tab, Qt::ShiftModifier);
-                }
-                else {
-                    sendKey(type, Qt::Key_Up);
+                if (type == QEvent::Type::KeyPress) {
+                    startHeldDirection(ND_UP, true);
                 }
                 break;
             case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
-                if (m_UiNavMode) {
-                    sendKey(type, Qt::Key_Tab);
-                }
-                else {
-                    sendKey(type, Qt::Key_Down);
+                if (type == QEvent::Type::KeyPress) {
+                    startHeldDirection(ND_DOWN, true);
                 }
                 break;
             case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
-                sendKey(type, Qt::Key_Left);
+                if (type == QEvent::Type::KeyPress) {
+                    startHeldDirection(ND_LEFT, true);
+                }
                 break;
             case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
-                sendKey(type, Qt::Key_Right);
+                if (type == QEvent::Type::KeyPress) {
+                    startHeldDirection(ND_RIGHT, true);
+                }
                 break;
             case SDL_CONTROLLER_BUTTON_A:
                 if (m_UiNavMode) {
@@ -218,52 +232,161 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
         }
     }
 
-    // Handle analog sticks by polling
-    for (auto gc : std::as_const(m_Gamepads)) {
-        short leftX = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTX);
-        short leftY = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTY);
-        if (SDL_GetTicks() - m_LastAxisNavigationEventTime < AXIS_NAVIGATION_REPEAT_DELAY) {
-            // Do nothing
-        }
-        else if (leftY < -30000) {
-            if (m_UiNavMode) {
-                // Back-tab
-                sendKey(QEvent::Type::KeyPress, Qt::Key_Tab, Qt::ShiftModifier);
-                sendKey(QEvent::Type::KeyRelease, Qt::Key_Tab, Qt::ShiftModifier);
+    // Handle D-pad releases, the analog stick, and hold-to-repeat
+    updateHeldDirection();
+}
+
+void SdlGamepadKeyNavigation::startHeldDirection(NavDirection direction, bool fromDpad)
+{
+    sendDirection(direction, false);
+
+    m_HeldDirection = direction;
+    m_HeldDirectionFromDpad = fromDpad;
+    m_HeldDirectionStartTime = m_LastRepeatTime = SDL_GetTicks();
+    m_RepeatCount = 0;
+}
+
+void SdlGamepadKeyNavigation::updateHeldDirection()
+{
+    // Stop repeating once the D-pad direction is released
+    if (m_HeldDirection != ND_NONE && m_HeldDirectionFromDpad && !isDpadDirectionHeld(m_HeldDirection)) {
+        m_HeldDirection = ND_NONE;
+    }
+
+    // The D-pad takes precedence over the stick while it is held
+    if (m_HeldDirection == ND_NONE || !m_HeldDirectionFromDpad) {
+        NavDirection stickDirection = getStickDirection();
+        if (stickDirection != m_HeldDirection) {
+            if (stickDirection == ND_NONE) {
+                m_HeldDirection = ND_NONE;
             }
             else {
-                sendKey(QEvent::Type::KeyPress, Qt::Key_Up);
-                sendKey(QEvent::Type::KeyRelease, Qt::Key_Up);
+                startHeldDirection(stickDirection, false);
             }
+            return;
+        }
+    }
 
-            m_LastAxisNavigationEventTime = SDL_GetTicks();
-        }
-        else if (leftY > 30000) {
-            if (m_UiNavMode) {
-                sendKey(QEvent::Type::KeyPress, Qt::Key_Tab);
-                sendKey(QEvent::Type::KeyRelease, Qt::Key_Tab);
-            }
-            else {
-                sendKey(QEvent::Type::KeyPress, Qt::Key_Down);
-                sendKey(QEvent::Type::KeyRelease, Qt::Key_Down);
-            }
+    if (m_HeldDirection == ND_NONE) {
+        return;
+    }
 
-            m_LastAxisNavigationEventTime = SDL_GetTicks();
-        }
-        else if (leftX < -30000) {
-            sendKey(QEvent::Type::KeyPress, Qt::Key_Left);
-            sendKey(QEvent::Type::KeyRelease, Qt::Key_Left);
-            m_LastAxisNavigationEventTime = SDL_GetTicks();
-        }
-        else if (leftX > 30000) {
-            sendKey(QEvent::Type::KeyPress, Qt::Key_Right);
-            sendKey(QEvent::Type::KeyRelease, Qt::Key_Right);
-            m_LastAxisNavigationEventTime = SDL_GetTicks();
-        }
+    Uint32 now = SDL_GetTicks();
+    if (now - m_HeldDirectionStartTime < NAV_REPEAT_INITIAL_DELAY) {
+        return;
+    }
+
+    // Repeat faster the longer the direction is held
+    Uint32 interval = (Uint32)qMax(NAV_REPEAT_MIN_INTERVAL,
+                                   NAV_REPEAT_START_INTERVAL - (m_RepeatCount * NAV_REPEAT_INTERVAL_STEP));
+    if (now - m_LastRepeatTime >= interval) {
+        sendDirection(m_HeldDirection, true);
+        m_LastRepeatTime = now;
+        m_RepeatCount++;
     }
 }
 
-void SdlGamepadKeyNavigation::sendKey(QEvent::Type type, Qt::Key key, Qt::KeyboardModifiers modifiers)
+SdlGamepadKeyNavigation::NavDirection SdlGamepadKeyNavigation::getStickDirection()
+{
+    for (auto gc : std::as_const(m_Gamepads)) {
+        int leftX = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTX);
+        int leftY = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTY);
+
+        // Keep the current stick direction until the stick returns toward center
+        if (m_HeldDirection != ND_NONE && !m_HeldDirectionFromDpad) {
+            if ((m_HeldDirection == ND_UP && leftY < -STICK_RELEASE_THRESHOLD) ||
+                    (m_HeldDirection == ND_DOWN && leftY > STICK_RELEASE_THRESHOLD) ||
+                    (m_HeldDirection == ND_LEFT && leftX < -STICK_RELEASE_THRESHOLD) ||
+                    (m_HeldDirection == ND_RIGHT && leftX > STICK_RELEASE_THRESHOLD)) {
+                return m_HeldDirection;
+            }
+        }
+
+        // Otherwise use the dominant axis if it is past the press threshold
+        if (qAbs(leftY) >= qAbs(leftX)) {
+            if (leftY < -STICK_PRESS_THRESHOLD) {
+                return ND_UP;
+            }
+            else if (leftY > STICK_PRESS_THRESHOLD) {
+                return ND_DOWN;
+            }
+        }
+        else {
+            if (leftX < -STICK_PRESS_THRESHOLD) {
+                return ND_LEFT;
+            }
+            else if (leftX > STICK_PRESS_THRESHOLD) {
+                return ND_RIGHT;
+            }
+        }
+    }
+
+    return ND_NONE;
+}
+
+bool SdlGamepadKeyNavigation::isDpadDirectionHeld(NavDirection direction)
+{
+    SDL_GameControllerButton button;
+    switch (direction) {
+    case ND_UP:
+        button = SDL_CONTROLLER_BUTTON_DPAD_UP;
+        break;
+    case ND_DOWN:
+        button = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
+        break;
+    case ND_LEFT:
+        button = SDL_CONTROLLER_BUTTON_DPAD_LEFT;
+        break;
+    case ND_RIGHT:
+        button = SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
+        break;
+    default:
+        return false;
+    }
+
+    for (auto gc : std::as_const(m_Gamepads)) {
+        if (SDL_GameControllerGetButton(gc, button)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void SdlGamepadKeyNavigation::sendDirection(NavDirection direction, bool autoRepeat)
+{
+    Qt::Key key;
+    Qt::KeyboardModifiers modifiers = Qt::NoModifier;
+
+    switch (direction) {
+    case ND_UP:
+        if (m_UiNavMode) {
+            // Back-tab
+            key = Qt::Key_Tab;
+            modifiers = Qt::ShiftModifier;
+        }
+        else {
+            key = Qt::Key_Up;
+        }
+        break;
+    case ND_DOWN:
+        key = m_UiNavMode ? Qt::Key_Tab : Qt::Key_Down;
+        break;
+    case ND_LEFT:
+        key = Qt::Key_Left;
+        break;
+    case ND_RIGHT:
+        key = Qt::Key_Right;
+        break;
+    default:
+        return;
+    }
+
+    sendKey(QEvent::Type::KeyPress, key, modifiers, autoRepeat);
+    sendKey(QEvent::Type::KeyRelease, key, modifiers, autoRepeat);
+}
+
+void SdlGamepadKeyNavigation::sendKey(QEvent::Type type, Qt::Key key, Qt::KeyboardModifiers modifiers, bool autoRepeat)
 {
     QGuiApplication* app = static_cast<QGuiApplication*>(QGuiApplication::instance());
 
@@ -274,7 +397,7 @@ void SdlGamepadKeyNavigation::sendKey(QEvent::Type type, Qt::Key key, Qt::Keyboa
 
     QWindow* focusWindow = app->focusWindow();
     if (focusWindow != nullptr) {
-        QKeyEvent keyPressEvent(type, key, modifiers);
+        QKeyEvent keyPressEvent(type, key, modifiers, QString(), autoRepeat);
         app->sendEvent(focusWindow, &keyPressEvent);
     }
 }
@@ -287,6 +410,9 @@ void SdlGamepadKeyNavigation::updateTimerState()
     else if (!m_PollingTimer->isActive() && m_HasFocus && m_Enabled) {
         // Flush events on the first poll
         m_FirstPoll = true;
+
+        // Don't resume repeating a direction held before we lost focus
+        m_HeldDirection = ND_NONE;
 
         // Poll every 50 ms for a new joystick event
         m_PollingTimer->start(50);
