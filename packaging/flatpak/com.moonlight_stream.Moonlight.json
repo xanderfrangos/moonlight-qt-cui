@@ -123,7 +123,7 @@
             "name": "ffmpeg",
             "buildsystem": "simple",
             "build-commands": [
-                "PKG_CONFIG_PATH=/app/lib/pkgconfig:/app/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} ./configure --prefix=/app --pkg-config=pkg-config --fatal-warnings --disable-stripping --enable-pic --enable-lto --enable-shared --disable-static --disable-all --enable-avcodec --enable-avformat --enable-swscale --enable-decoder=h264 --enable-decoder=hevc --enable-decoder=av1 --enable-hwaccel=h264_vaapi --enable-hwaccel=hevc_vaapi --enable-hwaccel=av1_vaapi --enable-hwaccel=h264_vdpau --enable-hwaccel=hevc_vdpau --enable-hwaccel=av1_vdpau --enable-libdrm --enable-hwaccel=h264_vulkan --enable-hwaccel=hevc_vulkan --enable-hwaccel=av1_vulkan --enable-libdav1d --enable-decoder=libdav1d",
+                "PKG_CONFIG_PATH=/app/lib/pkgconfig:/app/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} ./configure --prefix=/app --pkg-config=pkg-config --fatal-warnings --disable-stripping --enable-pic --enable-lto --enable-shared --disable-static --disable-all --enable-avutil --enable-avcodec --enable-avformat --enable-swscale --enable-decoder=h264 --enable-decoder=hevc --enable-decoder=av1 --enable-hwaccel=h264_vaapi --enable-hwaccel=hevc_vaapi --enable-hwaccel=av1_vaapi --enable-hwaccel=h264_vdpau --enable-hwaccel=hevc_vdpau --enable-hwaccel=av1_vdpau --enable-libdrm --enable-hwaccel=h264_vulkan --enable-hwaccel=hevc_vulkan --enable-hwaccel=av1_vulkan --enable-libdav1d --enable-decoder=libdav1d",
                 "make -j$(nproc)",
                 "make install"
             ],
@@ -152,7 +152,7 @@
                 {
                     "type": "shell",
                     "commands": [
-                        "echo 0.0.0 > app/version.txt"
+                        "test -f app/version.txt || echo 0.0.0 > app/version.txt"
                     ]
                 }
             ]
