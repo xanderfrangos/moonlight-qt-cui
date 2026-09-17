@@ -94,6 +94,8 @@ CenteredGridView {
         property alias appContextMenu: appContextMenuLoader.item
         property alias appNameText: appNameTextLoader.item
 
+        popupOpen: appContextMenu !== null && appContextMenu.visible
+
         readonly property int artWidth: SystemProperties.tvMode ? 240 : 200
         readonly property int artHeight: SystemProperties.tvMode ? 320 : 267
 
@@ -129,7 +131,7 @@ CenteredGridView {
         Item {
             visible: tvCard
             anchors.fill: appIcon
-            opacity: highlighted ? 1.0 : 0.0
+            opacity: tvSelected ? 1.0 : 0.0
             Behavior on opacity { NumberAnimation { duration: TvTheme.animationNormal } }
 
             Rectangle {
@@ -283,7 +285,7 @@ CenteredGridView {
             font.pointSize: 16
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight
-            opacity: highlighted ? 1.0 : 0.0
+            opacity: tvSelected ? 1.0 : 0.0
             Behavior on opacity { NumberAnimation { duration: TvTheme.animationNormal } }
         }
 
