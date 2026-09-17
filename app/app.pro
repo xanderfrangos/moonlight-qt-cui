@@ -209,6 +209,8 @@ SOURCES += \
     path.cpp \
     settings/mappingmanager.cpp \
     gui/sdlgamepadkeynavigation.cpp \
+    gui/inputmodetracker.cpp \
+    gui/blurredimageprovider.cpp \
     streaming/video/overlaymanager.cpp \
     streaming/vrrratepolicy.cpp \
     backend/systemproperties.cpp \
@@ -252,6 +254,8 @@ HEADERS += \
     path.h \
     settings/mappingmanager.h \
     gui/sdlgamepadkeynavigation.h \
+    gui/inputmodetracker.h \
+    gui/blurredimageprovider.h \
     streaming/video/overlaymanager.h \
     backend/systemproperties.h \
     windowsvblankvirtualization.h

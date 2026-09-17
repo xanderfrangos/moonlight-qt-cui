@@ -3,6 +3,10 @@
 
 #include <QGuiApplication>
 #include <QLibraryInfo>
+#include <QDir>
+#include <QProcess>
+
+#include "settings/streamingpreferences.h"
 
 #include "streaming/session.h"
 #include "streaming/streamutils.h"
@@ -44,6 +48,15 @@ private:
     SystemProperties* m_Properties;
 };
 
+static bool s_TvMode = false;
+static bool s_TvModeOverridden = false;
+
+void SystemProperties::setTvModeState(bool enabled, bool overridden)
+{
+    s_TvMode = enabled;
+    s_TvModeOverridden = overridden;
+}
+
 SystemProperties::SystemProperties()
 {
     versionString = QString(VERSION_STR);
@@ -51,6 +64,25 @@ SystemProperties::SystemProperties()
     isRunningWayland = WMUtils::isRunningWayland();
     isRunningXWayland = isRunningWayland && QGuiApplication::platformName() == "xcb";
     usesMaterial3Theme = QLibraryInfo::version() >= QVersionNumber(6, 5, 0);
+
+    // GUI scaling is applied at startup via QT_SCALE_FACTOR (see main.cpp),
+    // but not on EGLFS where we don't enable High DPI support.
+    supportsUiScale = WMUtils::isRunningWindowManager();
+    activeUiScale = 100;
+    if (qEnvironmentVariableIsSet("QT_SCALE_FACTOR")) {
+        double scaleFactor = qEnvironmentVariable("QT_SCALE_FACTOR").toDouble();
+        if (scaleFactor > 0) {
+            activeUiScale = qRound(scaleFactor * 100);
+        }
+    }
+
+    // Mirrors how Qt Quick Controls interprets this variable
+    bool hoverEnvValid;
+    int hoverEnvValue = qEnvironmentVariableIntValue("QT_QUICK_CONTROLS_HOVER_ENABLED", &hoverEnvValid);
+    hoverEffectsDisabled = hoverEnvValid && hoverEnvValue == 0;
+
+    tvMode = s_TvMode;
+    tvModeOverridden = s_TvModeOverridden;
 
 #ifdef Q_OS_DARWIN
     isDarwin = true;
@@ -213,6 +245,40 @@ void SystemProperties::waitForAsyncLoad()
     if (systemPropertyQueryThread) {
         systemPropertyQueryThread->wait();
     }
+}
+
+void SystemProperties::restartApplication()
+{
+    // Persist any changes made in the settings page before we exit
+    StreamingPreferences::get()->save();
+
+    // Don't pass along environment variables that we set ourselves from
+    // preferences at startup, so the new process applies the new values.
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    const QStringList injectedEnvVars = env.value("MOONLIGHT_INJECTED_ENV").split(',');
+    for (const QString& var : injectedEnvVars) {
+        if (!var.isEmpty()) {
+            env.remove(var);
+        }
+    }
+    env.remove("MOONLIGHT_INJECTED_ENV");
+
+    QProcess process;
+    process.setProgram(QCoreApplication::applicationFilePath());
+    process.setArguments(QCoreApplication::arguments().mid(1));
+    process.setProcessEnvironment(env);
+
+    // Portable mode locates its settings using the working directory
+    process.setWorkingDirectory(QDir::currentPath());
+
+    if (!process.startDetached()) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Failed to restart Moonlight: %s",
+                     qPrintable(process.errorString()));
+        return;
+    }
+
+    QCoreApplication::quit();
 }
 
 void SystemProperties::refreshDisplays()
