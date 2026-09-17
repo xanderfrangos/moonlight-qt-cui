@@ -14,6 +14,11 @@ GridView {
     function updateMargins() {
         leftMargin = horizontalMargin + leftInset
         rightMargin = horizontalMargin
+
+        // Changing a margin doesn't move the content, so the grid would stay
+        // at its old horizontal position until it was scrolled. This grid only
+        // scrolls vertically, so the content always starts at the left margin.
+        contentX = -leftMargin
     }
 
     onHorizontalMarginChanged: {

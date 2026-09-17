@@ -1,6 +1,7 @@
 import QtQuick 2.9
 import QtQuick.Controls 2.2
 import QtQuick.Layouts 1.3
+import QtQuick.Controls.Material 2.2
 
 import ComputerModel 1.0
 
@@ -8,6 +9,7 @@ import ComputerManager 1.0
 import StreamingPreferences 1.0
 import SystemProperties 1.0
 import SdlGamepadKeyNavigation 1.0
+import TvTheme 1.0
 
 CenteredGridView {
     property ComputerModel computerModel : createModel()
@@ -15,9 +17,16 @@ CenteredGridView {
     id: pcGrid
     focus: true
     activeFocusOnTab: true
-    topMargin: 20
+    topMargin: SystemProperties.tvMode ? 30 : 20
     bottomMargin: 5
-    cellWidth: 310; cellHeight: 330;
+
+    // TV mode cards have room around them to grow when focused, and the grid
+    // is shifted so the cards are centered in their cells
+    readonly property int tvCardWidth: 300
+    minMargin: SystemProperties.tvMode ? 40 : 10
+    leftInset: SystemProperties.tvMode ? (rowsFilled ? minMargin : 0) + (cellWidth - tvCardWidth) / 2 : 0
+    cellWidth: SystemProperties.tvMode ? tvCardWidth + 40 : 310
+    cellHeight: SystemProperties.tvMode ? 400 : 330
     objectName: qsTr("Computers")
 
     Component.onCompleted: {
@@ -82,10 +91,61 @@ CenteredGridView {
         return model
     }
 
+    // TV mode: a larger empty state, with a hint about adding a PC
+    Column {
+        id: tvEmptyState
+        anchors.centerIn: parent
+        width: Math.min(parent.width - 80, 900)
+        spacing: TvTheme.spacingMedium
+        readonly property bool showing: SystemProperties.tvMode && pcGrid.count === 0
+        visible: showing
+
+        Item {
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: 160
+            height: 160
+
+            Image {
+                anchors.centerIn: parent
+                source: "qrc:/res/desktop_windows-48px.svg"
+                sourceSize.width: 160
+                sourceSize.height: 160
+                opacity: 0.25
+            }
+
+            BusyIndicator {
+                anchors.centerIn: parent
+                anchors.verticalCenterOffset: -14
+                width: 64
+                height: 64
+                visible: StreamingPreferences.enableMdns
+                running: StreamingPreferences.enableMdns && tvEmptyState.showing
+            }
+        }
+
+        Label {
+            width: parent.width
+            text: StreamingPreferences.enableMdns ? qsTr("Searching for compatible hosts on your local network...")
+                                                  : qsTr("Automatic PC discovery is disabled.")
+            font.pointSize: 24
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.Wrap
+        }
+
+        Label {
+            width: parent.width
+            text: qsTr("If your PC doesn't appear, make sure it's on the same network, or add it manually using the button in the top right.")
+            font.pointSize: 16
+            color: TvTheme.textSecondary
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.Wrap
+        }
+    }
+
     Row {
         anchors.centerIn: parent
         spacing: 5
-        visible: pcGrid.count === 0
+        visible: !SystemProperties.tvMode && pcGrid.count === 0
 
         BusyIndicator {
             id: searchSpinner
@@ -107,18 +167,58 @@ CenteredGridView {
     model: computerModel
 
     delegate: NavigableItemDelegate {
-        width: 300; height: 320;
+        width: SystemProperties.tvMode ? pcGrid.tvCardWidth : 300
+        height: SystemProperties.tvMode ? 360 : 320
         grid: pcGrid
+        tvCardStyle: true
 
         property alias pcContextMenu : pcContextMenuLoader.item
+
+        // TV mode: the card surface
+        Rectangle {
+            visible: tvCard
+            anchors.fill: parent
+            radius: TvTheme.cardRadius
+            color: highlighted ? TvTheme.surfaceRaised : TvTheme.surface
+            Behavior on color { ColorAnimation { duration: TvTheme.animationNormal } }
+        }
+
+        // TV mode: a glow around the focused card
+        Item {
+            visible: tvCard
+            anchors.fill: parent
+            opacity: highlighted ? 1.0 : 0.0
+            Behavior on opacity { NumberAnimation { duration: TvTheme.animationNormal } }
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -9
+                radius: TvTheme.cardRadius + 9
+                color: "transparent"
+                border.width: 6
+                border.color: Material.accent
+                opacity: 0.3
+            }
+
+            // Overlaps the card by a pixel so no gap shows when it is scaled
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -3
+                radius: TvTheme.cardRadius + 3
+                color: "transparent"
+                border.width: 4
+                border.color: Material.accent
+            }
+        }
 
         Image {
             id: pcIcon
             anchors.horizontalCenter: parent.horizontalCenter
+            y: SystemProperties.tvMode ? 24 : 0
             source: "qrc:/res/desktop_windows-48px.svg"
             sourceSize {
-                width: 200
-                height: 200
+                width: SystemProperties.tvMode ? 170 : 200
+                height: SystemProperties.tvMode ? 170 : 200
             }
         }
 
@@ -153,11 +253,74 @@ CenteredGridView {
 
             width: parent.width
             anchors.top: pcIcon.bottom
-            anchors.bottom: parent.bottom
-            font.pointSize: 36
+            anchors.bottom: SystemProperties.tvMode ? statusChip.top : parent.bottom
+            leftPadding: SystemProperties.tvMode ? 16 : 0
+            rightPadding: SystemProperties.tvMode ? 16 : 0
+            font.pointSize: SystemProperties.tvMode ? 26 : 36
             horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.Wrap
+            verticalAlignment: SystemProperties.tvMode ? Text.AlignVCenter : Text.AlignTop
+            // TV mode keeps names to one line to leave room for the status
+            wrapMode: SystemProperties.tvMode ? Text.NoWrap : Text.Wrap
             elide: Text.ElideRight
+        }
+
+        // TV mode: the PC's status in words, with a colored dot
+        Rectangle {
+            id: statusChip
+
+            readonly property color dotColor: {
+                if (model.statusUnknown || !model.online) {
+                    return "#8A90A0"
+                }
+                else if (!model.paired || !model.serverSupported) {
+                    return "#FFB300"
+                }
+                return "#4CAF50"
+            }
+
+            visible: tvCard
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 24
+            width: statusRow.implicitWidth + 32
+            height: statusRow.implicitHeight + 12
+            radius: height / 2
+            color: highlighted ? TvTheme.surface : TvTheme.surfaceRaised
+
+            Row {
+                id: statusRow
+                anchors.centerIn: parent
+                spacing: 10
+
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 12
+                    height: 12
+                    radius: 6
+                    color: statusChip.dotColor
+                    Behavior on color { ColorAnimation { duration: TvTheme.animationNormal } }
+                }
+
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    font.pointSize: 14
+                    text: {
+                        if (model.statusUnknown) {
+                            return qsTr("Checking...")
+                        }
+                        else if (!model.online) {
+                            return qsTr("Offline")
+                        }
+                        else if (!model.serverSupported) {
+                            return qsTr("Update required")
+                        }
+                        else if (!model.paired) {
+                            return qsTr("Not paired")
+                        }
+                        return qsTr("Online")
+                    }
+                }
+            }
         }
 
         Loader {
