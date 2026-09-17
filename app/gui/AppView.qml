@@ -6,6 +6,7 @@ import StreamingPreferences 1.0
 import AppModel 1.0
 import ComputerManager 1.0
 import SdlGamepadKeyNavigation 1.0
+import InputModeTracker 1.0
 
 CenteredGridView {
     property int computerIndex
@@ -145,7 +146,7 @@ import AppModel 1.0; AppModel {}', parent, '')
                     ToolTip.text: qsTr("Resume Game")
                     ToolTip.delay: 1000
                     ToolTip.timeout: 3000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
 
                     Material.background: "#D0808080"
                 }
@@ -171,7 +172,7 @@ import AppModel 1.0; AppModel {}', parent, '')
                     ToolTip.text: qsTr("Quit Game")
                     ToolTip.delay: 1000
                     ToolTip.timeout: 3000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
 
                     Material.background: "#D0808080"
                 }
@@ -316,7 +317,7 @@ import AppModel 1.0; AppModel {}', parent, '')
                     ToolTip.text: qsTr("Launch this app immediately when the host is selected, bypassing the app selection grid.")
                     ToolTip.delay: 1000
                     ToolTip.timeout: 3000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 }
                 NavigableMenuItem {
                     checkable: true
@@ -328,7 +329,7 @@ import AppModel 1.0; AppModel {}', parent, '')
                     ToolTip.text: qsTr("Hide this game from the app grid. To access hidden games, right-click on the host and choose %1.").arg(qsTr("View All Apps"))
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 }
             }
         }

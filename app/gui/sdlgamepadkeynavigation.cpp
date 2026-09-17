@@ -5,6 +5,7 @@
 #include <QWindow>
 
 #include "settings/mappingmanager.h"
+#include "inputmodetracker.h"
 
 #define AXIS_NAVIGATION_REPEAT_DELAY 150
 
@@ -265,6 +266,12 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
 void SdlGamepadKeyNavigation::sendKey(QEvent::Type type, Qt::Key key, Qt::KeyboardModifiers modifiers)
 {
     QGuiApplication* app = static_cast<QGuiApplication*>(QGuiApplication::instance());
+
+    // All keys sent from here originate from gamepad input
+    if (type == QEvent::Type::KeyPress) {
+        InputModeTracker::get()->notifyGamepadInput();
+    }
+
     QWindow* focusWindow = app->focusWindow();
     if (focusWindow != nullptr) {
         QKeyEvent keyPressEvent(type, key, modifiers);

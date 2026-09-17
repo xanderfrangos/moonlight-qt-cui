@@ -55,6 +55,7 @@
 #include "streaming/session.h"
 #include "settings/streamingpreferences.h"
 #include "gui/sdlgamepadkeynavigation.h"
+#include "gui/inputmodetracker.h"
 #include "windowsvblankvirtualization.h"
 
 #if defined(Q_OS_WIN32)
@@ -979,6 +980,14 @@ int main(int argc, char *argv[])
                                                       [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
                                                           return new SdlGamepadKeyNavigation(StreamingPreferences::get(qmlEngine));
                                                       });
+    qmlRegisterSingletonType<InputModeTracker>("InputModeTracker", 1, 0,
+                                               "InputModeTracker",
+                                               [](QQmlEngine*, QJSEngine*) -> QObject* {
+                                                   InputModeTracker* tracker = InputModeTracker::get();
+                                                   // The tracker is a process-wide singleton, so QML must not delete it
+                                                   QQmlEngine::setObjectOwnership(tracker, QQmlEngine::CppOwnership);
+                                                   return tracker;
+                                               });
     qmlRegisterSingletonType<StreamingPreferences>("StreamingPreferences", 1, 0,
                                                    "StreamingPreferences",
                                                    [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
