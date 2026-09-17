@@ -6,6 +6,7 @@ import QtQuick.Window 2.2
 import StreamingPreferences 1.0
 import ComputerManager 1.0
 import SdlGamepadKeyNavigation 1.0
+import InputModeTracker 1.0
 import SystemProperties 1.0
 
 Flickable {
@@ -882,7 +883,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: vrrForced ?
                                       qsTr("Borderless windowed mode is required for active VRR streaming. Your saved display mode will be restored for non-VRR sessions.")
                                     :
@@ -905,7 +906,7 @@ Flickable {
 
                         ToolTip.delay: 1000
                         ToolTip.timeout: 5000
-                        ToolTip.visible: hovered
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                         ToolTip.text: qsTr("Disabling V-Sync allows sub-frame rendering latency, but it can display visible tearing")
                     }
 
@@ -921,7 +922,7 @@ Flickable {
                         }
                         ToolTip.delay: 1000
                         ToolTip.timeout: 5000
-                        ToolTip.visible: hovered
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                         ToolTip.text: qsTr("Frame pacing reduces micro-stutter by delaying frames that come in too early")
                     }
 
@@ -937,12 +938,93 @@ Flickable {
 
                         ToolTip.delay: 1000
                         ToolTip.timeout: 5000
-                        ToolTip.visible: hovered
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                         ToolTip.text: enabled ?
                                           qsTr("VRR uses paced adaptive presentation with best-effort tear avoidance. Sessions without enough refresh-rate headroom use fixed V-Sync. Borderless fullscreen is used while VRR is active.")
                                         :
                                           qsTr("VRR requires V-Sync. Enable V-Sync to change this setting.")
                     }
+                }
+
+                Column {
+                    width: parent.width
+                    spacing: 5
+                    visible: StreamingPreferences.enableVrr
+                    enabled: StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("VRR timing")
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                    }
+
+                    AutoResizingComboBox {
+                        id: vrrLatencyModeComboBox
+                        textRole: "text"
+                        model: ListModel {
+                            id: vrrLatencyModeListModel
+                            ListElement {
+                                text: qsTr("Low Latency")
+                                val: StreamingPreferences.VLM_LOW_LATENCY
+                            }
+                            ListElement {
+                                text: qsTr("Balanced Target")
+                                val: StreamingPreferences.VLM_BALANCED_TARGET
+                            }
+                            ListElement {
+                                text: qsTr("Smooth")
+                                val: StreamingPreferences.VLM_SMOOTH
+                            }
+                        }
+                        currentIndex: {
+                            for (var i = 0; i < vrrLatencyModeListModel.count; i++) {
+                                if (vrrLatencyModeListModel.get(i).val === StreamingPreferences.vrrLatencyMode) {
+                                    return i
+                                }
+                            }
+                            return 1
+                        }
+                        onActivated: {
+                            StreamingPreferences.vrrLatencyMode = vrrLatencyModeListModel.get(currentIndex).val
+                        }
+                        Component.onCompleted: {
+                            recalculateWidth()
+                            languageChanged.connect(recalculateWidth)
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: StreamingPreferences.vrrLatencyMode === StreamingPreferences.VLM_LOW_LATENCY ?
+                                  qsTr("Minimizes added delay. Uneven delivery can cause more stutter or skipped frames.") :
+                              StreamingPreferences.vrrLatencyMode === StreamingPreferences.VLM_SMOOTH ?
+                                  qsTr("Uses more padding and holds it longer for steadier motion, with more input delay.") :
+                                  qsTr("Targets steadier motion with a moderate timing reserve and balanced input delay.")
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: qsTr("Applies at all VRR frame rates. Reconnect the stream after changing this setting.")
+                    }
+                }
+
+                CheckBox {
+                    hoverEnabled: true
+                    text: qsTr("Reduce judder")
+                    font.pointSize: 12
+                    visible: StreamingPreferences.enableVrr
+                    enabled: StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
+                    checked: StreamingPreferences.smoothVrrFrameTiming
+                    onCheckedChanged: StreamingPreferences.smoothVrrFrameTiming = checked
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 10000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Gently adjusts when frames are displayed to reduce uneven timing, using existing buffering to keep added latency low. Does not blend images or eliminate game stalls.") + "\n\n" +
+                                  qsTr("Reconnect the stream after changing this setting.")
                 }
 
                 CheckBox {
@@ -961,7 +1043,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: enabled ?
                                       qsTr("The stream will be HDR-capable, but some games may require an HDR monitor on your host PC to enable HDR mode.")
                                     :
@@ -1041,7 +1123,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("You must restart any game currently in progress for this setting to take effect")
                 }
 
@@ -1058,7 +1140,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Mutes Moonlight's audio when you Alt+Tab out of the stream or click on a different window.")
                 }
             }
@@ -1098,7 +1180,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("This will close the app or game you are streaming when you end your stream. You will lose any unsaved progress!")
                 }
             }
@@ -1382,7 +1464,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Updates your Discord status to display the name of the game you're streaming.")
                 }
 
@@ -1398,7 +1480,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Prevents the screensaver from starting or the display from going to sleep while streaming.")
                 }
             }
@@ -1437,7 +1519,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 10000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("This enables seamless mouse control without capturing the client's mouse cursor. It is ideal for remote desktop usage but will not work in most games.") + " " +
                                   qsTr("You can toggle this while streaming using Ctrl+Alt+Shift+M.") + "\n\n" +
                                   qsTr("NOTE: Due to a bug in GeForce Experience, this option may not work properly if your host PC has multiple monitors.")
@@ -1457,7 +1539,7 @@ Flickable {
 
                         ToolTip.delay: 1000
                         ToolTip.timeout: 10000
-                        ToolTip.visible: hovered
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                         ToolTip.text: qsTr("This enables the capture of system-wide keyboard shortcuts like Alt+Tab that would normally be handled by the client OS while streaming.") + "\n\n" +
                                       qsTr("NOTE: Certain keyboard shortcuts like Ctrl+Alt+Del on Windows cannot be intercepted by any application, including Moonlight.")
                     }
@@ -1531,7 +1613,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("When checked, the touchscreen acts like a trackpad. When unchecked, the touchscreen will directly control the mouse pointer.")
                 }
 
@@ -1584,7 +1666,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("This switches gamepads into a Nintendo-style button layout")
                 }
 
@@ -1600,7 +1682,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Forces a single gamepad to always stay connected to the host, even if no gamepads are actually connected to this PC.") + " " +
                                   qsTr("Only enable this option when streaming a game that doesn't support gamepads being connected after startup.")
                 }
@@ -1630,7 +1712,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Allows Moonlight to capture gamepad inputs even if it's not the current window in focus")
                 }
             }
@@ -1831,7 +1913,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: enabled ?
                                       qsTr("Good for streaming desktop and text-heavy games, but not recommended for fast-paced games.")
                                     :
@@ -1853,7 +1935,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("This unlocks extremely high video bitrates for use with Sunshine hosts. It should only be used when streaming over an Ethernet LAN connection.")
                 }
 
@@ -1901,7 +1983,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Display real-time stream performance information while streaming.") + "\n\n" +
                                   qsTr("You can toggle it at any time while streaming using Ctrl+Alt+Shift+S or Select+L1+R1+X.") + "\n\n" +
                                   qsTr("The performance overlay is not supported on Steam Link or Raspberry Pi.")
