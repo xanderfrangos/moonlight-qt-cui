@@ -4,6 +4,45 @@
 #include <cmath>
 #include <limits>
 
+bool vrrDecodeReadinessOrderValid(uint64_t decoderOutputUs, uint64_t readyUs,
+                                  uint64_t arrivalUs, uint64_t dequeueUs,
+                                  uint64_t decisionUs, uint64_t decodeWaitUs,
+                                  bool decisionValid,
+                                  bool readinessExcludesQueue)
+{
+    if (!decoderOutputUs || decoderOutputUs > arrivalUs || readyUs < decoderOutputUs)
+        return false;
+    if (decisionValid && readyUs > decisionUs) return false;
+    if (readinessExcludesQueue) {
+        const uint64_t maximum = std::numeric_limits<uint64_t>::max();
+        const uint64_t expectedReadyUs = decodeWaitUs > 200 ?
+            decoderOutputUs + std::min(maximum - decoderOutputUs, decodeWaitUs) :
+            decoderOutputUs;
+        return decisionValid ? readyUs == expectedReadyUs :
+            readyUs == decoderOutputUs && decodeWaitUs == 0;
+    }
+    // Readiness may move past queue admission only through the worker's GPU
+    // wait. Retired/evicted frames never visited that wait and keep CPU output.
+    return readyUs <= arrivalUs ||
+        (decisionValid && decodeWaitUs > 200 && dequeueUs >= arrivalUs &&
+         readyUs >= dequeueUs && decodeWaitUs <= readyUs - dequeueUs);
+}
+
+uint64_t vrrBusyWorkerDecisionUs(uint64_t arrivalUs, uint64_t recordedDecisionUs,
+                                uint64_t simulatedPreviousSubmissionUs,
+                                uint64_t postSubmissionGapUs,
+                                uint64_t learnedIdleLatencyUs)
+{
+    const uint64_t observedIdleLatencyUs = recordedDecisionUs >= arrivalUs ?
+        recordedDecisionUs - arrivalUs : 0;
+    const uint64_t idleFloorUs = arrivalUs +
+        std::min(observedIdleLatencyUs, learnedIdleLatencyUs);
+    const uint64_t maximum = std::numeric_limits<uint64_t>::max();
+    const uint64_t busyDecisionUs = simulatedPreviousSubmissionUs +
+        std::min(maximum - simulatedPreviousSubmissionUs, postSubmissionGapUs);
+    return std::max(idleFloorUs, busyDecisionUs);
+}
+
 namespace {
 
 uint64_t saturatingAdd(uint64_t left, uint64_t right)
@@ -1163,9 +1202,11 @@ VrrSpacingLifecycleTimingAudit evaluateVrrSpacingLifecycleTiming(
         correctionWaitStartUs == 0 &&
             correctionWaitEndUs == 0;
     const bool correctedFloorValid = expectedCorrectionWait ?
+        // A latched policy can intentionally disable its software floor.
+        // The worker still records the recheck deficit and a wait at zero;
+        // require the controller's actual floor, including that valid zero.
         spacingCorrectedFloorUs ==
-            earliestSubmissionAfterFeedbackUs &&
-            spacingCorrectedFloorUs != 0 :
+            earliestSubmissionAfterFeedbackUs :
         spacingCorrectedFloorUs == 0;
     const uint64_t finalSpacingBoundaryUs = expectedCorrectionWait ?
         correctionWaitEndUs : spacingRecheckUs;

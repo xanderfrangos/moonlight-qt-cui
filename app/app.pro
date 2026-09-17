@@ -35,6 +35,12 @@ DEFINES += QT_DEPRECATED_WARNINGS
 # You can also select to disable deprecated APIs only up to a certain version of Qt.
 DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
+BASE_VERSION = $$cat(version.txt)
+MOONLIGHT_VERSION = $$(CI_VERSION)
+isEmpty(MOONLIGHT_VERSION) {
+    MOONLIGHT_VERSION = $$BASE_VERSION
+}
+
 win32 {
     !exists($$PWD/../libs/windows) {
         error("Missing dependencies. Please run 'powershell .\setup-deps.ps1' to fetch prebuilt libraries.")
@@ -50,7 +56,7 @@ win32 {
     }
 
     INCLUDEPATH += $$PWD/../libs/windows/include
-    LIBS += ws2_32.lib winmm.lib dxva2.lib ole32.lib gdi32.lib user32.lib d3d9.lib dwmapi.lib dbghelp.lib
+    LIBS += dcomp.lib advapi32.lib ws2_32.lib winmm.lib dxva2.lib ole32.lib gdi32.lib user32.lib d3d9.lib dwmapi.lib dbghelp.lib
 }
 macx:!disable-prebuilts {
     !exists($$PWD/../libs/mac) {
@@ -192,6 +198,7 @@ SOURCES += \
     streaming/input/mouse.cpp \
     streaming/input/reltouch.cpp \
     streaming/session.cpp \
+    streaming/gamescopecomposition.cpp \
     streaming/audio/audio.cpp \
     streaming/audio/renderers/sdlaud.cpp \
     gui/computermodel.cpp \
@@ -202,6 +209,8 @@ SOURCES += \
     path.cpp \
     settings/mappingmanager.cpp \
     gui/sdlgamepadkeynavigation.cpp \
+    gui/inputmodetracker.cpp \
+    gui/blurredimageprovider.cpp \
     streaming/video/overlaymanager.cpp \
     streaming/vrrratepolicy.cpp \
     backend/systemproperties.cpp \
@@ -218,6 +227,7 @@ HEADERS += \
     backend/computerseeker.h \
     backend/identitymanager.h \
     backend/nvcomputer.h \
+    backend/framelimitercapabilities.h \
     backend/nvhttp.h \
     backend/nvpairingmanager.h \
     backend/computermanager.h \
@@ -230,6 +240,8 @@ HEADERS += \
     settings/streamingpreferences.h \
     streaming/input/input.h \
     streaming/session.h \
+    streaming/video/amddecodepolicy.h \
+    streaming/gamescopecomposition.h \
     streaming/audio/renderers/renderer.h \
     streaming/audio/renderers/sdl.h \
     gui/computermodel.h \
@@ -242,6 +254,8 @@ HEADERS += \
     path.h \
     settings/mappingmanager.h \
     gui/sdlgamepadkeynavigation.h \
+    gui/inputmodetracker.h \
+    gui/blurredimageprovider.h \
     streaming/video/overlaymanager.h \
     backend/systemproperties.h \
     windowsvblankvirtualization.h
@@ -263,6 +277,7 @@ ffmpeg {
 
     HEADERS += \
         streaming/video/ffmpeg.h \
+        streaming/video/incomingframetiming.h \
         streaming/video/ffmpeg-renderers/renderer.h \
         streaming/video/ffmpeg-renderers/genhwaccel.h \
         streaming/video/ffmpeg-renderers/sdlvid.h \
@@ -272,7 +287,14 @@ ffmpeg {
         streaming/video/ffmpeg-renderers/pacer/vrrpacingworker.h \
         streaming/video/ffmpeg-renderers/ivrrframepresenter.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtypes.h \
+        streaming/video/ffmpeg-renderers/pacer/vrr/presentationtiming.h \
+        streaming/video/ffmpeg-renderers/pacer/vrr/prediction.h \
+        streaming/video/ffmpeg-renderers/pacer/vrr/recentreadiness.h \
+        streaming/video/ffmpeg-renderers/pacer/vrr/readinesswindow.h \
+        streaming/video/ffmpeg-renderers/pacer/vrr/readinessfeedback.h \
+        streaming/video/ffmpeg-renderers/pacer/vrr/smoothnessfeedback.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtimingcontroller.h \
+        streaming/video/ffmpeg-renderers/pacer/vrr/vrrframedroppolicy.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtargetwaiter.h
 }
 libva {
@@ -361,7 +383,13 @@ libplacebo {
         streaming/video/ffmpeg-renderers/plvk.cpp \
         streaming/video/ffmpeg-renderers/plvk_c.c
     HEADERS += \
-        streaming/video/ffmpeg-renderers/plvk.h
+        streaming/video/ffmpeg-renderers/plvk.h \
+        streaming/video/ffmpeg-renderers/plvkpresentation.h \
+        streaming/video/ffmpeg-renderers/plvkswapchain.h
+    linux {
+        SOURCES += streaming/video/ffmpeg-renderers/vulkantiming.cpp
+        HEADERS += streaming/video/ffmpeg-renderers/vulkantiming.h
+    }
 
     macx {
         SOURCES += streaming/video/ffmpeg-renderers/plvk_objc.mm
@@ -409,11 +437,16 @@ win32:!winrt {
     SOURCES += \
         streaming/video/ffmpeg-renderers/dxva2.cpp \
         streaming/video/ffmpeg-renderers/d3d11va.cpp \
+        streaming/video/ffmpeg-renderers/d3d11composition.cpp \
         streaming/video/ffmpeg-renderers/pacer/dxvsyncsource.cpp
 
     HEADERS += \
         streaming/video/ffmpeg-renderers/dxva2.h \
         streaming/video/ffmpeg-renderers/d3d11va.h \
+        streaming/video/ffmpeg-renderers/d3d11composition.h \
+        streaming/video/ffmpeg-renderers/presentationclock.h \
+        streaming/video/ffmpeg-renderers/dxgipresent.h \
+        streaming/video/ffmpeg-renderers/d3d11fencewait.h \
         streaming/video/ffmpeg-renderers/pacer/dxvsyncsource.h
 }
 macx {
@@ -454,10 +487,19 @@ gpuslow {
     DEFINES += GL_IS_SLOW VULKAN_IS_SLOW
 }
 wayland {
+    linux {
+        SOURCES += streaming/video/ffmpeg-renderers/gamescoperepaint.cpp \
+                   streaming/video/ffmpeg-renderers/protocols/gamescope-private-protocol.c
+        HEADERS += streaming/video/ffmpeg-renderers/gamescoperepaint.h \
+                   streaming/video/ffmpeg-renderers/protocols/gamescope-private-client-protocol.h
+    }
     message(Wayland extensions enabled)
 
     DEFINES += HAS_WAYLAND
     SOURCES += streaming/video/ffmpeg-renderers/pacer/waylandvsyncsource.cpp
+    SOURCES += streaming/video/ffmpeg-renderers/waylandfeedback/wayland.cpp \
+               streaming/video/ffmpeg-renderers/protocols/presentation-time-protocol.c
+    HEADERS += streaming/video/ffmpeg-renderers/waylandfeedback/wayland.h
     HEADERS += streaming/video/ffmpeg-renderers/pacer/waylandvsyncsource.h
 }
 !disable-h264bitstream {
@@ -571,7 +613,7 @@ win32 {
 macx {
     # Create Info.plist in object dir with the correct version string
     system(cp $$PWD/Info.plist $$OUT_PWD/Info.plist)
-    system(sed -i -e 's/VERSION/$$cat(version.txt)/g' $$OUT_PWD/Info.plist)
+    system(sed -i -e 's/VERSION/$$BASE_VERSION/g' $$OUT_PWD/Info.plist)
 
     QMAKE_INFO_PLIST = $$OUT_PWD/Info.plist
 
@@ -593,5 +635,14 @@ macx {
     }
 }
 
-VERSION = "$$cat(version.txt)"
-DEFINES += VERSION_STR=\\\"$$cat(version.txt)\\\"
+# Displayed version stays CI_VERSION (e.g. 6.1.0-vrr17). Windows PE/MSI
+# ProductVersion can only use three numeric fields and must increase past
+# stock Moonlight 6.1.0, so VRR builds map 6.1.0-vrrN to 6.2.N.
+VERSION = "$$BASE_VERSION"
+PE_VERSION = $$(MOONLIGHT_PE_VERSION)
+!isEmpty(PE_VERSION) {
+    VERSION = "$$PE_VERSION"
+}
+DEFINES += VERSION_STR=\\\"$$MOONLIGHT_VERSION\\\"
+
+SOURCES += $$PWD/streaming/video/ffmpeg-renderers/pacer/vrr/profile.cpp

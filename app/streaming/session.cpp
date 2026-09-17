@@ -1,3 +1,5 @@
+#include <QNetworkInterface>
+#include <QSysInfo>
 #include "session.h"
 #include "settings/streamingpreferences.h"
 #include "streaming/streamutils.h"
@@ -281,9 +283,9 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             SDL_Window* window, int videoFormat, int width, int height,
                             int frameRate, bool enableVsync, bool enableFramePacing,
                             bool testOnly, IVideoDecoder*& chosenDecoder,
-                            bool enableVrr, int vrrDisplayRefreshHz,
-                            bool vrrSmoothness,
-                            [[maybe_unused]] bool* effectiveVrr)
+                            bool enableVrr, bool preferVrrRenderer, int vrrDisplayRefreshHz,
+                            [[maybe_unused]] bool* effectiveVrr, bool smoothVrrFrameTiming,
+                            bool gamescopeMailbox, int vrrLatencyMode, bool gamescopeRepaint)
 {
     DECODER_PARAMETERS params = {};
 
@@ -301,8 +303,14 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.enableVsync = enableVsync;
     params.enableFramePacing = enableFramePacing;
     params.enableVrr = enableVrr;
+    // Playback already sets enableVrr; the probe uses preferVrrRenderer alone so
+    // it can match that renderer/color policy without starting VRR presentation.
+    params.preferVrrRenderer = preferVrrRenderer || enableVrr;
+    params.vrrLatencyMode = vrrLatencyMode;
+    params.gamescopeMailbox = gamescopeMailbox;
+    params.gamescopeRepaint = gamescopeRepaint;
+    params.smoothVrrFrameTiming = smoothVrrFrameTiming;
     params.vrrDisplayRefreshHz = vrrDisplayRefreshHz;
-    params.vrrSmoothness = enableVrr && vrrSmoothness;
     params.testOnly = testOnly;
     params.vds = vds;
     params.renderer = renderer;
@@ -313,6 +321,10 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "VRR %s",
                 enableVrr ? "enabled" : "disabled");
+    if (params.preferVrrRenderer && !enableVrr) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "VRR renderer policy active for probe; VRR presentation disabled");
+    }
 
 #ifdef HAVE_SLVIDEO
     // SLVideo owns its own presentation path and has no VRR backend. Try it
@@ -322,7 +334,6 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     DECODER_PARAMETERS slVideoParams = params;
     slVideoParams.enableVrr = false;
     slVideoParams.vrrDisplayRefreshHz = 0;
-    slVideoParams.vrrSmoothness = false;
     chosenDecoder = new SLVideoDecoder(testOnly);
     if (chosenDecoder->initialize(&slVideoParams)) {
         if (enableVrr) {
@@ -546,6 +557,9 @@ bool Session::populateDecoderProperties(SDL_Window* window)
     // here because this is operating on the real streaming window, and
     // instantiating Metal or AVSBDL renderers can interfere with MoltenVK's
     // attempt to change the window's colorspace, causing washed out colors.
+    // Match playback's Linux Vulkan preference so the host color-range request
+    // is valid for the renderer that will actually present. Do not pass
+    // enableVrr here: test-only probing must not start VRR presentation.
     if (!chooseDecoder(m_PresentationSettings.decoderSelection,
                        m_PresentationSettings.rendererSelection,
                        window,
@@ -553,7 +567,9 @@ bool Session::populateDecoderProperties(SDL_Window* window)
                        m_StreamConfig.width,
                        m_StreamConfig.height,
                        m_StreamConfig.fps,
-                       false, false, true, decoder)) {
+                       false, false, true, decoder,
+                       false,
+                       m_PresentationSettings.enableVrr)) {
         return false;
     }
 
@@ -583,6 +599,11 @@ bool Session::populateDecoderProperties(SDL_Window* window)
     else {
         m_StreamConfig.colorRange = decoder->getDecoderColorRange();
     }
+
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Negotiated host color range: %s (VRR renderer policy %s)",
+                m_StreamConfig.colorRange == COLOR_RANGE_FULL ? "full" : "limited",
+                m_PresentationSettings.enableVrr ? "active" : "inactive");
 
     if (decoder->isAlwaysFullScreen()) {
         m_IsFullScreen = true;
@@ -653,7 +674,10 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     m_PresentationSettings.enableFramePacing = m_PresentationSettings.effectiveVsync &&
                                                m_Preferences->framePacing;
     m_PresentationSettings.enableVrr = false;
-    m_PresentationSettings.vrrSmoothness = false;
+    m_PresentationSettings.vrrLatencyMode = m_Preferences->vrrLatencyMode;
+    m_PresentationSettings.gamescopeRepaint = false; // Retired repaint experiment.
+    m_PresentationSettings.gamescopeMailbox = false; // Retired Mailbox experiment.
+    m_PresentationSettings.smoothVrrFrameTiming = m_Preferences->smoothVrrFrameTiming;
 
     if (requestedVrr) {
         const bool hasAdaptiveHeadroom = hasStrictRefreshRate &&
@@ -670,14 +694,12 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
         if (hasStrictRefreshRate && m_PresentationSettings.effectiveVsync &&
                 !hasAdaptiveHeadroom) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "VRR disabled: %d FPS leaves insufficient adaptive-refresh headroom at %d Hz",
+                        "VRR disabled: %d FPS exceeds the display maximum of %d Hz",
                         m_StreamConfig.fps, strictRefreshRate);
         }
         if (hasStrictRefreshRate && m_PresentationSettings.effectiveVsync &&
                 hasAdaptiveHeadroom) {
             m_PresentationSettings.enableVrr = true;
-            m_PresentationSettings.vrrSmoothness =
-                m_Preferences->vrrSmoothness;
             m_PresentationSettings.effectiveWindowMode = StreamingPreferences::WM_FULLSCREEN_DESKTOP;
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "VRR requested at %d Hz; forcing borderless desktop fullscreen for this session",
@@ -2396,9 +2418,13 @@ void Session::exec()
                                false,
                                s_ActiveSession->m_VideoDecoder,
                                m_PresentationSettings.enableVrr,
+                               m_PresentationSettings.enableVrr,
                                m_PresentationSettings.refreshRate,
-                               m_PresentationSettings.vrrSmoothness,
-                               &m_PresentationSettings.enableVrr)) {
+                               &m_PresentationSettings.enableVrr,
+                               m_PresentationSettings.smoothVrrFrameTiming,
+                               m_PresentationSettings.gamescopeMailbox,
+                               m_PresentationSettings.vrrLatencyMode,
+                               m_PresentationSettings.gamescopeRepaint)) {
                 SDL_UnlockMutex(m_DecoderLock);
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                              "Failed to recreate decoder after reset");
@@ -2558,4 +2584,22 @@ DispatchDeferredCleanup:
     // When it is complete, it will release our s_ActiveSessionSemaphore
     // reference.
     QThreadPool::globalInstance()->start(new DeferredSessionCleanupTask(this));
+}
+
+QString Session::vrrCalibrationContext() const
+{
+    QStringList networks;
+    for (const auto& iface : QNetworkInterface::allInterfaces()) {
+        if (!(iface.flags() & QNetworkInterface::IsUp) ||
+            !(iface.flags() & QNetworkInterface::IsRunning) ||
+            (iface.flags() & QNetworkInterface::IsLoopBack)) continue;
+        QStringList addresses;
+        for (const auto& entry : iface.addressEntries()) addresses << entry.ip().toString();
+        addresses.sort();
+        networks << iface.hardwareAddress() + ":" + addresses.join(",");
+    }
+    networks.sort();
+    return QString("vrr13-history-1|%1|%2|%3|%4|%5")
+        .arg(m_Computer->uuid).arg(m_App.id).arg(m_StreamConfig.bitrate)
+        .arg(QSysInfo::kernelVersion()).arg(networks.join(";"));
 }

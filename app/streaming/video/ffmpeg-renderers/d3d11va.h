@@ -1,5 +1,7 @@
 #pragma once
 
+#include "dxgipresent.h"
+#include "d3d11composition.h"
 #include "ivrrframepresenter.h"
 #include "renderer.h"
 
@@ -17,6 +19,7 @@ extern "C" {
 class D3D11VARenderer : public IFFmpegRenderer, public IVrrFramePresenter
 {
 public:
+    QString getCalibrationIdentity() override;
     D3D11VARenderer(int decoderSelectionPass);
     virtual ~D3D11VARenderer() override;
     virtual bool initialize(PDECODER_PARAMETERS params) override;
@@ -25,9 +28,12 @@ public:
     virtual void renderFrame(AVFrame* frame) override;
     virtual IVrrFramePresenter* getVrrFramePresenter() override;
 
+    // DXGI can switch to interval one; composition always provides native
+    // presentation ordering. Both can honor a protected slot without a CPU floor.
     virtual bool canLatchAdaptivePresent() const override { return true; }
     virtual VrrFallbackReason checkSupport() const override;
     virtual uint64_t captureDecodeBoundary() override;
+    uint64_t waitForDecode(AVFrame* frame, uint64_t decodeBoundary) override;
     virtual VrrPrepareResult prepareFrame(AVFrame* frame,
                                           uint64_t decodeBoundary) override;
     virtual VrrPresentFeedback presentAdaptive(
@@ -54,6 +60,10 @@ private:
     static void unlockContext(void* lock_ctx);
 
     bool setupRenderingResources();
+    bool m_CompositionRequested = false;
+    D3D11CompositionPresenter m_CompositionPresenter;
+    uint64_t m_CompositionPresentId = 0;
+    bool m_CompositionModeLogged = false;
     std::vector<DXGI_FORMAT> getVideoTextureSRVFormats();
     bool setupFrameRenderingResources(AVHWFramesContext* framesContext);
     bool setupSwapchainDependentResources();
@@ -62,8 +72,8 @@ private:
     bool prepareFrameForPresent(AVFrame* frame,
                                 uint64_t decodeBoundary = 0);
     bool initializeVrrPresentReadyFence();
-    bool waitForVrrPresentReady();
-    HRESULT presentPreparedFrame(UINT flags);
+    bool waitForVrrPresentReady(uint64_t decodeBoundary);
+    HRESULT presentPreparedFrame(const DxgiPresentParameters& parameters);
     UINT legacyPresentFlags() const;
     void initializeVrrPresentationState(SDL_Window* window,
                                         DXGI_SWAP_CHAIN_DESC1* swapChainDesc);

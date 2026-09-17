@@ -2,9 +2,13 @@ import QtQuick 2.9
 import QtQuick.Controls 2.2
 import QtQuick.Controls.Material 2.2
 
+import StreamingPreferences 1.0
 import AppModel 1.0
 import ComputerManager 1.0
 import SdlGamepadKeyNavigation 1.0
+import InputModeTracker 1.0
+import SystemProperties 1.0
+import TvTheme 1.0
 
 CenteredGridView {
     property int computerIndex
@@ -16,9 +20,21 @@ CenteredGridView {
     id: appGrid
     focus: true
     activeFocusOnTab: true
-    topMargin: 20
+    // Leave room for the focused card to grow at the edges in TV mode. Each
+    // card sits at the left of its cell, so shift the grid right by half of
+    // the unused cell width to center the cards.
+    minMargin: SystemProperties.tvMode ? 40 : 10
+    leftInset: SystemProperties.tvMode ? (rowsFilled ? minMargin : 0) + (cellWidth - tvCardWidth) / 2 : 0
+    topMargin: SystemProperties.tvMode ? 30 : 20
     bottomMargin: 5
-    cellWidth: 230; cellHeight: 297;
+    // TV mode uses bigger box art with more room around each card, since
+    // the focused card grows and shows the game's name underneath
+    readonly property int tvCardWidth: 260
+    cellWidth: SystemProperties.tvMode ? tvCardWidth + 30 : 230
+    cellHeight: SystemProperties.tvMode ? 425 : 297
+
+    // Shown blurred behind the page in TV mode
+    readonly property url tvBackdropSource: currentItem ? currentItem.backdropArt : ""
 
     function computerLost()
     {
@@ -63,7 +79,8 @@ CenteredGridView {
 
     function createModel()
     {
-        var model = Qt.createQmlObject('import AppModel 1.0; AppModel {}', parent, '')
+        var model = Qt.createQmlObject('import StreamingPreferences 1.0
+import AppModel 1.0; AppModel {}', parent, '')
         model.initialize(ComputerManager, computerIndex, showHiddenGames)
         return model
     }
@@ -71,14 +88,76 @@ CenteredGridView {
     model: appModel
 
     delegate: NavigableItemDelegate {
-        width: 220; height: 287;
+        width: SystemProperties.tvMode ? appGrid.tvCardWidth : 220
+        height: SystemProperties.tvMode ? 390 : 287
         grid: appGrid
+        tvCardStyle: true
 
         property alias appContextMenu: appContextMenuLoader.item
         property alias appNameText: appNameTextLoader.item
 
+        popupOpen: appContextMenu !== null && appContextMenu.visible
+
+        readonly property int artWidth: SystemProperties.tvMode ? 240 : 200
+        readonly property int artHeight: SystemProperties.tvMode ? 320 : 267
+
+        // Placeholder art is a plain gray box, which makes a poor backdrop
+        readonly property url backdropArt: appIcon.isPlaceholder ? "" : model.boxart
+
         // Dim the app if it's hidden
-        opacity: model.hidden ? 0.4 : 1.0
+        cardOpacity: model.hidden ? 0.4 : 1.0
+
+        // TV mode: a soft shadow under the box art, built from two layers
+        Rectangle {
+            visible: tvCard
+            x: appIcon.x - 4
+            y: appIcon.y + 8
+            width: appIcon.width + 8
+            height: appIcon.height + 6
+            radius: TvTheme.cardRadius + 4
+            color: "black"
+            opacity: 0.2
+        }
+        Rectangle {
+            visible: tvCard
+            x: appIcon.x
+            y: appIcon.y + 4
+            width: appIcon.width
+            height: appIcon.height
+            radius: TvTheme.cardRadius
+            color: "black"
+            opacity: 0.35
+        }
+
+        // TV mode: a glow around the focused game's box art
+        Item {
+            visible: tvCard
+            anchors.fill: appIcon
+            opacity: tvSelected ? 1.0 : 0.0
+            Behavior on opacity { NumberAnimation { duration: TvTheme.animationNormal } }
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -9
+                radius: 10
+                color: "transparent"
+                border.width: 6
+                border.color: Material.accent
+                opacity: 0.3
+            }
+
+            // The border overlaps the art by a pixel, so no gap shows between
+            // them when the card is scaled. The small radius keeps the square
+            // corners of the art from poking out.
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -3
+                radius: 4
+                color: "transparent"
+                border.width: 4
+                border.color: Material.accent
+            }
+        }
 
         Image {
             property bool isPlaceholder: false
@@ -105,15 +184,16 @@ CenteredGridView {
                     isPlaceholder = false
                 }
 
-                width = 200
-                height = 267
+                width = artWidth
+                height = artHeight
             }
 
             // Display a tooltip with the full name if it's truncated
             ToolTip.text: model.name
             ToolTip.delay: 1000
             ToolTip.timeout: 5000
-            ToolTip.visible: (parent.hovered || parent.highlighted) && (!appNameText || appNameText.truncated)
+            // TV mode shows the name under the focused card instead
+            ToolTip.visible: !SystemProperties.tvMode && (parent.hovered || parent.highlighted) && (!appNameText || appNameText.truncated)
         }
 
         Loader {
@@ -143,9 +223,9 @@ CenteredGridView {
                     ToolTip.text: qsTr("Resume Game")
                     ToolTip.delay: 1000
                     ToolTip.timeout: 3000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
 
-                    Material.background: "#D0808080"
+                    Material.background: SystemProperties.tvMode ? "#E01F2330" : "#D0808080"
                 }
 
                 RoundButton {
@@ -169,11 +249,46 @@ CenteredGridView {
                     ToolTip.text: qsTr("Quit Game")
                     ToolTip.delay: 1000
                     ToolTip.timeout: 3000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
 
-                    Material.background: "#D0808080"
+                    Material.background: SystemProperties.tvMode ? "#E01F2330" : "#D0808080"
                 }
             }
+        }
+
+        // TV mode: marks games that are running on the host
+        Rectangle {
+            visible: tvCard && model.running
+            anchors.left: appIcon.left
+            anchors.top: appIcon.top
+            anchors.margins: 10
+            width: runningLabel.implicitWidth + 24
+            height: runningLabel.implicitHeight + 8
+            radius: height / 2
+            color: Material.accent
+
+            Label {
+                id: runningLabel
+                anchors.centerIn: parent
+                text: qsTr("Running")
+                font.pointSize: 11
+                font.bold: true
+            }
+        }
+
+        // TV mode: the focused game's full name, under its box art
+        Label {
+            visible: tvCard
+            anchors.top: appIcon.bottom
+            anchors.topMargin: 16
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: parent.width
+            text: model.name
+            font.pointSize: 16
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
+            opacity: tvSelected ? 1.0 : 0.0
+            Behavior on opacity { NumberAnimation { duration: TvTheme.animationNormal } }
         }
 
         Loader {
@@ -222,7 +337,8 @@ CenteredGridView {
             var segue = component.createObject(stackView, {
                                                    "appName": model.name,
                                                    "session": appModel.createSessionForApp(index),
-                                                   "isResume": runningId === model.appid
+                                                   "isResume": runningId === model.appid,
+                                                   "boxArt": backdropArt
                                                })
             stackView.push(segue)
         }
@@ -314,7 +430,7 @@ CenteredGridView {
                     ToolTip.text: qsTr("Launch this app immediately when the host is selected, bypassing the app selection grid.")
                     ToolTip.delay: 1000
                     ToolTip.timeout: 3000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 }
                 NavigableMenuItem {
                     checkable: true
@@ -326,7 +442,7 @@ CenteredGridView {
                     ToolTip.text: qsTr("Hide this game from the app grid. To access hidden games, right-click on the host and choose %1.").arg(qsTr("View All Apps"))
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 }
             }
         }
@@ -356,12 +472,15 @@ CenteredGridView {
 
         function quitApp() {
             var component = Qt.createComponent("QuitSegue.qml")
-            var params = {"appName": appName, "quitRunningAppFn": function() { appModel.quitRunningApp() }}
+            // The focused game is the one being quit, or the one launching next
+            var params = {"appName": appName, "quitRunningAppFn": function() { appModel.quitRunningApp() },
+                          "boxArt": appGrid.tvBackdropSource}
             if (segueToStream) {
                 // Store the session and app name if we're going to stream after
                 // successfully quitting the old app.
                 params.nextAppName = nextAppName
                 params.nextSession = appModel.createSessionForApp(nextAppIndex)
+                params.nextBoxArt = appGrid.tvBackdropSource
             }
             else {
                 params.nextAppName = null

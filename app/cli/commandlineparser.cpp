@@ -165,6 +165,11 @@ GlobalCommandLineParser::ParseResult GlobalCommandLineParser::parse(const QStrin
         "See 'moonlight <action> --help' for help of specific action."
     );
     parser.addPositionalArgument("action", "Action to execute", "<action>");
+
+    // TV mode is applied in main() before this parser runs, but it must be
+    // registered here so it isn't rejected as an unknown option.
+    parser.addToggleOption("tv-mode", "TV mode, a GUI suited to gamepads and TVs, for this launch");
+
     parser.parse(args);
     auto posArgs = parser.positionalArguments();
 
@@ -348,7 +353,7 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     parser.addValueOption("resolution", "custom <width>x<height> resolution");
     parser.addToggleOption("vsync", "V-Sync");
     parser.addToggleOption("vrr", "VRR");
-    parser.addToggleOption("vrr-smoothness", "VRR smoothness queue");
+    parser.addToggleOption("vrr-smooth-frame-timing", "VRR frame timing smoothing");
     parser.addValueOption("fps", "FPS");
     parser.addValueOption("bitrate", "bitrate in Kbps");
     parser.addValueOption("packet-size", "video packet size");
@@ -444,10 +449,8 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     // command-line settings.  It must not persist a CLI choice back to the
     // normal settings UI.
     preferences->enableVrr = parser.getToggleOptionValue("vrr", preferences->enableVrr);
-
-    // Resolve --vrr-smoothness and --no-vrr-smoothness options
-    preferences->vrrSmoothness = parser.getToggleOptionValue(
-        "vrr-smoothness", preferences->vrrSmoothness);
+    preferences->smoothVrrFrameTiming = parser.getToggleOptionValue(
+        "vrr-smooth-frame-timing", preferences->smoothVrrFrameTiming);
 
     // Resolve --audio-config option
     if (parser.isSet("audio-config")) {

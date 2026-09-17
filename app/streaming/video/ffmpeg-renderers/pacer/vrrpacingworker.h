@@ -6,6 +6,7 @@
 #include "vrr/vrrtargetwaiter.h"
 #include "vrr/vrrtypes.h"
 #include "vrr/vrrtimingcontroller.h"
+#include "vrr/tracequeue.h"
 
 #include <atomic>
 #include <cstdio>
@@ -92,6 +93,12 @@ private:
         uint64_t preparationStartUs = 0;
         uint64_t preparationEndUs = 0;
         uint64_t preparationDurationUs = 0;
+        uint64_t decodeSyncWaitUs = 0;
+        bool prepareTimingValid = false;
+        uint64_t prepareDecodeSyncUs = 0;
+        uint64_t prepareAcquireUs = 0;
+        uint64_t prepareRenderUs = 0;
+        uint64_t prepareFlushUs = 0;
         uint64_t targetWaitEntryUs = 0;
         uint64_t targetWaitOvershootUs = 0;
         uint64_t targetWaitFinalUs = 0;
@@ -127,6 +134,15 @@ private:
         uint32_t rtpTimestamp = 0;
         bool timestampValid = false;
         uint64_t decodeCompleteUs = 0;
+        uint64_t decoderOutputUs = 0;
+        int latencyMode = 0;
+        uint64_t historySamples = 0;
+        uint64_t historyMisses = 0;
+        uint64_t historyDurationUs = 0;
+        bool historyCanRelease = false;
+        uint64_t receiveUs = 0;
+        uint64_t reassembledUs = 0;
+        uint64_t decodeSubmitUs = 0;
         FrameTraceContext input;
         VrrTimingDecision decision;
         VrrTimingDiagnostics diagnostics;
@@ -163,7 +179,7 @@ private:
                           FrameTelemetry& telemetry);
     void deferFrame(PacedFrame&& frame);
     void noteDrop();
-    void writeTrace(const QueuedFrame& frame,
+    void recordFrameCompletion(const QueuedFrame& frame,
                     const VrrTimingDecision& decision,
                     const VrrPresentFeedback& feedback,
                     const FrameTelemetry& telemetry,
@@ -182,6 +198,12 @@ private:
     PacerTelemetry* m_Telemetry;
     VrrSessionConfig m_Config;
     bool m_CanLatchPresentation = false;
+    bool m_WorkerStarted = false;
+    std::atomic_bool m_CalibrationInvalidated { false };
+    QByteArray m_InitialPlayoutProfile;
+    bool m_CalibrationLoaded = false;
+    uint64_t m_InitialCachedSamples = 0;
+    int m_HistoryVersion = 0;
 
     std::unique_ptr<VrrTimingController> m_TimingController;
     std::unique_ptr<VrrTargetWaiter> m_TargetWaiter;
@@ -191,6 +213,7 @@ private:
     std::deque<QueuedFrame> m_FrameQueue;
     std::atomic_size_t m_FrameQueueDepth { 0 };
     PacedFrame m_DeferredFrame;
+    // The last presented image, re-presented inside a host gap.
     SDL_Thread* m_WorkerThread = nullptr;
     std::atomic_bool m_Stopping { false };
     std::atomic_bool m_Suspended { false };
@@ -204,10 +227,9 @@ private:
     bool m_DeepTraceEnabled = false;
     std::FILE* m_TraceFile = nullptr;
     SDL_Thread* m_TraceThread = nullptr;
-    QMutex m_TraceLock;
-    QWaitCondition m_TraceQueueNotEmpty;
-    std::vector<TraceRow> m_TraceQueue;
+    std::unique_ptr<Vrr13::TraceQueue<TraceRow, 8192>> m_TraceQueue;
     std::atomic_bool m_TraceStopping { false };
+    std::atomic_uint m_TraceProducersActive { 0 };
     std::atomic_bool m_TraceAcceptingRows { false };
     std::atomic_uint64_t m_TraceArrivalSequence { 0 };
     std::atomic_size_t m_TraceDroppedRows { 0 };

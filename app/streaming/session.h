@@ -121,6 +121,13 @@ public:
         return m_OverlayManager;
     }
 
+    int streamColorRange() const
+    {
+        return m_StreamConfig.colorRange;
+    }
+
+    QString vrrCalibrationContext() const;
+
     void flushWindowEvents();
 
     void setShouldExit(bool quitHostApp = false);
@@ -190,9 +197,11 @@ private:
                        SDL_Window* window, int videoFormat, int width, int height,
                        int frameRate, bool enableVsync, bool enableFramePacing,
                        bool testOnly, IVideoDecoder*& chosenDecoder,
-                       bool enableVrr = false, int vrrDisplayRefreshHz = 0,
-                       bool vrrSmoothness = false,
-                       bool* effectiveVrr = nullptr);
+                       bool enableVrr = false, bool preferVrrRenderer = false,
+                       int vrrDisplayRefreshHz = 0,
+                       bool* effectiveVrr = nullptr, bool smoothVrrFrameTiming = true,
+                       bool gamescopeMailbox = false, int vrrLatencyMode = 0,
+                       bool gamescopeRepaint = false);
 
     static
     void clStageStarting(int stage);
@@ -251,8 +260,11 @@ private:
         bool effectiveVsync = false;
         bool enableFramePacing = false;
         bool enableVrr = false;
+        int vrrLatencyMode = 0;
+        bool gamescopeMailbox = false;
+        bool gamescopeRepaint = false;
+        bool smoothVrrFrameTiming = true;
         int refreshRate = 0;
-        bool vrrSmoothness = false;
         StreamingPreferences::WindowMode effectiveWindowMode = StreamingPreferences::WM_WINDOWED;
         StreamingPreferences::VideoDecoderSelection decoderSelection = StreamingPreferences::VDS_AUTO;
         StreamingPreferences::RendererSelection rendererSelection = StreamingPreferences::RS_AUTO;
