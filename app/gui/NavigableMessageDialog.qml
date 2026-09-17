@@ -64,7 +64,12 @@ NavigableDialog {
         standardButtons: dialog.standardButtons
 
         delegate: Button {
-            flat: true
+            // In TV mode the focused button is filled with the accent color, so
+            // it's always clear what pressing A will do. This follows focus
+            // itself rather than the focus ring, which only appears for focus
+            // gained through keyboard or gamepad navigation.
+            flat: !(SystemProperties.tvMode && activeFocus)
+            highlighted: SystemProperties.tvMode && activeFocus
 
             Keys.onReturnPressed: clicked()
             Keys.onEnterPressed: clicked()
