@@ -174,12 +174,14 @@ CenteredGridView {
 
         property alias pcContextMenu : pcContextMenuLoader.item
 
+        popupOpen: pcContextMenu !== null && pcContextMenu.visible
+
         // TV mode: the card surface
         Rectangle {
             visible: tvCard
             anchors.fill: parent
             radius: TvTheme.cardRadius
-            color: highlighted ? TvTheme.surfaceRaised : TvTheme.surface
+            color: tvSelected ? TvTheme.surfaceRaised : TvTheme.surface
             Behavior on color { ColorAnimation { duration: TvTheme.animationNormal } }
         }
 
@@ -187,7 +189,7 @@ CenteredGridView {
         Item {
             visible: tvCard
             anchors.fill: parent
-            opacity: highlighted ? 1.0 : 0.0
+            opacity: tvSelected ? 1.0 : 0.0
             Behavior on opacity { NumberAnimation { duration: TvTheme.animationNormal } }
 
             Rectangle {
@@ -285,7 +287,7 @@ CenteredGridView {
             width: statusRow.implicitWidth + 32
             height: statusRow.implicitHeight + 12
             radius: height / 2
-            color: highlighted ? TvTheme.surface : TvTheme.surfaceRaised
+            color: tvSelected ? TvTheme.surface : TvTheme.surfaceRaised
 
             Row {
                 id: statusRow
