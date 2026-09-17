@@ -118,10 +118,60 @@ ApplicationWindow {
         }
     }
 
+    function isSelfOrDescendantOf(item, ancestor) {
+        for (; item; item = item.parent) {
+            if (item === ancestor) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // Returns whether focus can be returned to an item that had it before a
+    // dialog opened or before we navigated away from its page
+    function canRestoreFocusTo(item) {
+        if (!item || !item.visible || !item.enabled || !stackView.currentItem) {
+            return false
+        }
+
+        // Only return focus to the current page or the toolbar
+        if (!isSelfOrDescendantOf(item, stackView.currentItem) && !isSelfOrDescendantOf(item, toolBar)) {
+            return false
+        }
+
+        // Grid and list views manage focus for their delegates themselves, so
+        // don't focus a delegate that is no longer the current item
+        for (var ancestor = item.parent; ancestor; ancestor = ancestor.parent) {
+            if (ancestor.currentIndex !== undefined && ancestor.currentItem !== undefined &&
+                    !isSelfOrDescendantOf(item, ancestor.currentItem)) {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    // Moves focus back to an item that previously had it, or to the current
+    // page if that isn't possible. We must always put focus somewhere, or
+    // gamepad and keyboard navigation will break.
+    function restoreFocus(item, hadVisualFocus) {
+        if (canRestoreFocusTo(item)) {
+            item.forceActiveFocus(hadVisualFocus ? Qt.TabFocusReason : Qt.OtherFocusReason)
+        }
+        else {
+            stackView.forceActiveFocus()
+        }
+    }
+
     StackView {
         id: stackView
         anchors.fill: parent
         focus: true
+
+        // What had focus on each page in the stack when we navigated away from
+        // it, so it can be focused again when we return
+        property Item previousItem: null
+        property var savedFocus: []
 
         Component.onCompleted: {
             // Perform our early initialization before constructing
@@ -131,9 +181,45 @@ ApplicationWindow {
         }
 
         onCurrentItemChanged: {
+            var focusItem = window.activeFocusItem
+
+            // Forget pages that are no longer in the stack
+            var entries = []
+            for (var i = 0; i < savedFocus.length; i++) {
+                var entry = savedFocus[i]
+                if (entry.page && entry.page !== previousItem &&
+                        find(function(page) { return page === entry.page }) !== null) {
+                    entries.push(entry)
+                }
+            }
+
+            // Remember what had focus on the page we're leaving
+            if (previousItem && focusItem &&
+                    (isSelfOrDescendantOf(focusItem, previousItem) || isSelfOrDescendantOf(focusItem, toolBar))) {
+                entries.push({ "page": previousItem, "item": focusItem, "visualFocus": focusItem.visualFocus === true })
+            }
+
+            savedFocus = entries
+            previousItem = currentItem
+
             // Ensure focus travels to the next view when going back
             if (currentItem) {
                 currentItem.forceActiveFocus()
+
+                // If we're returning to a page, go back to what had focus there.
+                // This is deferred so bindings that depend on the current page
+                // (like toolbar button visibility) are up to date.
+                for (i = 0; i < savedFocus.length; i++) {
+                    if (savedFocus[i].page === currentItem) {
+                        var savedEntry = savedFocus[i]
+                        Qt.callLater(function() {
+                            if (savedEntry.page === stackView.currentItem && canRestoreFocusTo(savedEntry.item)) {
+                                savedEntry.item.forceActiveFocus(savedEntry.visualFocus ? Qt.TabFocusReason : Qt.OtherFocusReason)
+                            }
+                        })
+                        break
+                    }
+                }
             }
         }
 
