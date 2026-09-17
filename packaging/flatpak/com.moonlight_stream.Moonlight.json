@@ -146,9 +146,8 @@
             "sources": [
                 {
                     "type": "git",
-                    "url": "../..",
-                    "disable-shallow-clone": true,
-                    "commit": "2d5f0a7300a5273a0648572fc0b601f34edba59c"
+                    "url": "https://github.com/xanderfrangos/moonlight-qt-cui.git",
+                    "disable-shallow-clone": true
                 },
                 {
                     "type": "shell",
