@@ -36,10 +36,35 @@ Flickable {
     // Some GUI preferences are only applied when Moonlight starts. Offer to
     // restart if the saved values no longer match what is currently in effect.
     function promptRestartIfNeeded() {
+        // A command line option keeps TV mode fixed across a restart
+        var tvModeAfterRestart = SystemProperties.tvModeOverridden ? SystemProperties.tvMode : StreamingPreferences.tvMode
+
+        // TV mode always disables hover effects
+        var hoverDisabledAfterRestart = StreamingPreferences.disableHover || tvModeAfterRestart
+
         if ((SystemProperties.supportsUiScale && StreamingPreferences.uiScale !== SystemProperties.activeUiScale) ||
-                StreamingPreferences.disableHover !== SystemProperties.hoverEffectsDisabled) {
+                hoverDisabledAfterRestart !== SystemProperties.hoverEffectsDisabled ||
+                tvModeAfterRestart !== SystemProperties.tvMode) {
             restartDialog.open()
         }
+    }
+
+    NavigableMessageDialog {
+        id: tvModeScaleDialog
+        standardButtons: Dialog.Yes | Dialog.No
+        text: qsTr("Your display has a high resolution. Would you also like to increase the GUI scale to 200% so it is easier to read from a distance?")
+        onAccepted: {
+            StreamingPreferences.uiScale = 200
+            for (var i = 0; i < uiScaleListModel.count; i++) {
+                if (uiScaleListModel.get(i).val === 200) {
+                    uiScaleComboBox.currentIndex = i
+                    break
+                }
+            }
+        }
+
+        // Ask about restarting once the scale question has been answered
+        onClosed: promptRestartIfNeeded()
     }
 
     NavigableMessageDialog {
@@ -1511,6 +1536,43 @@ Flickable {
                     ToolTip.timeout: 5000
                     ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Prevents controls from highlighting under the mouse cursor. Useful when navigating with a gamepad or remote. Requires restarting Moonlight.")
+                }
+
+                CheckBox {
+                    id: tvModeCheck
+                    width: parent.width
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
+                    text: qsTr("TV mode")
+                    font.pointSize: 12
+                    checked: StreamingPreferences.tvMode
+                    onToggled: {
+                        StreamingPreferences.tvMode = checked
+
+                        // Offer a larger scale when enabling TV mode on a 4K or larger display
+                        if (checked && !SystemProperties.tvModeOverridden &&
+                                SystemProperties.supportsUiScale && StreamingPreferences.uiScale === 100 &&
+                                Screen.width * Screen.devicePixelRatio >= 3840) {
+                            tvModeScaleDialog.open()
+                        }
+                        else {
+                            promptRestartIfNeeded()
+                        }
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("A GUI suited to gamepads and TVs. Runs fullscreen with larger controls and no mouse hover effects. Requires restarting Moonlight.")
+                }
+
+                Label {
+                    width: parent.width
+                    text: SystemProperties.tvMode ?
+                              qsTr("TV mode is currently turned on by the --tv-mode command line option.") :
+                              qsTr("TV mode is currently turned off by the --no-tv-mode command line option.")
+                    font.pointSize: 9
+                    wrapMode: Text.Wrap
+                    visible: SystemProperties.tvModeOverridden
                 }
 
                 CheckBox {
