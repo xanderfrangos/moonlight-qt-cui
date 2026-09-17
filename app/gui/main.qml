@@ -556,8 +556,8 @@ ApplicationWindow {
         }
     }
 
-    // A clearly visible indicator around the control that has keyboard or
-    // gamepad focus. The Material style's own focus cues are too subtle to
+    // A clearly visible indicator around the focused control while navigating
+    // with a gamepad. The Material style's own focus cues are too subtle to
     // see from across the room. It lives in the overlay so it is also drawn
     // for controls inside dialogs and menus.
     Rectangle {
@@ -565,9 +565,14 @@ ApplicationWindow {
 
         readonly property int ringMargin: 4
 
-        // Only controls report visualFocus, and only when focus was gained
-        // through keyboard or gamepad navigation (not a mouse click).
+        // Only shown while the gamepad is in use. Only controls report
+        // visualFocus, and only when focus was gained through keyboard or
+        // gamepad navigation (not a mouse click).
         property Item target: {
+            if (!InputModeTracker.gamepadActive) {
+                return null
+            }
+
             var item = window.activeFocusItem
             return (item && item.visualFocus === true) ? item : null
         }
