@@ -1,5 +1,5 @@
 import QtQuick 2.9
-import QtQuick.Controls 2.2
+import QtQuick.Controls 2.3
 import QtQuick.Layouts 1.3
 import QtQuick.Window 2.2
 import QtQuick.Controls.Material 2.2
@@ -9,6 +9,7 @@ import AutoUpdateChecker 1.0
 import StreamingPreferences 1.0
 import SystemProperties 1.0
 import SdlGamepadKeyNavigation 1.0
+import InputModeTracker 1.0
 
 ApplicationWindow {
     property bool pollingActive: false
@@ -303,7 +304,7 @@ ApplicationWindow {
 
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
-                ToolTip.visible: hovered
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Join our community on Discord")
 
                 // TODO need to make sure browser is brought to foreground.
@@ -322,7 +323,7 @@ ApplicationWindow {
 
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
-                ToolTip.visible: hovered
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Add PC manually") + (newPcShortcut.nativeText ? (" ("+newPcShortcut.nativeText+")") : "")
 
                 Shortcut {
@@ -386,7 +387,7 @@ ApplicationWindow {
 
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
-                ToolTip.visible: hovered
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Help") + (helpShortcut.nativeText ? (" ("+helpShortcut.nativeText+")") : "")
 
                 Shortcut {
@@ -409,7 +410,7 @@ ApplicationWindow {
 
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
-                ToolTip.visible: hovered
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Gamepad Mapper")
 
                 iconSource: "qrc:/res/ic_videogame_asset_white_48px.svg"
@@ -440,7 +441,7 @@ ApplicationWindow {
 
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
-                ToolTip.visible: hovered
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Settings") + (settingsShortcut.nativeText ? (" ("+settingsShortcut.nativeText+")") : "")
             }
         }
@@ -552,6 +553,74 @@ ApplicationWindow {
                     addPcDialog.accept()
                 }
             }
+        }
+    }
+
+    // A clearly visible indicator around the control that has keyboard or
+    // gamepad focus. The Material style's own focus cues are too subtle to
+    // see from across the room. It lives in the overlay so it is also drawn
+    // for controls inside dialogs and menus.
+    Rectangle {
+        id: focusRing
+
+        readonly property int ringMargin: 4
+
+        // Only controls report visualFocus, and only when focus was gained
+        // through keyboard or gamepad navigation (not a mouse click).
+        property Item target: {
+            var item = window.activeFocusItem
+            return (item && item.visualFocus === true) ? item : null
+        }
+
+        property bool targetOnScreen: false
+
+        parent: Overlay.overlay
+        z: 1000000
+        visible: target !== null && target.visible && targetOnScreen
+        color: "transparent"
+        radius: 6
+        border.width: 3
+        border.color: Material.accent
+
+        function updateGeometry() {
+            if (target === null) {
+                targetOnScreen = false
+                return
+            }
+
+            var pos = target.mapToItem(parent, 0, 0)
+            var left = pos.x - ringMargin
+            var top = pos.y - ringMargin
+            var right = pos.x + target.width + ringMargin
+            var bottom = pos.y + target.height + ringMargin
+
+            // Keep the ring inside any clipping ancestors, and inside the page
+            // area so a partially scrolled control doesn't draw over the toolbar
+            for (var item = target.parent; item; item = item.parent) {
+                if (item.clip || item === stackView) {
+                    var clipPos = item.mapToItem(parent, 0, 0)
+                    left = Math.max(left, clipPos.x)
+                    top = Math.max(top, clipPos.y)
+                    right = Math.min(right, clipPos.x + item.width)
+                    bottom = Math.min(bottom, clipPos.y + item.height)
+                }
+            }
+
+            targetOnScreen = right > left && bottom > top && target.width > 0 && target.height > 0
+            x = left
+            y = top
+            width = right - left
+            height = bottom - top
+        }
+
+        onTargetChanged: updateGeometry()
+
+        // Follow the target while it moves (scrolling, animations, layout changes)
+        Timer {
+            interval: 16
+            repeat: true
+            running: focusRing.target !== null
+            onTriggered: focusRing.updateGeometry()
         }
     }
 }
