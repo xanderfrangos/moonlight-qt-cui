@@ -26,15 +26,91 @@ Flickable {
         }
     }
 
-    function isChildOfFlickable(item) {
-        while (item) {
-            if (item.parent === contentItem) {
+    function isDescendantOf(item, ancestor) {
+        for (item = item ? item.parent : null; item; item = item.parent) {
+            if (item === ancestor) {
                 return true
             }
-
-            item = item.parent
         }
         return false
+    }
+
+    function isChildOfFlickable(item) {
+        return isDescendantOf(item, contentItem)
+    }
+
+    // Moves focus to the nearest focusable control to the left or right of
+    // fromItem. Controls that share a row are preferred; otherwise the closest
+    // control vertically in that direction (e.g. in the other column) is used.
+    // If nothing lies in that direction, focus stays where it is.
+    function navigateHorizontally(fromItem, forward) {
+        if (!isChildOfFlickable(fromItem)) {
+            return
+        }
+
+        var from = fromItem.mapToItem(contentItem, 0, 0)
+        var fromLeft = from.x
+        var fromRight = from.x + fromItem.width
+        var fromTop = from.y
+        var fromBottom = from.y + fromItem.height
+
+        var bestItem = null
+        var bestOverlaps = false
+        var bestScore = 0
+
+        // Walk the tab focus chain, which only contains visible, enabled controls
+        var item = fromItem
+        for (var i = 0; i < 1000; i++) {
+            item = item.nextItemInFocusChain(true)
+            if (!item || item === fromItem) {
+                break
+            }
+            if (!isChildOfFlickable(item)) {
+                continue
+            }
+
+            var pos = item.mapToItem(contentItem, 0, 0)
+            var left = pos.x
+            var right = pos.x + item.width
+
+            // Horizontal gap in the requested direction. Allow a tiny overlap
+            // to tolerate rounding in adjacent layouts.
+            var dx = forward ? left - fromRight : fromLeft - right
+            if (dx < -2) {
+                continue
+            }
+            dx = Math.max(dx, 0)
+
+            var dy = Math.max(0, pos.y - fromBottom, fromTop - (pos.y + item.height))
+            var overlaps = dy === 0
+
+            // Among overlapping controls, prefer the nearest one whose vertical
+            // center is best aligned with ours.
+            var centerDy = Math.abs((pos.y + item.height / 2) - (fromTop + fromItem.height / 2))
+            var score = overlaps ? dx + centerDy : dy * 10 + dx
+
+            if (bestItem === null ||
+                    (overlaps && !bestOverlaps) ||
+                    (overlaps === bestOverlaps && score < bestScore)) {
+                bestItem = item
+                bestOverlaps = overlaps
+                bestScore = score
+            }
+        }
+
+        if (bestItem !== null) {
+            bestItem.forceActiveFocus(Qt.TabFocus)
+        }
+    }
+
+    // Left/Right key events from focused controls that don't consume them
+    // (check boxes, combo boxes, buttons) bubble up to here.
+    Keys.onLeftPressed: {
+        navigateHorizontally(Window.activeFocusItem, false)
+    }
+
+    Keys.onRightPressed: {
+        navigateHorizontally(Window.activeFocusItem, true)
     }
 
     NumberAnimation on contentY {
@@ -674,7 +750,7 @@ Flickable {
                     width: parent.width
                     spacing: 5
 
-                    Slider {
+                    NavigableSlider {
                         id: slider
 
                         value: StreamingPreferences.bitrateKbps
