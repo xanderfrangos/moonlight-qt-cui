@@ -17,14 +17,36 @@ Flickable {
 
     boundsBehavior: Flickable.OvershootBounds
 
+    // Stack the two setting columns vertically when the page is too narrow
+    // to fit both side by side, such as with a large GUI scale
+    readonly property bool singleColumn: width < 1000
+
     contentWidth: settingsColumn1.width > settingsColumn2.width ? settingsColumn1.width : settingsColumn2.width
-    contentHeight: settingsColumn1.height > settingsColumn2.height ? settingsColumn1.height : settingsColumn2.height
+    contentHeight: singleColumn ?
+                       settingsColumn1.height + settingsColumn2.height :
+                       (settingsColumn1.height > settingsColumn2.height ? settingsColumn1.height : settingsColumn2.height)
 
     ScrollBar.vertical: ScrollBar {
         anchors {
             left: parent.right
             leftMargin: -10
         }
+    }
+
+    // Some GUI preferences are only applied when Moonlight starts. Offer to
+    // restart if the saved values no longer match what is currently in effect.
+    function promptRestartIfNeeded() {
+        if ((SystemProperties.supportsUiScale && StreamingPreferences.uiScale !== SystemProperties.activeUiScale) ||
+                StreamingPreferences.disableHover !== SystemProperties.hoverEffectsDisabled) {
+            restartDialog.open()
+        }
+    }
+
+    NavigableMessageDialog {
+        id: restartDialog
+        standardButtons: Dialog.Yes | Dialog.No
+        text: qsTr("Moonlight must be restarted for this change to take effect. Restart now?")
+        onAccepted: SystemProperties.restartApplication()
     }
 
     function isDescendantOf(item, ancestor) {
@@ -172,8 +194,10 @@ Flickable {
 
     Column {
         padding: 10
+        // Leave room for the scroll bar when this column spans the page
+        rightPadding: singleColumn ? 20 : 10
         id: settingsColumn1
-        width: settingsPage.width / 2
+        width: singleColumn ? settingsPage.width : settingsPage.width / 2
         spacing: 15
 
         GroupBox {
@@ -872,7 +896,7 @@ Flickable {
                     onVrrForcedChanged: reinitialize()
                     visible: SystemProperties.hasDesktopEnvironment
                     enabled: !SystemProperties.rendererAlwaysFullScreen && !vrrForced
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     textRole: "text"
                     onActivated: {
                         StreamingPreferences.windowMode = model.get(currentIndex).val
@@ -893,7 +917,7 @@ Flickable {
 
                     CheckBox {
                         id: vsyncCheck
-                        hoverEnabled: true
+                        hoverEnabled: !SystemProperties.hoverEffectsDisabled
                         text: qsTr("V-Sync")
                         font.pointSize:  12
                         checked: StreamingPreferences.enableVsync
@@ -909,7 +933,7 @@ Flickable {
 
                     CheckBox {
                         id: framePacingCheck
-                        hoverEnabled: true
+                        hoverEnabled: !SystemProperties.hoverEffectsDisabled
                         text: qsTr("Frame pacing")
                         font.pointSize:  12
                         enabled: StreamingPreferences.enableVsync
@@ -924,7 +948,7 @@ Flickable {
                     }
 
                     CheckBox {
-                        hoverEnabled: true
+                        hoverEnabled: !SystemProperties.hoverEffectsDisabled
                         text: qsTr("VRR")
                         font.pointSize: 12
                         enabled: StreamingPreferences.enableVsync
@@ -1009,7 +1033,7 @@ Flickable {
                 }
 
                 CheckBox {
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     text: qsTr("Reduce judder")
                     font.pointSize: 12
                     visible: StreamingPreferences.enableVrr
@@ -1426,6 +1450,69 @@ Flickable {
                     }
                 }
 
+                Label {
+                    width: parent.width
+                    id: uiScaleTitle
+                    text: qsTr("GUI scale")
+                    font.pointSize: 12
+                    wrapMode: Text.Wrap
+                    visible: SystemProperties.supportsUiScale
+                }
+
+                AutoResizingComboBox {
+                    id: uiScaleComboBox
+                    visible: SystemProperties.supportsUiScale
+                    textRole: "text"
+                    model: ListModel {
+                        id: uiScaleListModel
+                    }
+
+                    Component.onCompleted: {
+                        var scales = [100, 125, 150, 175, 200, 250, 300, 350, 400]
+                        currentIndex = 0
+                        for (var i = 0; i < scales.length; i++) {
+                            uiScaleListModel.append({ "text": qsTr("%1%").arg(scales[i]), "val": scales[i] })
+                            if (scales[i] === StreamingPreferences.uiScale) {
+                                currentIndex = i
+                            }
+                        }
+
+                        activated(currentIndex)
+                    }
+
+                    // ::onActivated must be used, as it only listens for when the index is changed by a human
+                    onActivated: {
+                        var scale = uiScaleListModel.get(currentIndex).val
+                        if (StreamingPreferences.uiScale !== scale) {
+                            StreamingPreferences.uiScale = scale
+                            promptRestartIfNeeded()
+                        }
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Increases the size of text and controls in Moonlight, such as when using a TV. Requires restarting Moonlight.")
+                }
+
+                CheckBox {
+                    id: disableHoverCheck
+                    width: parent.width
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
+                    text: qsTr("Disable mouse hover effects")
+                    font.pointSize: 12
+                    checked: StreamingPreferences.disableHover
+                    onToggled: {
+                        StreamingPreferences.disableHover = checked
+                        promptRestartIfNeeded()
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Prevents controls from highlighting under the mouse cursor. Useful when navigating with a gamepad or remote. Requires restarting Moonlight.")
+                }
+
                 CheckBox {
                     id: connectionWarningsCheck
                     width: parent.width
@@ -1487,9 +1574,10 @@ Flickable {
     Column {
         padding: 10
         rightPadding: 20
-        anchors.left: settingsColumn1.right
+        x: singleColumn ? 0 : settingsColumn1.width
+        y: singleColumn ? settingsColumn1.height : 0
         id: settingsColumn2
-        width: settingsPage.width / 2
+        width: singleColumn ? settingsPage.width : settingsPage.width / 2
         spacing: 15
 
         GroupBox {
@@ -1505,7 +1593,7 @@ Flickable {
 
                 CheckBox {
                     id: absoluteMouseCheck
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     width: parent.width
                     text: qsTr("Optimize mouse for remote desktop instead of games")
                     font.pointSize:  12
@@ -1528,7 +1616,7 @@ Flickable {
 
                     CheckBox {
                         id: captureSysKeysCheck
-                        hoverEnabled: true
+                        hoverEnabled: !SystemProperties.hoverEffectsDisabled
                         text: qsTr("Capture system keyboard shortcuts")
                         font.pointSize: 12
                         enabled: SystemProperties.hasDesktopEnvironment
@@ -1599,7 +1687,7 @@ Flickable {
 
                 CheckBox {
                     id: absoluteTouchCheck
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     width: parent.width
                     text: qsTr("Use touchscreen as a virtual trackpad")
                     font.pointSize:  12
@@ -1616,7 +1704,7 @@ Flickable {
 
                 CheckBox {
                     id: swapMouseButtonsCheck
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     width: parent.width
                     text: qsTr("Swap left and right mouse buttons")
                     font.pointSize:  12
@@ -1628,7 +1716,7 @@ Flickable {
 
                 CheckBox {
                     id: reverseScrollButtonsCheck
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     width: parent.width
                     text: qsTr("Reverse mouse scrolling direction")
                     font.pointSize: 12
@@ -1686,7 +1774,7 @@ Flickable {
 
                 CheckBox {
                     id: gamepadMouseCheck
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     width: parent.width
                     text: qsTr("Enable mouse control with gamepads by holding the 'Start' button")
                     font.pointSize: 12
