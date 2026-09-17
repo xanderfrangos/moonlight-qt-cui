@@ -31,14 +31,12 @@
         {
             "name": "libplacebo",
             "buildsystem": "meson",
-            "build-options": {
-                "config-opts": [
-                    "-Ddemos=false",
-                    "-Dvulkan=enabled",
-                    "-Dopengl=disabled",
-                    "-Dshaderc=enabled"
-                ]
-            },
+            "config-opts": [
+                "-Ddemos=false",
+                "-Dvulkan=enabled",
+                "-Dopengl=disabled",
+                "-Dshaderc=enabled"
+            ],
             "sources": [
                 {
                     "type": "git",
@@ -59,16 +57,14 @@
             "name": "SDL3",
             "buildsystem": "cmake-ninja",
             "builddir": true,
-            "build-options": {
-                "config-opts": [
-                    "-DSDL_ALSA=OFF",
-                    "-DSDL_RPATH=OFF",
-                    "-DSDL_KMSDRM=OFF",
-                    "-DSDL_INSTALL_DOCS=OFF",
-                    "-DSDL_TEST_LIBRARY=OFF",
-                    "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"
-                ]
-            },
+            "config-opts": [
+                "-DSDL_ALSA=OFF",
+                "-DSDL_RPATH=OFF",
+                "-DSDL_KMSDRM=OFF",
+                "-DSDL_INSTALL_DOCS=OFF",
+                "-DSDL_TEST_LIBRARY=OFF",
+                "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"
+            ],
             "sources": [
                 {
                     "type": "git",
@@ -81,11 +77,9 @@
             "name": "SDL2-compat",
             "buildsystem": "cmake-ninja",
             "builddir": true,
-            "build-options": {
-                "config-opts": [
-                    "-DSDL2COMPAT_TESTS=OFF"
-                ]
-            },
+            "config-opts": [
+                "-DSDL2COMPAT_TESTS=OFF"
+            ],
             "sources": [
                 {
                     "type": "git",
@@ -98,12 +92,10 @@
             "name": "SDL2_ttf",
             "buildsystem": "cmake-ninja",
             "builddir": true,
-            "build-options": {
-                "config-opts": [
-                    "-DSDL2TTF_VENDORED=ON",
-                    "-DSDL2TTF_SAMPLES=OFF"
-                ]
-            },
+            "config-opts": [
+                "-DSDL2TTF_VENDORED=ON",
+                "-DSDL2TTF_SAMPLES=OFF"
+            ],
             "sources": [
                 {
                     "type": "git",
@@ -129,35 +121,33 @@
         },
         {
             "name": "ffmpeg",
-            "build-options": {
-                "config-opts": [
-                    "--fatal-warnings",
-                    "--disable-stripping",
-                    "--enable-pic",
-                    "--enable-lto",
-                    "--enable-shared",
-                    "--disable-static",
-                    "--disable-all",
-                    "--enable-avcodec",
-                    "--enable-avformat",
-                    "--enable-swscale",
-                    "--enable-decoder=h264",
-                    "--enable-decoder=hevc",
-                    "--enable-decoder=av1",
-                    "--enable-hwaccel=h264_vaapi",
-                    "--enable-hwaccel=hevc_vaapi",
-                    "--enable-hwaccel=av1_vaapi",
-                    "--enable-hwaccel=h264_vdpau",
-                    "--enable-hwaccel=hevc_vdpau",
-                    "--enable-hwaccel=av1_vdpau",
-                    "--enable-libdrm",
-                    "--enable-hwaccel=h264_vulkan",
-                    "--enable-hwaccel=hevc_vulkan",
-                    "--enable-hwaccel=av1_vulkan",
-                    "--enable-libdav1d",
-                    "--enable-decoder=libdav1d"
-                ]
-            },
+            "config-opts": [
+                "--fatal-warnings",
+                "--disable-stripping",
+                "--enable-pic",
+                "--enable-lto",
+                "--enable-shared",
+                "--disable-static",
+                "--disable-all",
+                "--enable-avcodec",
+                "--enable-avformat",
+                "--enable-swscale",
+                "--enable-decoder=h264",
+                "--enable-decoder=hevc",
+                "--enable-decoder=av1",
+                "--enable-hwaccel=h264_vaapi",
+                "--enable-hwaccel=hevc_vaapi",
+                "--enable-hwaccel=av1_vaapi",
+                "--enable-hwaccel=h264_vdpau",
+                "--enable-hwaccel=hevc_vdpau",
+                "--enable-hwaccel=av1_vdpau",
+                "--enable-libdrm",
+                "--enable-hwaccel=h264_vulkan",
+                "--enable-hwaccel=hevc_vulkan",
+                "--enable-hwaccel=av1_vulkan",
+                "--enable-libdav1d",
+                "--enable-decoder=libdav1d"
+            ],
             "sources": [
                 {
                     "type": "git",
@@ -171,20 +161,10 @@
             "buildsystem": "qmake",
             "config-opts": [
                 "QMAKE_RPATHDIR=/app/lib",
-                "PREFIX=/app"
+                "PREFIX=/app",
+                "CONFIG+=disable-cuda",
+                "CONFIG+=disable-libdrm"
             ],
-            "build-options": {
-                "config-opts": [
-                    "CONFIG+=disable-cuda"
-                ],
-                "arch": {
-                    "x86_64": {
-                        "config-opts": [
-                            "CONFIG+=disable-libdrm"
-                        ]
-                    }
-                }
-            },
             "sources": [
                 {
                     "type": "git",
