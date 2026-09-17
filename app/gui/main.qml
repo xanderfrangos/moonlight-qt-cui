@@ -45,6 +45,13 @@ ApplicationWindow {
                 window.showFullScreen()
             }
             else {
+                // With a large GUI scale, our default size can exceed the screen.
+                // Leave some room for the window frame and title bar.
+                if (Screen.desktopAvailableWidth > 0 && Screen.desktopAvailableHeight > 0) {
+                    window.width = Math.min(window.width, Screen.desktopAvailableWidth * 0.9)
+                    window.height = Math.min(window.height, Screen.desktopAvailableHeight * 0.9)
+                }
+
                 window.show()
             }
         } else {

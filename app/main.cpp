@@ -452,6 +452,29 @@ int main(int argc, char *argv[])
         qputenv("QML_DISK_CACHE_PATH", Path::getQmlCacheDir().toUtf8());
     }
 
+    // Apply GUI preferences that Qt only reads at startup. User-provided
+    // environment variables take precedence. We record the variables we set
+    // so a restart triggered from the GUI doesn't pass them to the new process.
+    {
+        QStringList injectedEnvVars;
+
+        // Scaling is only applied where we enable High DPI support (not EGLFS)
+        int uiScale = StreamingPreferences::loadUiScale();
+        if (uiScale != 100 && WMUtils::isRunningWindowManager() && !qEnvironmentVariableIsSet("QT_SCALE_FACTOR")) {
+            qputenv("QT_SCALE_FACTOR", QByteArray::number(uiScale / 100.0));
+            injectedEnvVars.append("QT_SCALE_FACTOR");
+        }
+
+        if (StreamingPreferences::loadDisableHover() && !qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_HOVER_ENABLED")) {
+            qputenv("QT_QUICK_CONTROLS_HOVER_ENABLED", "0");
+            injectedEnvVars.append("QT_QUICK_CONTROLS_HOVER_ENABLED");
+        }
+
+        if (!injectedEnvVars.isEmpty()) {
+            qputenv("MOONLIGHT_INJECTED_ENV", injectedEnvVars.join(',').toUtf8());
+        }
+    }
+
 #ifdef Q_OS_WIN32
     // Grab the original std handles before we potentially redirect them later
     HANDLE oldConOut = GetStdHandle(STD_OUTPUT_HANDLE);
