@@ -47,6 +47,7 @@
 #define SER_UIDISPLAYMODE "uidisplaymode"
 #define SER_UISCALE "uiscale"
 #define SER_DISABLEHOVER "disablehover"
+#define SER_TVMODE "tvmode"
 #define SER_RICHPRESENCE "richpresence"
 #define SER_GAMEPADMOUSE "gamepadmouse"
 #define SER_DEFAULTVER "defaultver"
@@ -198,6 +199,7 @@ void StreamingPreferences::reload()
                                                                                                                  : UIDisplayMode::UI_MAXIMIZED)).toInt());
     uiScale = loadUiScale();
     disableHover = loadDisableHover();
+    tvMode = loadTvMode();
     language =static_cast<Language>(settings.value(SER_LANGUAGE,
                                                     static_cast<int>(Language::LANG_AUTO)).toInt());
 
@@ -370,6 +372,12 @@ bool StreamingPreferences::loadDisableHover()
     return settings.value(SER_DISABLEHOVER, false).toBool();
 }
 
+bool StreamingPreferences::loadTvMode()
+{
+    QSettings settings;
+    return settings.value(SER_TVMODE, false).toBool();
+}
+
 void StreamingPreferences::save()
 {
     QSettings settings;
@@ -414,6 +422,7 @@ void StreamingPreferences::save()
     settings.setValue(SER_UIDISPLAYMODE, static_cast<int>(uiDisplayMode));
     settings.setValue(SER_UISCALE, uiScale);
     settings.setValue(SER_DISABLEHOVER, disableHover);
+    settings.setValue(SER_TVMODE, tvMode);
     settings.setValue(SER_LANGUAGE, static_cast<int>(language));
     settings.setValue(SER_DEFAULTVER, CURRENT_DEFAULT_VER);
     settings.setValue(SER_SWAPMOUSEBUTTONS, swapMouseButtons);

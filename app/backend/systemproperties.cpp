@@ -48,6 +48,15 @@ private:
     SystemProperties* m_Properties;
 };
 
+static bool s_TvMode = false;
+static bool s_TvModeOverridden = false;
+
+void SystemProperties::setTvModeState(bool enabled, bool overridden)
+{
+    s_TvMode = enabled;
+    s_TvModeOverridden = overridden;
+}
+
 SystemProperties::SystemProperties()
 {
     versionString = QString(VERSION_STR);
@@ -71,6 +80,9 @@ SystemProperties::SystemProperties()
     bool hoverEnvValid;
     int hoverEnvValue = qEnvironmentVariableIntValue("QT_QUICK_CONTROLS_HOVER_ENABLED", &hoverEnvValid);
     hoverEffectsDisabled = hoverEnvValid && hoverEnvValue == 0;
+
+    tvMode = s_TvMode;
+    tvModeOverridden = s_TvModeOverridden;
 
 #ifdef Q_OS_DARWIN
     isDarwin = true;
