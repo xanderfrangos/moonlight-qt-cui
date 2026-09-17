@@ -11,6 +11,7 @@
 #include "audio/renderers/renderer.h"
 #include "video/overlaymanager.h"
 #include "diagnostics/diagnosticcapture.h"
+#include "video/overlaypainter.h"
 
 class SupportedVideoFormatList : public QList<int>
 {
@@ -179,6 +180,29 @@ private:
 
     void notifyMouseEmulationMode(bool enabled);
 
+    void refreshStatusOverlay();
+
+    enum GamepadMenuItem {
+        GamepadMenuDisconnect,
+        GamepadMenuEndSession,
+        GamepadMenuToggleStats,
+        GamepadMenuPressGuide,
+        GamepadMenuItemMax
+    };
+
+    bool isGamepadMenuOpen() const
+    {
+        return m_GamepadMenuOpen;
+    }
+
+    void openGamepadMenu(short gamepadIndex);
+
+    void closeGamepadMenu();
+
+    void moveGamepadMenuSelection(int delta);
+
+    void activateGamepadMenuSelection();
+
     void updateOptimalWindowDisplayMode();
 
     enum class DecoderAvailability {
@@ -291,6 +315,9 @@ private:
     bool m_UnexpectedTermination;
     SdlInputHandler* m_InputHandler;
     int m_MouseEmulationRefCount;
+    bool m_GamepadMenuOpen;
+    int m_GamepadMenuIndex;
+    short m_GamepadMenuGamepadIndex;
     int m_FlushingWindowEventsRef;
     QStringList m_LaunchWarnings;
     bool m_ShouldExit;

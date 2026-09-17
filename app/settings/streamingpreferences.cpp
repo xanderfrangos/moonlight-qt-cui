@@ -51,6 +51,8 @@
 #define SER_CONNWARNINGS "connwarnings"
 #define SER_CONFWARNINGS "confwarnings"
 #define SER_UIDISPLAYMODE "uidisplaymode"
+#define SER_UISCALE "uiscale"
+#define SER_TVMODE "tvmode"
 #define SER_RICHPRESENCE "richpresence"
 #define SER_GAMEPADMOUSE "gamepadmouse"
 #define SER_DEFAULTVER "defaultver"
@@ -202,7 +204,9 @@ void StreamingPreferences::reload()
     uiDisplayMode = static_cast<UIDisplayMode>(settings.value(SER_UIDISPLAYMODE,
                                                static_cast<int>(settings.value(SER_STARTWINDOWED, true).toBool() ? UIDisplayMode::UI_WINDOWED
                                                                                                                  : UIDisplayMode::UI_MAXIMIZED)).toInt());
-    language = static_cast<Language>(settings.value(SER_LANGUAGE,
+    uiScale = loadUiScale();
+    tvMode = loadTvMode();
+    language =static_cast<Language>(settings.value(SER_LANGUAGE,
                                                     static_cast<int>(Language::LANG_AUTO)).toInt());
 
 
@@ -352,6 +356,28 @@ QString StreamingPreferences::getSuffixFromLanguage(StreamingPreferences::Langua
     }
 }
 
+int StreamingPreferences::loadUiScale()
+{
+    QSettings settings;
+
+    // Only accept the scale factors offered in the UI
+    static const int k_ValidScales[] = { 100, 125, 150, 175, 200, 250, 300, 350, 400 };
+    int scale = settings.value(SER_UISCALE, 100).toInt();
+    for (int validScale : k_ValidScales) {
+        if (scale == validScale) {
+            return scale;
+        }
+    }
+
+    return 100;
+}
+
+bool StreamingPreferences::loadTvMode()
+{
+    QSettings settings;
+    return settings.value(SER_TVMODE, false).toBool();
+}
+
 void StreamingPreferences::save()
 {
     QSettings settings;
@@ -395,6 +421,8 @@ void StreamingPreferences::save()
     settings.setValue(SER_RENDERER, static_cast<int>(rendererSelection));
     settings.setValue(SER_WINDOWMODE, static_cast<int>(windowMode));
     settings.setValue(SER_UIDISPLAYMODE, static_cast<int>(uiDisplayMode));
+    settings.setValue(SER_UISCALE, uiScale);
+    settings.setValue(SER_TVMODE, tvMode);
     settings.setValue(SER_LANGUAGE, static_cast<int>(language));
     settings.setValue(SER_DEFAULTVER, CURRENT_DEFAULT_VER);
     settings.setValue(SER_SWAPMOUSEBUTTONS, swapMouseButtons);

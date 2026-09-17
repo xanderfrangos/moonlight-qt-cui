@@ -34,6 +34,14 @@ struct GamepadState {
     uint32_t lastAccelEventTime;
 #endif
 
+    // Last stick direction reported to the gamepad menu, for edge detection
+    int menuNavDir;
+
+    // Buttons that were held when the gamepad menu closed. They stay hidden
+    // from the host until they're physically released, so the presses that
+    // worked the menu don't leak into the game underneath it.
+    int suppressedButtons;
+
     int buttons;
     short lsX, lsY;
     short rsX, rsY;
@@ -104,6 +112,12 @@ public:
 
     int getAttachedGamepadMask();
 
+    void sendAllGamepadStates();
+
+    void notifyGamepadMenuClosed();
+
+    void sendGuideButtonPress(short gamepadIndex);
+
     void raiseAllKeys();
 
     void notifyMouseLeave();
@@ -167,6 +181,9 @@ private:
     Uint32 mouseEmulationTimerCallback(Uint32 interval, void* param);
 
     static
+    Uint32 releaseGuideButtonTimerCallback(Uint32 interval, void* param);
+
+    static
     Uint32 releaseLeftButtonTimerCallback(Uint32 interval, void* param);
 
     static
@@ -213,6 +230,9 @@ private:
     bool m_AbsoluteMouseMode;
     bool m_AbsoluteTouchMode;
     bool m_DisabledTouchFeedback;
+
+    SDL_TimerID m_GuideButtonTimer;
+    short m_GuideButtonGamepadIndex;
 
     SDL_TouchFingerEvent m_TouchDownEvent[MAX_FINGERS];
     SDL_TimerID m_LeftButtonReleaseTimer;

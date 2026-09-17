@@ -1458,9 +1458,29 @@ void DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL
 {
     SDL_assert(m_OverlayCompositionSurface);
 
+    SDL_Surface* scaledSurface = nullptr;
+
     if (newSurface && overlayRect) {
         // Disable blending of the source surface when blitting
         SDL_SetSurfaceBlendMode(newSurface, SDL_BLENDMODE_NONE);
+
+        // Scaling anchors (like the menu dimmer) upload a small surface that the
+        // display controller would normally stretch for us. We have to resample it
+        // ourselves here, because the incremental blit below works in source pixels.
+        if (overlayRect->w != newSurface->w || overlayRect->h != newSurface->h) {
+            scaledSurface = SDL_CreateRGBSurfaceWithFormat(0, overlayRect->w, overlayRect->h,
+                                                           32, newSurface->format->format);
+            if (scaledSurface == nullptr || SDL_BlitScaled(newSurface, nullptr, scaledSurface, nullptr) != 0) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "Unable to scale overlay for composition: %s",
+                            SDL_GetError());
+                SDL_FreeSurface(scaledSurface);
+                return;
+            }
+
+            SDL_SetSurfaceBlendMode(scaledSurface, SDL_BLENDMODE_NONE);
+            newSurface = scaledSurface;
+        }
 
         // Premultiply alpha in place, so we can blit directly into the composition surface
         // without having to read anything (which may be very costly due to UC/WC memory)
@@ -1519,6 +1539,8 @@ void DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL
 
         // Dirty the modified portion of the plane
         m_PropSetter.damagePlane(m_OverlayPlanes[0], overlayUnionRect);
+
+        SDL_FreeSurface(scaledSurface);
     }
     else {
         // Clear the pixels where this overlay was drawn before
@@ -1565,19 +1587,11 @@ void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         uint32_t dumbBuffer, fbId;
         SDL_Rect overlayRect;
 
-        if (type == Overlay::OverlayStatusUpdate) {
-            // Bottom Left
-            overlayRect.x = 0;
-            overlayRect.y = m_OutputRect.h - newSurface->h;
-        }
-        else if (type == Overlay::OverlayDebug) {
-            // Top left
-            overlayRect.x = 0;
-            overlayRect.y = 0;
-        }
-
-        overlayRect.w = newSurface->w;
-        overlayRect.h = newSurface->h;
+        Overlay::OverlayManager::getOverlayRect(Session::get()->getOverlayManager().getOverlayAnchor(type),
+                                                newSurface->w, newSurface->h,
+                                                m_OutputRect.w, m_OutputRect.h,
+                                                false, overlayRect.x, overlayRect.y,
+                                                overlayRect.w, overlayRect.h);
 
         // Try to let the display controller composite for us
         if (!m_OverlayCompositionSurface) {

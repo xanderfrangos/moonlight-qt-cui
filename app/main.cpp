@@ -56,6 +56,9 @@
 #include "streaming/session.h"
 #include "settings/streamingpreferences.h"
 #include "gui/sdlgamepadkeynavigation.h"
+#include "gui/inputmodetracker.h"
+#include "gui/blurredimageprovider.h"
+#include "gui/gradientimageprovider.h"
 #include "windowsvblankvirtualization.h"
 
 #if defined(Q_OS_WIN32)
@@ -434,6 +437,39 @@ void configureSignalHandlers()
 
 #endif
 
+// Sets an environment variable derived from our preferences and records that
+// we set it, so SystemProperties::restartApplication() doesn't pass it along.
+static void setInjectedEnvironmentVariable(const char* name, const QByteArray& value)
+{
+    qputenv(name, value);
+
+    QByteArray injectedEnvVars = qgetenv("MOONLIGHT_INJECTED_ENV");
+    if (!injectedEnvVars.isEmpty()) {
+        injectedEnvVars += ',';
+    }
+    injectedEnvVars += name;
+    qputenv("MOONLIGHT_INJECTED_ENV", injectedEnvVars);
+}
+
+// TV mode affects settings that must be applied before the QGuiApplication
+// (and therefore GlobalCommandLineParser) is created, so we look for its
+// options directly. Returns -1 if neither --tv-mode nor --no-tv-mode was
+// passed, otherwise 1 or 0 for the last one given.
+static int getTvModeArgument(int argc, char *argv[])
+{
+    int tvModeArgument = -1;
+    for (int i = 1; i < argc; i++) {
+        // Our command line parser also accepts long options with a single dash
+        if (strcmp(argv[i], "--tv-mode") == 0 || strcmp(argv[i], "-tv-mode") == 0) {
+            tvModeArgument = 1;
+        }
+        else if (strcmp(argv[i], "--no-tv-mode") == 0 || strcmp(argv[i], "-no-tv-mode") == 0) {
+            tvModeArgument = 0;
+        }
+    }
+    return tvModeArgument;
+}
+
 int main(int argc, char *argv[])
 {
     // Available headlessly from every package; includes the exact covered source.
@@ -476,6 +512,25 @@ int main(int argc, char *argv[])
     // Override the default QML cache directory with the one we chose
     if (qEnvironmentVariableIsEmpty("QML_DISK_CACHE_PATH")) {
         qputenv("QML_DISK_CACHE_PATH", Path::getQmlCacheDir().toUtf8());
+    }
+
+    // TV mode can be forced on or off for this launch from the command line
+    int tvModeArgument = getTvModeArgument(argc, argv);
+    bool tvMode = tvModeArgument >= 0 ? tvModeArgument == 1 : StreamingPreferences::loadTvMode();
+
+    // Apply GUI preferences that Qt only reads at startup. User-provided
+    // environment variables take precedence.
+    {
+        // Scaling is only applied where we enable High DPI support (not EGLFS)
+        int uiScale = StreamingPreferences::loadUiScale();
+        if (uiScale != 100 && WMUtils::isRunningWindowManager() && !qEnvironmentVariableIsSet("QT_SCALE_FACTOR")) {
+            setInjectedEnvironmentVariable("QT_SCALE_FACTOR", QByteArray::number(uiScale / 100.0));
+        }
+
+        // TV mode always disables hover effects
+        if (tvMode && !qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_HOVER_ENABLED")) {
+            setInjectedEnvironmentVariable("QT_QUICK_CONTROLS_HOVER_ENABLED", "0");
+        }
     }
 
 #ifdef Q_OS_WIN32
@@ -1005,11 +1060,20 @@ int main(int argc, char *argv[])
                                                       [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
                                                           return new SdlGamepadKeyNavigation(StreamingPreferences::get(qmlEngine));
                                                       });
+    qmlRegisterSingletonType<InputModeTracker>("InputModeTracker", 1, 0,
+                                               "InputModeTracker",
+                                               [](QQmlEngine*, QJSEngine*) -> QObject* {
+                                                   InputModeTracker* tracker = InputModeTracker::get();
+                                                   // The tracker is a process-wide singleton, so QML must not delete it
+                                                   QQmlEngine::setObjectOwnership(tracker, QQmlEngine::CppOwnership);
+                                                   return tracker;
+                                               });
     qmlRegisterSingletonType<StreamingPreferences>("StreamingPreferences", 1, 0,
                                                    "StreamingPreferences",
                                                    [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
                                                        return StreamingPreferences::get(qmlEngine);
                                                    });
+    qmlRegisterSingletonType(QUrl("qrc:/gui/TvTheme.qml"), "TvTheme", 1, 0, "TvTheme");
 
     // Create the identity manager on the main thread
     IdentityManager::get();
@@ -1025,8 +1089,13 @@ int main(int argc, char *argv[])
         qputenv("QT_QUICK_CONTROLS_MATERIAL_ACCENT", "Purple");
     }
     if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_VARIANT")) {
-        qputenv("QT_QUICK_CONTROLS_MATERIAL_VARIANT", "Dense");
+        // TV mode uses the larger Normal variant for bigger focus targets. This
+        // is recorded as injected so a restart can switch variants.
+        setInjectedEnvironmentVariable("QT_QUICK_CONTROLS_MATERIAL_VARIANT", tvMode ? "Normal" : "Dense");
     }
+
+    qInfo() << "TV mode:" << tvMode << (tvModeArgument >= 0 ? "(from command line)" : "");
+    SystemProperties::setTvModeState(tvMode, tvModeArgument >= 0);
     if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_PRIMARY")) {
         // Qt 6.9 began to use a different shade of Material.Indigo when we use a dark theme
         // (which is all the time). The new color looks washed out, so manually specify the
@@ -1035,6 +1104,8 @@ int main(int argc, char *argv[])
     }
 
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("blurred"), new BlurredImageProvider());
+    engine.addImageProvider(QStringLiteral("tvgradient"), new GradientImageProvider());
     QString initialView;
     bool hasGUI = true;
 

@@ -14,8 +14,20 @@ namespace Overlay {
 
 enum OverlayType {
     OverlayDebug,
+    // Dims everything behind it, so it must be drawn after the overlays it
+    // covers and before the menu it sits behind.
+    OverlayMenuBackground,
     OverlayStatusUpdate,
     OverlayMax
+};
+
+enum OverlayAnchor {
+    OverlayAnchorTopLeft,
+    OverlayAnchorBottomLeft,
+    OverlayAnchorCenter,
+    // Stretches the overlay over the whole viewport, so a solid fill can be
+    // uploaded as a tiny texture instead of a screen-sized one.
+    OverlayAnchorFill,
 };
 
 class IOverlayRenderer
@@ -63,11 +75,36 @@ public:
     int getOverlayFontSize(OverlayType type);
     SDL_Surface* getUpdatedOverlaySurface(OverlayType type);
 
+    // Publishes a pre-rendered overlay in place of the built-in text rasterizer.
+    // Ownership of the surface transfers to the overlay manager, which retains it
+    // so the overlay survives renderer recreation. Passing nullptr returns the
+    // overlay to text rendering. Surfaces must be ARGB8888.
+    void setOverlaySurface(OverlayType type, SDL_Surface* surface);
+
+    // Restyles an overlay. This takes effect on the next updateOverlayText()
+    // or setOverlayState() call for that overlay. A background with zero alpha
+    // draws the text directly over the video with no box behind it.
+    void setOverlayStyle(OverlayType type, OverlayAnchor anchor, SDL_Color color, SDL_Color background);
+
+    // Safe to call from render threads without blocking overlay producers
+    OverlayAnchor getOverlayAnchor(OverlayType type);
+
+    // Places an overlay of the given size within a viewport and returns the size
+    // it should be drawn at, which differs from the surface size for anchors that
+    // scale. Renderers whose coordinate space puts the origin in the lower-left
+    // corner (OpenGL, D3D11 NDC) pass originAtBottom.
+    static void getOverlayRect(OverlayAnchor anchor,
+                               int overlayWidth, int overlayHeight,
+                               int viewportWidth, int viewportHeight,
+                               bool originAtBottom,
+                               int& x, int& y, int& w, int& h);
+
     void setOverlayRenderer(IOverlayRenderer* renderer);
 
 private:
     void run();
     SDL_Surface* RenderTextOutlinedWrapped(TTF_Font* font, const char* text, SDL_Color textColor, SDL_Color outlineColor, int outlineWidth, int wrapWidth);
+    static SDL_Surface* AddBackground(SDL_Surface* textSurface, SDL_Color background, int padding);
 
     struct {
         bool enabled = false;
@@ -76,7 +113,15 @@ private:
         std::chrono::steady_clock::time_point queued;
         int fontSize = 0;
         SDL_Color color = {};
+        SDL_Color background = {};
         char text[1024] = {};
+
+        // Read by renderers without m_StateLock held
+        SDL_atomic_t anchor = {};
+
+        // Pre-rendered overlay from setOverlaySurface(), retained so it can be
+        // republished when the renderer changes. Guarded by m_StateLock.
+        SDL_Surface* paintedSurface = nullptr;
 
         TTF_Font* font = nullptr; // Owned exclusively by the overlay worker.
         SDL_Surface* surface = nullptr; // Atomic ownership transfer to renderer.

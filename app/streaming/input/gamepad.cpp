@@ -20,6 +20,14 @@
 // Determines the maximum motion amount before allowing movement
 #define MOUSE_EMULATION_DEADZONE 2
 
+// How far a stick must be pushed to move the selection in the gamepad menu
+#define GAMEPAD_MENU_STICK_DEADZONE 16384
+
+// How long the Guide button is held when the gamepad menu sends it. A momentary
+// press tends to be swallowed somewhere between the host's virtual pad and
+// whatever is listening for it.
+#define GUIDE_BUTTON_HOLD_DURATION 100
+
 // Haptic capabilities (in addition to those from SDL_HapticQuery())
 #define ML_HAPTIC_GC_RUMBLE         (1U << 16)
 #define ML_HAPTIC_SIMPLE_RUMBLE     (1U << 17)
@@ -57,10 +65,13 @@ void SdlInputHandler::sendGamepadState(GamepadState* state)
 {
     SDL_assert(m_GamepadMask == 0x1 || m_MultiController);
 
+    // Buttons left over from working the gamepad menu are hidden from the host
+    // until they're released, so they never reach the game underneath it.
+    int buttons = state->buttons & ~state->suppressedButtons;
+
     // Handle Select+PS as the clickpad button on PS4/5 controllers without a clickpad mapping
-    int buttons = state->buttons;
     if (state->clickpadButtonEmulationEnabled) {
-        if (state->buttons == (BACK_FLAG | SPECIAL_FLAG)) {
+        if (buttons == (BACK_FLAG | SPECIAL_FLAG)) {
             buttons = MISC_FLAG;
             state->emulatedClickpadButtonDown = true;
         }
@@ -81,7 +92,7 @@ void SdlInputHandler::sendGamepadState(GamepadState* state)
     if (!m_MultiController) {
         for (int i = 0; i < MAX_GAMEPADS; i++) {
             if (m_GamepadState[i].index == state->index) {
-                buttons |= m_GamepadState[i].buttons;
+                buttons |= m_GamepadState[i].buttons & ~m_GamepadState[i].suppressedButtons;
                 if (lt < m_GamepadState[i].lt) {
                     lt = m_GamepadState[i].lt;
                 }
@@ -248,10 +259,89 @@ void SdlInputHandler::handleControllerAxisEvent(SDL_ControllerAxisEvent* event)
         SDL_PeepEvents(&nextEvent, 1, SDL_GETEVENT, SDL_CONTROLLERAXISMOTION, SDL_CONTROLLERAXISMOTION);
     }
 
+    // While the gamepad menu is up, the left stick drives the menu rather than the host
+    if (Session::get()->isGamepadMenuOpen()) {
+        int navDir;
+        if (state->lsY > GAMEPAD_MENU_STICK_DEADZONE) {
+            navDir = -1;
+        }
+        else if (state->lsY < -GAMEPAD_MENU_STICK_DEADZONE) {
+            navDir = 1;
+        }
+        else {
+            navDir = 0;
+        }
+
+        // Only move on the transition into a direction, so holding the stick
+        // doesn't run away with the selection
+        if (navDir != state->menuNavDir) {
+            state->menuNavDir = navDir;
+            if (navDir != 0) {
+                Session::get()->moveGamepadMenuSelection(navDir);
+            }
+        }
+        return;
+    }
+
     // Only send the gamepad state to the host if it's not in mouse emulation mode
     if (state->mouseEmulationTimer == 0) {
         sendGamepadState(state);
     }
+}
+
+void SdlInputHandler::sendAllGamepadStates()
+{
+    for (int i = 0; i < MAX_GAMEPADS; i++) {
+        GamepadState* state = &m_GamepadState[i];
+        if (state->controller != nullptr && state->mouseEmulationTimer == 0) {
+            sendGamepadState(state);
+        }
+    }
+}
+
+void SdlInputHandler::notifyGamepadMenuClosed()
+{
+    // Whatever is held right now was pressed at the menu, not at the game, so
+    // hide it from the host until the user physically lets go of it.
+    for (int i = 0; i < MAX_GAMEPADS; i++) {
+        GamepadState* state = &m_GamepadState[i];
+        if (state->controller != nullptr) {
+            state->suppressedButtons |= state->buttons;
+        }
+    }
+
+    // Gamepad input was swallowed while the menu was up, so resynchronize the
+    // host with whatever is left held down after the suppression above.
+    sendAllGamepadStates();
+}
+
+Uint32 SdlInputHandler::releaseGuideButtonTimerCallback(Uint32, void* param)
+{
+    auto me = reinterpret_cast<SdlInputHandler*>(param);
+
+    // Release the Guide button, then hand the host back whatever is actually
+    // held down now that our synthetic press is over.
+    LiSendMultiControllerEvent(me->m_GuideButtonGamepadIndex, me->m_GamepadMask,
+                               0, 0, 0, 0, 0, 0, 0);
+    me->sendAllGamepadStates();
+
+    return 0;
+}
+
+void SdlInputHandler::sendGuideButtonPress(short gamepadIndex)
+{
+    m_GuideButtonGamepadIndex = gamepadIndex;
+
+    // Send the Guide button by itself. Anything the user is still holding from
+    // working the menu is masked out, so the host sees a clean press rather than
+    // a chord that means something else to Steam or the Game Bar.
+    LiSendMultiControllerEvent(gamepadIndex, m_GamepadMask,
+                               SPECIAL_FLAG, 0, 0, 0, 0, 0, 0);
+
+    SDL_RemoveTimer(m_GuideButtonTimer);
+    m_GuideButtonTimer = SDL_AddTimer(GUIDE_BUTTON_HOLD_DURATION,
+                                      releaseGuideButtonTimerCallback,
+                                      this);
 }
 
 void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* event)
@@ -283,6 +373,35 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
             event->button = SDL_CONTROLLER_BUTTON_X;
             break;
         }
+    }
+
+    // While the gamepad menu is up, buttons drive the menu rather than the host.
+    // We still track them so the host gets an accurate state when the menu closes.
+    if (Session::get()->isGamepadMenuOpen()) {
+        if (event->state == SDL_PRESSED) {
+            state->buttons |= k_ButtonMap[event->button];
+
+            switch (event->button) {
+            case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                Session::get()->moveGamepadMenuSelection(-1);
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+                Session::get()->moveGamepadMenuSelection(1);
+                break;
+            case SDL_CONTROLLER_BUTTON_A:
+                Session::get()->activateGamepadMenuSelection();
+                break;
+            case SDL_CONTROLLER_BUTTON_B:
+                Session::get()->closeGamepadMenu();
+                break;
+            }
+        }
+        else {
+            state->buttons &= ~k_ButtonMap[event->button];
+            state->suppressedButtons &= ~k_ButtonMap[event->button];
+        }
+
+        return;
     }
 
     if (event->state == SDL_PRESSED) {
@@ -323,6 +442,9 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
     }
     else {
         state->buttons &= ~k_ButtonMap[event->button];
+
+        // Letting go of a button ends any suppression carried over from the menu
+        state->suppressedButtons &= ~k_ButtonMap[event->button];
 
         if (event->button == SDL_CONTROLLER_BUTTON_START) {
             if (SDL_GetTicks() - state->lastStartDownTime > MOUSE_EMULATION_LONG_PRESS_TIME) {
@@ -365,18 +487,17 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         }
     }
 
-    // Handle Start+Select+L1+R1 as a gamepad quit combo
+    // Handle Start+Select+L1+R1 as a gamepad menu combo
     if (state->buttons == (PLAY_FLAG | BACK_FLAG | LB_FLAG | RB_FLAG) && qgetenv("NO_GAMEPAD_QUIT") != "1") {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Detected quit gamepad button combo");
+                    "Detected menu gamepad button combo");
 
-        // Push a quit event to the main loop
-        SDL_Event event;
-        event.type = SDL_QUIT;
-        event.quit.timestamp = SDL_GetTicks();
-        SDL_PushEvent(&event);
+        // Bring up the menu rather than disconnecting outright
+        Session::get()->openGamepadMenu(state->index);
 
-        // Clear buttons down on this gamepad
+        // Clear buttons down on this gamepad and keep the combo itself hidden
+        // from the host until the user lets go of it
+        state->suppressedButtons |= state->buttons;
         LiSendMultiControllerEvent(state->index, m_GamepadMask,
                                    0, 0, 0, 0, 0, 0, 0);
         return;
@@ -391,7 +512,9 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         Session::get()->getOverlayManager().setOverlayState(Overlay::OverlayDebug,
                                                             !Session::get()->getOverlayManager().isOverlayEnabled(Overlay::OverlayDebug));
 
-        // Clear buttons down on this gamepad
+        // Clear buttons down on this gamepad and keep the combo itself hidden
+        // from the host until the user lets go of it
+        state->suppressedButtons |= state->buttons;
         LiSendMultiControllerEvent(state->index, m_GamepadMask,
                                    0, 0, 0, 0, 0, 0, 0);
         return;

@@ -384,36 +384,16 @@ void VDPAURenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         return;
     }
 
-    // Destroy the old surface
-    // NB: The mutex ensures the surface is not currently being read for rendering.
-    // NB 2: It is safe to unlock here because this thread is the only surface producer.
-    SDL_LockMutex(m_OverlayMutex);
-    VdpBitmapSurface oldBitmapSurface = m_OverlaySurface[type];
-    m_OverlaySurface[type] = 0;
-    SDL_UnlockMutex(m_OverlayMutex);
+    VdpBitmapSurface newBitmapSurface = 0;
+    VdpRect overlayRect = {};
 
-    if (oldBitmapSurface != 0) {
-        status = m_VdpBitmapSurfaceDestroy(oldBitmapSurface);
-        if (status != VDP_STATUS_OK) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "VdpBitmapSurfaceDestroy() failed: %s",
-                         m_VdpGetErrorString(status));
-
-            // This should never happen.
-            SDL_assert(false);
-        }
-    }
-
-    if (!overlayEnabled) {
-        SDL_FreeSurface(newSurface);
-        return;
-    }
-
-    if (newSurface != nullptr) {
+    // Build the replacement before touching the live surface. That way the render
+    // thread never finds this overlay missing between two frames, and a failure
+    // below leaves the previous overlay up rather than blanking it.
+    if (overlayEnabled && newSurface != nullptr) {
         SDL_assert(!SDL_MUSTLOCK(newSurface));
         SDL_assert(newSurface->format->format == SDL_PIXELFORMAT_ARGB8888);
 
-        VdpBitmapSurface newBitmapSurface = 0;
         status = m_VdpBitmapSurfaceCreate(m_Device,
                                           VDP_RGBA_FORMAT_B8G8R8A8,
                                           newSurface->w,
@@ -441,29 +421,42 @@ void VDPAURenderer::notifyOverlayUpdated(Overlay::OverlayType type)
             return;
         }
 
-        VdpRect overlayRect;
+        int x, y, w, h;
 
-        if (type == Overlay::OverlayStatusUpdate) {
-            // Bottom Left
-            overlayRect.x0 = 0;
-            overlayRect.y0 = m_DisplayHeight - newSurface->h;
+        Overlay::OverlayManager::getOverlayRect(Session::get()->getOverlayManager().getOverlayAnchor(type),
+                                                newSurface->w, newSurface->h,
+                                                m_DisplayWidth, m_DisplayHeight,
+                                                false, x, y, w, h);
+
+        overlayRect.x0 = x;
+        overlayRect.y0 = y;
+        overlayRect.x1 = overlayRect.x0 + w;
+        overlayRect.y1 = overlayRect.y0 + h;
+    }
+
+    // Surface data is no longer needed
+    SDL_FreeSurface(newSurface);
+
+    // Swap in the new bitmap surface, or none if the overlay is now disabled.
+    // NB: The mutex ensures the old surface is not currently being read for rendering.
+    SDL_LockMutex(m_OverlayMutex);
+    VdpBitmapSurface oldBitmapSurface = m_OverlaySurface[type];
+    m_OverlaySurface[type] = newBitmapSurface;
+    m_OverlayRect[type] = overlayRect;
+    SDL_UnlockMutex(m_OverlayMutex);
+
+    // NB: It is safe to destroy outside the mutex because this thread is the only
+    // surface producer, so nothing can hand the old surface back to the renderer.
+    if (oldBitmapSurface != 0) {
+        status = m_VdpBitmapSurfaceDestroy(oldBitmapSurface);
+        if (status != VDP_STATUS_OK) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "VdpBitmapSurfaceDestroy() failed: %s",
+                         m_VdpGetErrorString(status));
+
+            // This should never happen.
+            SDL_assert(false);
         }
-        else if (type == Overlay::OverlayDebug) {
-            // Top left
-            overlayRect.x0 = 0;
-            overlayRect.y0 = 0;
-        }
-
-        overlayRect.x1 = overlayRect.x0 + newSurface->w;
-        overlayRect.y1 = overlayRect.y0 + newSurface->h;
-
-        // Surface data is no longer needed
-        SDL_FreeSurface(newSurface);
-
-        SDL_LockMutex(m_OverlayMutex);
-        m_OverlaySurface[type] = newBitmapSurface;
-        m_OverlayRect[type] = overlayRect;
-        SDL_UnlockMutex(m_OverlayMutex);
     }
 }
 
@@ -491,10 +484,9 @@ void VDPAURenderer::renderOverlay(VdpOutputSurface destination, Overlay::Overlay
         return;
     }
 
-    if (SDL_TryLockMutex(m_OverlayMutex) != 0) {
-        // If the overlay is currently being updated, skip rendering it this frame.
-        return;
-    }
+    // The update thread only holds this mutex to swap handles, so waiting is
+    // cheaper than skipping a frame.
+    SDL_LockMutex(m_OverlayMutex);
 
     // Check if there's a surface to render
     if (m_OverlaySurface[type] == 0) {

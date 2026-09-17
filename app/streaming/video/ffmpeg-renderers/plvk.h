@@ -10,7 +10,6 @@
 #include <libplacebo/log.h>
 #include <libplacebo/renderer.h>
 #include <libplacebo/vulkan.h>
-#include "overlaycompletion.h"
 
 #include <atomic>
 
@@ -87,7 +86,7 @@ public:
 private:
     static void lockQueue(AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index);
     static void unlockQueue(AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index);
-    static void overlayUploadComplete(void* opaque);
+    void uploadPendingOverlays();
 
     void beginRenderTiming();
     void endRenderTiming();
@@ -102,6 +101,7 @@ private:
     void queueRenderDeviceReset();
 
     bool createSwapchain(int depth);
+    // Both must run on the render thread. pl_gpu is not thread-safe.
     bool createOverlay(pl_overlay* overlay, SDL_Surface* surface);
     bool mapAvFrameToPlacebo(const AVFrame *frame, pl_frame* mappedFrame);
     void unmapAvFrameFromPlacebo(const AVFrame *frame, pl_frame* mappedFrame);
@@ -186,29 +186,25 @@ private:
 #endif
 #endif
 
-    std::unique_ptr<OverlayCompletion> m_OverlayCompletion;
-
     // Overlay state
+    //
+    // libplacebo's pl_gpu is explicitly not thread-safe, and notifyOverlayUpdated()
+    // runs on the overlay worker thread while the render thread is submitting
+    // frames. Uploading overlay textures there raced the renderer's command pool
+    // and tripped libplacebo's vk_cmd_submit() timeline assertion. So the update
+    // thread now only hands over pixels, exactly as EGLRenderer does, and every
+    // pl_gpu call for overlays happens on the render thread in
+    // uploadPendingOverlays().
     SDL_SpinLock m_OverlayLock = 0;
     struct {
-        // The staging overlay state is copied here under the overlay lock in the render thread.
-        //
-        // These values can be safely read by the render thread outside of the overlay lock,
-        // but the copy from stagingOverlay to overlay must only happen under the overlay
-        // lock when hasStagingOverlay is true.
+        // Owned exclusively by the render thread. No lock required.
         bool hasOverlay;
         pl_overlay overlay;
 
-        // This state is written by the overlay update thread
-        //
-        // NB: hasStagingOverlay may be false even if there is a staging overlay texture present,
-        // because this is how the overlay update path indicates that the overlay is not currently
-        // safe for the render thread to read.
-        //
-        // It is safe for the overlay update thread to write to stagingOverlay outside of the lock,
-        // as long as hasStagingOverlay is false.
-        bool hasStagingOverlay;
-        pl_overlay stagingOverlay;
+        // Handoff from the overlay update thread, guarded by m_OverlayLock.
+        // A pending update with a null surface means "drop this overlay".
+        bool hasPendingUpdate;
+        SDL_Surface* pendingSurface;
     } m_Overlays[Overlay::OverlayMax] = {};
 
     // Device context used for hwaccel decoders

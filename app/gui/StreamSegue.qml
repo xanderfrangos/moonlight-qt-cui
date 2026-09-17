@@ -5,6 +5,7 @@ import QtQuick.Window 2.2
 import SdlGamepadKeyNavigation 1.0
 import Session 1.0
 import SystemProperties 1.0
+import TvTheme 1.0
 
 Item {
     property Session session
@@ -12,6 +13,10 @@ Item {
     property string stageText : isResume ? qsTr("Resuming %1...").arg(appName) :
                                            qsTr("Starting %1...").arg(appName)
     property bool isResume : false
+
+    // The game's box art, shown blurred behind the page in TV mode
+    property url boxArt
+    readonly property url tvBackdropSource: boxArt
     property bool quitAfter : false
 
     function stageStarting(stage)
@@ -53,7 +58,7 @@ Item {
     {
         // Avoid the push transition animation
         var component = Qt.createComponent("QuitSegue.qml")
-        stackView.replace(stackView.currentItem, component.createObject(stackView, {"appName": appName}), StackView.Immediate)
+        stackView.replace(stackView.currentItem, component.createObject(stackView, {"appName": appName, "boxArt": boxArt}), StackView.Immediate)
 
         // Show the Qt window again to show quit segue
         window.visible = true
@@ -211,6 +216,7 @@ Item {
     Row {
         anchors.centerIn: parent
         spacing: 5
+        opacity: SystemProperties.tvMode ? 0.0 : 1.0
 
         BusyIndicator {
             id: stageSpinner
@@ -226,6 +232,50 @@ Item {
             verticalAlignment: Text.AlignVCenter
 
             wrapMode: Text.Wrap
+        }
+    }
+
+
+    // TV mode: the game's name and progress over its blurred box art. The
+    // row above stays in place (but transparent) so the existing visibility
+    // logic keeps driving what is shown.
+    Column {
+        visible: SystemProperties.tvMode
+        anchors.centerIn: parent
+        width: Math.min(parent.width - 80, 1000)
+        spacing: TvTheme.spacingMedium
+
+        Label {
+            width: parent.width
+            visible: stageLabel.visible
+            text: appName
+            font.pointSize: 36
+            font.bold: true
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
+        }
+
+        Label {
+            width: parent.width
+            visible: stageLabel.visible
+            text: stageText
+            font.pointSize: 18
+            color: TvTheme.textSecondary
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.Wrap
+        }
+
+        Item {
+            width: parent.width
+            height: TvTheme.spacingMedium
+        }
+
+        ProgressBar {
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: Math.min(parent.width, 480)
+            indeterminate: true
+            // Opacity rather than visibility, so the text doesn't move
+            opacity: stageSpinner.visible ? 1.0 : 0.0
         }
     }
 

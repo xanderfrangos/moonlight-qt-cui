@@ -189,8 +189,8 @@ void Session::clConnectionStatusUpdate(int connectionStatus)
         return;
     }
 
-    if (s_ActiveSession->m_MouseEmulationRefCount > 0) {
-        // Don't display the overlay if mouse emulation is already using it
+    if (s_ActiveSession->m_MouseEmulationRefCount > 0 || s_ActiveSession->m_GamepadMenuOpen) {
+        // Don't display the overlay if mouse emulation or the gamepad menu is already using it
         return;
     }
 
@@ -631,6 +631,9 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_UnexpectedTermination(true), // Failure prior to streaming is unexpected
       m_InputHandler(nullptr),
       m_MouseEmulationRefCount(0),
+      m_GamepadMenuOpen(false),
+      m_GamepadMenuIndex(0),
+      m_GamepadMenuGamepadIndex(0),
       m_FlushingWindowEventsRef(0),
       m_ShouldExit(false),
       m_AsyncConnectionSuccess(false),
@@ -1706,14 +1709,180 @@ void Session::notifyMouseEmulationMode(bool enabled)
     m_MouseEmulationRefCount += enabled ? 1 : -1;
     SDL_assert(m_MouseEmulationRefCount >= 0);
 
-    // We re-use the status update overlay for mouse mode notification
+    refreshStatusOverlay();
+}
+
+static const char* k_GamepadMenuItems[] = {
+    "Disconnect",
+    "End Session",
+    "Toggle Stream Statistics",
+    "Press Guide Button",
+};
+
+// Prompts for the buttons that gamepad.cpp handles while the menu is up
+static const char* k_GamepadMenuHint = "A   Select          B   Back";
+
+static const SDL_Color k_StatusColor = {0xCC, 0x00, 0x00, 0xFF};
+static const SDL_Color k_MenuColor = {0xFF, 0xFF, 0xFF, 0xFF};
+static const SDL_Color k_NoBackground = {0x00, 0x00, 0x00, 0x00};
+
+// Darkens the stream behind the menu so the menu is the only thing in focus
+static const QColor k_MenuDimColor(0x00, 0x00, 0x00, 0xA8);
+
+// Returns the size of the stream window in the same pixel units the renderers
+// use for their viewports, which is what the menu scales itself against.
+static void getWindowPixelSize(SDL_Window* window, int& width, int& height)
+{
+    width = 0;
+    height = 0;
+
+    if (window != nullptr) {
+#if SDL_VERSION_ATLEAST(2, 26, 0)
+        SDL_GetWindowSizeInPixels(window, &width, &height);
+#else
+        SDL_GetWindowSize(window, &width, &height);
+#endif
+    }
+
+    if (width <= 0 || height <= 0) {
+        width = 1920;
+        height = 1080;
+    }
+}
+
+void Session::refreshStatusOverlay()
+{
+    static_assert(SDL_arraysize(k_GamepadMenuItems) == GamepadMenuItemMax,
+                  "Gamepad menu item labels must match GamepadMenuItem");
+
+    // The status update overlay is shared between the gamepad menu, gamepad mouse
+    // mode, and connection warnings. The menu takes priority while it's up.
+    if (m_GamepadMenuOpen) {
+        QStringList items;
+        for (int i = 0; i < GamepadMenuItemMax; i++) {
+            items.append(QString::fromUtf8(k_GamepadMenuItems[i]));
+        }
+
+        int windowWidth, windowHeight;
+        getWindowPixelSize(m_Window, windowWidth, windowHeight);
+
+        // The card brings its own colors, so only the anchor matters here
+        m_OverlayManager.setOverlayStyle(Overlay::OverlayStatusUpdate, Overlay::OverlayAnchorCenter,
+                                         k_MenuColor, k_NoBackground);
+        m_OverlayManager.setOverlaySurface(Overlay::OverlayStatusUpdate,
+                                           Overlay::Painter::paintGamepadMenu(QStringLiteral("Moonlight"),
+                                                                              items,
+                                                                              m_GamepadMenuIndex,
+                                                                              QString::fromUtf8(k_GamepadMenuHint),
+                                                                              windowHeight));
+        m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
+
+        // The dimmer is stretched to fill the viewport, so it only has to be
+        // published when the menu opens. Republishing it as the selection moves
+        // would make every renderer rebuild the texture for no visible change.
+        if (!m_OverlayManager.isOverlayEnabled(Overlay::OverlayMenuBackground)) {
+            m_OverlayManager.setOverlaySurface(Overlay::OverlayMenuBackground,
+                                               Overlay::Painter::paintFill(k_MenuDimColor));
+            m_OverlayManager.setOverlayState(Overlay::OverlayMenuBackground, true);
+        }
+
+        return;
+    }
+
+    m_OverlayManager.setOverlayState(Overlay::OverlayMenuBackground, false);
+    m_OverlayManager.setOverlaySurface(Overlay::OverlayMenuBackground, nullptr);
+    m_OverlayManager.setOverlaySurface(Overlay::OverlayStatusUpdate, nullptr);
+
     if (m_MouseEmulationRefCount > 0) {
+        m_OverlayManager.setOverlayStyle(Overlay::OverlayStatusUpdate, Overlay::OverlayAnchorBottomLeft,
+                                         k_StatusColor, k_NoBackground);
         m_OverlayManager.updateOverlayText(Overlay::OverlayStatusUpdate, "Gamepad mouse mode active\nLong press Start to deactivate");
         m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
     }
     else {
+        m_OverlayManager.setOverlayStyle(Overlay::OverlayStatusUpdate, Overlay::OverlayAnchorBottomLeft,
+                                         k_StatusColor, k_NoBackground);
         m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, false);
     }
+}
+
+void Session::openGamepadMenu(short gamepadIndex)
+{
+    if (m_GamepadMenuOpen) {
+        return;
+    }
+
+    // Actions that talk back to the host go to the gamepad that opened the menu
+    m_GamepadMenuGamepadIndex = gamepadIndex;
+    m_GamepadMenuOpen = true;
+    m_GamepadMenuIndex = 0;
+    refreshStatusOverlay();
+}
+
+void Session::closeGamepadMenu()
+{
+    if (!m_GamepadMenuOpen) {
+        return;
+    }
+
+    m_GamepadMenuOpen = false;
+    refreshStatusOverlay();
+
+    // Hide the buttons that worked the menu from the host and resynchronize it
+    // with whatever else is actually held down now.
+    if (m_InputHandler != nullptr) {
+        m_InputHandler->notifyGamepadMenuClosed();
+    }
+}
+
+void Session::moveGamepadMenuSelection(int delta)
+{
+    SDL_assert(m_GamepadMenuOpen);
+
+    m_GamepadMenuIndex = (m_GamepadMenuIndex + delta + GamepadMenuItemMax) % GamepadMenuItemMax;
+    refreshStatusOverlay();
+}
+
+void Session::activateGamepadMenuSelection()
+{
+    SDL_assert(m_GamepadMenuOpen);
+
+    int selection = m_GamepadMenuIndex;
+    closeGamepadMenu();
+
+    switch (selection) {
+    case GamepadMenuPressGuide:
+        // closeGamepadMenu() has already resynced the host, with the A button
+        // that got us here suppressed. The Guide press is sent on its own so
+        // the host doesn't read it as a chord.
+        if (m_InputHandler != nullptr) {
+            m_InputHandler->sendGuideButtonPress(m_GamepadMenuGamepadIndex);
+        }
+        return;
+
+    case GamepadMenuToggleStats:
+        m_OverlayManager.setOverlayState(Overlay::OverlayDebug,
+                                         !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
+        return;
+
+    case GamepadMenuEndSession:
+        // Quit the app running on the host in addition to ending our stream
+        m_Preferences->quitAppAfter = true;
+        break;
+
+    case GamepadMenuDisconnect:
+        break;
+
+    default:
+        SDL_assert(false);
+        return;
+    }
+
+    // Push a quit event to the main loop to tear down the stream
+    SDL_Event event;
+    event.type = SDL_QUIT;
+    event.quit.timestamp = SDL_GetTicks();
+    SDL_PushEvent(&event);
 }
 
 class AsyncConnectionStartThread : public QThread
@@ -2284,6 +2453,12 @@ void Session::exec()
             if (needsFirstEnterCapture && event.window.event == SDL_WINDOWEVENT_ENTER) {
                 m_InputHandler->setCaptureActive(true);
                 needsFirstEnterCapture = false;
+            }
+
+            // The gamepad menu is sized for the window it was drawn for, so
+            // redraw it if the window changed size underneath it.
+            if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED && m_GamepadMenuOpen) {
+                refreshStatusOverlay();
             }
 
             // We want to recreate the decoder for resizes (full-screen toggles) and the initial shown event.

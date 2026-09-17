@@ -19,6 +19,11 @@ public:
 
     void reload();
 
+    // These preferences must be applied before the QGuiApplication is created,
+    // so they can be read directly from storage without a preferences instance.
+    static int loadUiScale();
+    static bool loadTvMode();
+
     enum AudioConfig
     {
         AC_STEREO,
@@ -171,6 +176,8 @@ public:
     Q_PROPERTY(WindowMode windowMode MEMBER windowMode NOTIFY windowModeChanged)
     Q_PROPERTY(WindowMode recommendedFullScreenMode MEMBER recommendedFullScreenMode CONSTANT)
     Q_PROPERTY(UIDisplayMode uiDisplayMode MEMBER uiDisplayMode NOTIFY uiDisplayModeChanged)
+    Q_PROPERTY(int uiScale MEMBER uiScale NOTIFY uiScaleChanged)
+    Q_PROPERTY(bool tvMode MEMBER tvMode NOTIFY tvModeChanged)
     Q_PROPERTY(bool swapMouseButtons MEMBER swapMouseButtons NOTIFY mouseButtonsChanged)
     Q_PROPERTY(bool muteOnFocusLoss MEMBER muteOnFocusLoss NOTIFY muteOnFocusLossChanged)
     Q_PROPERTY(bool backgroundGamepad MEMBER backgroundGamepad NOTIFY backgroundGamepadChanged)
@@ -233,6 +240,11 @@ public:
     WindowMode windowMode;
     WindowMode recommendedFullScreenMode;
     UIDisplayMode uiDisplayMode;
+    // GUI scale in percent. Takes effect on the next launch.
+    int uiScale;
+    // Controller and TV friendly GUI. Takes effect on the next launch and
+    // can be overridden with --tv-mode/--no-tv-mode.
+    bool tvMode;
     Language language;
     CaptureSysKeysMode captureSysKeysMode;
     RendererSelection rendererSelection;
@@ -262,6 +274,8 @@ signals:
     void enableYUV444Changed();
     void videoDecoderSelectionChanged();
     void uiDisplayModeChanged();
+    void uiScaleChanged();
+    void tvModeChanged();
     void windowModeChanged();
     void framePacingChanged();
     void connectionWarningsChanged();

@@ -1001,13 +1001,10 @@ void D3D11VARenderer::renderOverlay(Overlay::OverlayType type)
         return;
     }
 
-    // If the overlay is being updated, just skip rendering it this frame
-    if (!SDL_AtomicTryLock(&m_OverlayLock)) {
-        return;
-    }
-
     // Reference these objects so they don't immediately go away if the
-    // overlay update thread tries to release them.
+    // overlay update thread tries to release them. The update thread only holds
+    // this lock to swap pointers, so waiting is cheaper than skipping a frame.
+    SDL_AtomicLock(&m_OverlayLock);
     ComPtr<ID3D11Texture2D> overlayTexture = m_OverlayTextures[type];
     ComPtr<ID3D11Buffer> overlayVertexBuffer = m_OverlayVertexBuffers[type];
     ComPtr<ID3D11ShaderResourceView> overlayTextureResourceView = m_OverlayTextureResourceViews[type];
@@ -1395,14 +1392,19 @@ void D3D11VARenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         return;
     }
 
-    SDL_AtomicLock(&m_OverlayLock);
-    ComPtr<ID3D11Texture2D> oldTexture = std::move(m_OverlayTextures[type]);
-    ComPtr<ID3D11Buffer> oldVertexBuffer = std::move(m_OverlayVertexBuffers[type]);
-    ComPtr<ID3D11ShaderResourceView> oldTextureResourceView = std::move(m_OverlayTextureResourceViews[type]);
-    SDL_AtomicUnlock(&m_OverlayLock);
+    // Released once we drop the lock at the end of this function
+    ComPtr<ID3D11Texture2D> oldTexture;
+    ComPtr<ID3D11Buffer> oldVertexBuffer;
+    ComPtr<ID3D11ShaderResourceView> oldTextureResourceView;
 
     // If the overlay is disabled, we're done
     if (!overlayEnabled) {
+        SDL_AtomicLock(&m_OverlayLock);
+        oldTexture = std::move(m_OverlayTextures[type]);
+        oldVertexBuffer = std::move(m_OverlayVertexBuffers[type]);
+        oldTextureResourceView = std::move(m_OverlayTextureResourceViews[type]);
+        SDL_AtomicUnlock(&m_OverlayLock);
+
         SDL_FreeSurface(newSurface);
         return;
     }
@@ -1458,7 +1460,14 @@ void D3D11VARenderer::notifyOverlayUpdated(Overlay::OverlayType type)
     SDL_FreeSurface(newSurface);
     newSurface = nullptr;
 
+    // Swap the whole overlay in at once. The previous one stays on screen until
+    // this point, so the render thread never finds the overlay missing between
+    // two frames, and a failure above leaves the old overlay up rather than
+    // blanking it.
     SDL_AtomicLock(&m_OverlayLock);
+    oldVertexBuffer = std::move(m_OverlayVertexBuffers[type]);
+    oldTexture = std::move(m_OverlayTextures[type]);
+    oldTextureResourceView = std::move(m_OverlayTextureResourceViews[type]);
     m_OverlayVertexBuffers[type] = std::move(newVertexBuffer);
     m_OverlayTextures[type] = std::move(newTexture);
     m_OverlayTextureResourceViews[type] = std::move(newTextureResourceView);
@@ -1468,20 +1477,17 @@ void D3D11VARenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 bool D3D11VARenderer::createOverlayVertexBuffer(Overlay::OverlayType type, int width, int height, ComPtr<ID3D11Buffer>& newVertexBuffer)
 {
     SDL_FRect renderRect = {};
+    int x, y, w, h;
 
-    if (type == Overlay::OverlayStatusUpdate) {
-        // Bottom Left
-        renderRect.x = 0;
-        renderRect.y = 0;
-    }
-    else if (type == Overlay::OverlayDebug) {
-        // Top left
-        renderRect.x = 0;
-        renderRect.y = m_DisplayHeight - height;
-    }
+    // NDC places the origin in the lower-left corner
+    Overlay::OverlayManager::getOverlayRect(Session::get()->getOverlayManager().getOverlayAnchor(type),
+                                            width, height, m_DisplayWidth, m_DisplayHeight,
+                                            true, x, y, w, h);
 
-    renderRect.w = width;
-    renderRect.h = height;
+    renderRect.x = x;
+    renderRect.y = y;
+    renderRect.w = w;
+    renderRect.h = h;
 
     // Convert screen space to normalized device coordinates
     StreamUtils::screenSpaceToNormalizedDeviceCoords(&renderRect, m_DisplayWidth, m_DisplayHeight);

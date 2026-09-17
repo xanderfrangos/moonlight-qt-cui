@@ -166,6 +166,11 @@ GlobalCommandLineParser::ParseResult GlobalCommandLineParser::parse(const QStrin
         "See 'moonlight <action> --help' for help of specific action."
     );
     parser.addPositionalArgument("action", "Action to execute", "<action>");
+
+    // TV mode is applied in main() before this parser runs, but it must be
+    // registered here so it isn't rejected as an unknown option.
+    parser.addToggleOption("tv-mode", "TV mode, a GUI suited to gamepads and TVs, for this launch");
+
     parser.parse(args);
     auto posArgs = parser.positionalArguments();
 

@@ -1,5 +1,5 @@
 import QtQuick 2.9
-import QtQuick.Controls 2.2
+import QtQuick.Controls 2.3
 import QtQuick.Layouts 1.3
 import QtQuick.Window 2.2
 import QtQuick.Controls.Material 2.2
@@ -9,6 +9,8 @@ import AutoUpdateChecker 1.0
 import StreamingPreferences 1.0
 import SystemProperties 1.0
 import SdlGamepadKeyNavigation 1.0
+import InputModeTracker 1.0
+import TvTheme 1.0
 
 ApplicationWindow {
     property bool pollingActive: false
@@ -27,7 +29,10 @@ ApplicationWindow {
         // Override the background color to Material 2 colors for Qt 6.5+
         // in order to improve contrast between GFE's placeholder box art
         // and the background of the app grid.
-        if (SystemProperties.usesMaterial3Theme) {
+        if (SystemProperties.tvMode) {
+            Material.background = TvTheme.background
+        }
+        else if (SystemProperties.usesMaterial3Theme) {
             Material.background = "#303030"
         }
 
@@ -37,13 +42,24 @@ ApplicationWindow {
     Component.onCompleted: {
         // Show the window according to the user's preferences
         if (SystemProperties.hasDesktopEnvironment) {
-            if (StreamingPreferences.uiDisplayMode == StreamingPreferences.UI_MAXIMIZED) {
+            if (SystemProperties.tvMode) {
+                // TV mode is always fullscreen
+                window.showFullScreen()
+            }
+            else if (StreamingPreferences.uiDisplayMode == StreamingPreferences.UI_MAXIMIZED) {
                 window.showMaximized()
             }
             else if (StreamingPreferences.uiDisplayMode == StreamingPreferences.UI_FULLSCREEN) {
                 window.showFullScreen()
             }
             else {
+                // With a large GUI scale, our default size can exceed the screen.
+                // Leave some room for the window frame and title bar.
+                if (Screen.desktopAvailableWidth > 0 && Screen.desktopAvailableHeight > 0) {
+                    window.width = Math.min(window.width, Screen.desktopAvailableWidth * 0.9)
+                    window.height = Math.min(window.height, Screen.desktopAvailableHeight * 0.9)
+                }
+
                 window.show()
             }
         } else {
@@ -106,10 +122,123 @@ ApplicationWindow {
         }
     }
 
+    // Escape or Back: leave the current page, or ask whether to quit if this
+    // is the first one. The toolbar calls this too, since it lives outside
+    // the StackView and never sees the StackView's own key handlers.
+    function goBackOrQuit() {
+        if (stackView.depth > 1) {
+            goBack()
+        }
+        else {
+            quitConfirmationDialog.open()
+        }
+    }
+
+    // The TV mode title: the names of the pages in the stack, with the
+    // current page last. The arguments make bindings update on navigation.
+    function breadcrumbText(depth, currentItem) {
+        var names = []
+        for (var i = 0; i < depth; i++) {
+            var page = stackView.get(i)
+            if (page && page.objectName) {
+                names.push(page.objectName.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"))
+            }
+        }
+
+        names = names.slice(-3)
+        if (names.length === 0) {
+            return ""
+        }
+
+        var current = names.pop()
+        if (names.length === 0) {
+            return current
+        }
+
+        var separator = "  \u203A  "
+        return "<font color=\"" + TvTheme.textSecondary + "\">" + names.join(separator) + separator + "</font>" + current
+    }
+
+    function isInPopup(item) {
+        return item !== null && isSelfOrDescendantOf(item, Overlay.overlay)
+    }
+
+    function isSelfOrDescendantOf(item, ancestor) {
+        for (; item; item = item.parent) {
+            if (item === ancestor) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // Returns whether focus can be returned to an item that had it before a
+    // dialog opened or before we navigated away from its page
+    function canRestoreFocusTo(item) {
+        if (!item || !item.visible || !item.enabled || !stackView.currentItem) {
+            return false
+        }
+
+        // Only return focus to the current page or the toolbar
+        if (!isSelfOrDescendantOf(item, stackView.currentItem) && !isSelfOrDescendantOf(item, toolBar)) {
+            return false
+        }
+
+        // Grid and list views manage focus for their delegates themselves, so
+        // don't focus a delegate that is no longer the current item
+        for (var ancestor = item.parent; ancestor; ancestor = ancestor.parent) {
+            if (ancestor.currentIndex !== undefined && ancestor.currentItem !== undefined &&
+                    !isSelfOrDescendantOf(item, ancestor.currentItem)) {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    // Moves focus back to an item that previously had it, or to the current
+    // page if that isn't possible. We must always put focus somewhere, or
+    // gamepad and keyboard navigation will break.
+    function restoreFocus(item, hadVisualFocus) {
+        if (canRestoreFocusTo(item)) {
+            item.forceActiveFocus(hadVisualFocus ? Qt.TabFocusReason : Qt.OtherFocusReason)
+        }
+        else {
+            stackView.forceActiveFocus()
+        }
+    }
+
+    // TV mode draws a subtle gradient behind the whole window. Pages leave
+    // their backgrounds transparent, so it shows through everywhere.
+    background: Rectangle {
+        color: window.Material.backgroundColor
+
+        TvGradient {
+            anchors.fill: parent
+            visible: SystemProperties.tvMode
+            topColor: TvTheme.backgroundTop
+            bottomColor: TvTheme.backgroundBottom
+        }
+
+        // Pages can show art behind themselves by providing tvBackdropSource
+        TvBackdrop {
+            anchors.fill: parent
+            visible: SystemProperties.tvMode
+            source: SystemProperties.tvMode && stackView.currentItem &&
+                    stackView.currentItem.tvBackdropSource !== undefined ?
+                        stackView.currentItem.tvBackdropSource : ""
+        }
+    }
+
     StackView {
         id: stackView
         anchors.fill: parent
         focus: true
+
+        // What had focus on each page in the stack when we navigated away from
+        // it, so it can be focused again when we return
+        property Item previousItem: null
+        property var savedFocus: []
 
         Component.onCompleted: {
             // Perform our early initialization before constructing
@@ -119,29 +248,51 @@ ApplicationWindow {
         }
 
         onCurrentItemChanged: {
+            var focusItem = window.activeFocusItem
+
+            // Forget pages that are no longer in the stack
+            var entries = []
+            for (var i = 0; i < savedFocus.length; i++) {
+                var entry = savedFocus[i]
+                if (entry.page && entry.page !== previousItem &&
+                        find(function(page) { return page === entry.page }) !== null) {
+                    entries.push(entry)
+                }
+            }
+
+            // Remember what had focus on the page we're leaving
+            if (previousItem && focusItem &&
+                    (isSelfOrDescendantOf(focusItem, previousItem) || isSelfOrDescendantOf(focusItem, toolBar))) {
+                entries.push({ "page": previousItem, "item": focusItem, "visualFocus": focusItem.visualFocus === true })
+            }
+
+            savedFocus = entries
+            previousItem = currentItem
+
             // Ensure focus travels to the next view when going back
             if (currentItem) {
                 currentItem.forceActiveFocus()
+
+                // If we're returning to a page, go back to what had focus there.
+                // This is deferred so bindings that depend on the current page
+                // (like toolbar button visibility) are up to date.
+                for (i = 0; i < savedFocus.length; i++) {
+                    if (savedFocus[i].page === currentItem) {
+                        var savedEntry = savedFocus[i]
+                        Qt.callLater(function() {
+                            if (savedEntry.page === stackView.currentItem && canRestoreFocusTo(savedEntry.item)) {
+                                savedEntry.item.forceActiveFocus(savedEntry.visualFocus ? Qt.TabFocusReason : Qt.OtherFocusReason)
+                            }
+                        })
+                        break
+                    }
+                }
             }
         }
 
-        Keys.onEscapePressed: {
-            if (depth > 1) {
-                goBack()
-            }
-            else {
-                quitConfirmationDialog.open()
-            }
-        }
+        Keys.onEscapePressed: goBackOrQuit()
 
-        Keys.onBackPressed: {
-            if (depth > 1) {
-                goBack()
-            }
-            else {
-                quitConfirmationDialog.open()
-            }
-        }
+        Keys.onBackPressed: goBackOrQuit()
 
         Keys.onMenuPressed: {
             settingsButton.clicked()
@@ -235,16 +386,35 @@ ApplicationWindow {
 
     header: ToolBar {
         id: toolBar
-        height: 60
+        height: SystemProperties.tvMode ? 72 : 60
         anchors.topMargin: 5
         anchors.bottomMargin: 5
 
+        // TV mode shows the window's background through the toolbar. This is
+        // a Binding rather than an assignment in Component.onCompleted, which
+        // can run after the window has been shown and drawn a frame with the
+        // toolbar still visible. Bindings are applied before any of those
+        // handlers run.
+        Binding {
+            target: toolBar.background
+            property: "opacity"
+            value: 0
+            when: SystemProperties.tvMode
+        }
+
+        // Key presses that a focused toolbar button doesn't handle arrive
+        // here, rather than at the StackView with the page below
+        Keys.onEscapePressed: goBackOrQuit()
+
+        Keys.onBackPressed: goBackOrQuit()
+
         Label {
             id: titleLabel
-            visible: toolBar.width > 700
+            // TV mode shows a left-aligned breadcrumb in the row instead
+            visible: !SystemProperties.tvMode && toolBar.width > 700
             anchors.fill: parent
             text: stackView.currentItem.objectName
-            font.pointSize: 20
+            font.pointSize: SystemProperties.tvMode ? 22 : 20
             elide: Label.ElideRight
             horizontalAlignment: Qt.AlignHCenter
             verticalAlignment: Qt.AlignVCenter
@@ -252,8 +422,8 @@ ApplicationWindow {
 
         RowLayout {
             spacing: 10
-            anchors.leftMargin: 10
-            anchors.rightMargin: 10
+            anchors.leftMargin: SystemProperties.tvMode ? 24 : 10
+            anchors.rightMargin: SystemProperties.tvMode ? 24 : 10
             anchors.fill: parent
 
             NavigableToolButton {
@@ -275,14 +445,17 @@ ApplicationWindow {
                 id: titleRowLabel
                 font.pointSize: titleLabel.font.pointSize
                 elide: Label.ElideRight
-                horizontalAlignment: Qt.AlignHCenter
+                horizontalAlignment: SystemProperties.tvMode ? Qt.AlignLeft : Qt.AlignHCenter
                 verticalAlignment: Qt.AlignVCenter
                 Layout.fillWidth: true
+                Layout.leftMargin: SystemProperties.tvMode ? 8 : 0
+                textFormat: SystemProperties.tvMode ? Text.StyledText : Text.PlainText
 
                 // We need this label to always be visible so it can occupy
                 // the remaining space in the RowLayout. To "hide" it, we
                 // just set the text to empty string.
-                text: !titleLabel.visible ? stackView.currentItem.objectName : ""
+                text: SystemProperties.tvMode ? breadcrumbText(stackView.depth, stackView.currentItem) :
+                                                !titleLabel.visible ? stackView.currentItem.objectName : ""
             }
 
             Label {
@@ -303,7 +476,7 @@ ApplicationWindow {
 
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
-                ToolTip.visible: hovered
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Join our community on Discord")
 
                 // TODO need to make sure browser is brought to foreground.
@@ -322,7 +495,7 @@ ApplicationWindow {
 
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
-                ToolTip.visible: hovered
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Add PC manually") + (newPcShortcut.nativeText ? (" ("+newPcShortcut.nativeText+")") : "")
 
                 Shortcut {
@@ -386,7 +559,7 @@ ApplicationWindow {
 
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
-                ToolTip.visible: hovered
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Help") + (helpShortcut.nativeText ? (" ("+helpShortcut.nativeText+")") : "")
 
                 Shortcut {
@@ -409,7 +582,7 @@ ApplicationWindow {
 
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
-                ToolTip.visible: hovered
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Gamepad Mapper")
 
                 iconSource: "qrc:/res/ic_videogame_asset_white_48px.svg"
@@ -419,6 +592,23 @@ ApplicationWindow {
                 Keys.onDownPressed: {
                     stackView.currentItem.forceActiveFocus(Qt.TabFocus)
                 }
+            }
+
+            NavigableToolButton {
+                id: controllersButton
+
+                iconSource: "qrc:/res/ic_videogame_asset_white_48px.svg"
+
+                onClicked: navigateTo("qrc:/gui/ControllerView.qml", ControllerView)
+
+                Keys.onDownPressed: {
+                    stackView.currentItem.forceActiveFocus(Qt.TabFocus)
+                }
+
+                ToolTip.delay: 1000
+                ToolTip.timeout: 3000
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                ToolTip.text: qsTr("Controllers")
             }
 
             NavigableToolButton {
@@ -440,8 +630,26 @@ ApplicationWindow {
 
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
-                ToolTip.visible: hovered
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Settings") + (settingsShortcut.nativeText ? (" ("+settingsShortcut.nativeText+")") : "")
+            }
+
+            // TV mode: a clock, since the app usually runs fullscreen
+            Label {
+                id: clockLabel
+                visible: SystemProperties.tvMode
+                Layout.leftMargin: 16
+                font.pointSize: 18
+
+                Timer {
+                    interval: 1000
+                    repeat: true
+                    triggeredOnStart: true
+                    running: clockLabel.visible
+                    onTriggered: {
+                        clockLabel.text = Qt.formatTime(new Date(), Qt.locale().timeFormat(Locale.ShortFormat))
+                    }
+                }
             }
         }
     }
@@ -552,6 +760,135 @@ ApplicationWindow {
                     addPcDialog.accept()
                 }
             }
+        }
+    }
+
+    footer: TvHintBar {
+        visible: SystemProperties.tvMode
+
+        // Streaming and quitting pages have no title and take no input
+        active: stackView.currentItem !== null && stackView.currentItem.objectName !== ""
+        inPopup: isInPopup(window.activeFocusItem)
+        inGrid: window.activeFocusItem !== null &&
+                (window.activeFocusItem instanceof GridView || window.activeFocusItem.grid !== undefined)
+        canGoBack: stackView.depth > 1
+        canOpenSettings: !(stackView.currentItem instanceof SettingsView)
+    }
+
+    // A clearly visible indicator around the focused control while navigating
+    // with a gamepad. The Material style's own focus cues are too subtle to
+    // see from across the room. It lives in the overlay so it is also drawn
+    // for controls inside dialogs and menus.
+    Rectangle {
+        id: focusRing
+
+        readonly property int ringMargin: 4
+
+        // Only shown while the gamepad is in use. Only controls report
+        // visualFocus, and only when focus was gained through keyboard or
+        // gamepad navigation (not a mouse click).
+        property Item target: {
+            if (!InputModeTracker.gamepadActive) {
+                return null
+            }
+
+            // TV mode grid cards draw their own focus glow
+            var item = window.activeFocusItem
+            return (item && item.visualFocus === true && item.tvCard !== true) ? item : null
+        }
+
+        property bool targetOnScreen: false
+
+        // In TV mode the ring glides to each newly focused control. It only
+        // animates briefly after the target changes, so it still tracks
+        // scrolling and layout changes without lagging behind.
+        property bool gliding: false
+
+        parent: Overlay.overlay
+        z: 1000000
+        visible: target !== null && target.visible && targetOnScreen
+        color: "transparent"
+        radius: SystemProperties.tvMode ? TvTheme.focusRingRadius : 6
+        border.width: 3
+        border.color: Material.accent
+
+        Behavior on x { enabled: focusRing.gliding; NumberAnimation { duration: TvTheme.animationFast; easing.type: Easing.OutCubic } }
+        Behavior on y { enabled: focusRing.gliding; NumberAnimation { duration: TvTheme.animationFast; easing.type: Easing.OutCubic } }
+        Behavior on width { enabled: focusRing.gliding; NumberAnimation { duration: TvTheme.animationFast; easing.type: Easing.OutCubic } }
+        Behavior on height { enabled: focusRing.gliding; NumberAnimation { duration: TvTheme.animationFast; easing.type: Easing.OutCubic } }
+
+        // A soft outer glow so the ring stands out from across the room
+        Rectangle {
+            visible: SystemProperties.tvMode
+            anchors.fill: parent
+            anchors.margins: -4
+            color: "transparent"
+            radius: parent.radius + 4
+            border.width: 4
+            border.color: Material.accent
+            opacity: 0.35
+        }
+
+        // Stops the glide once the ring has reached its new target
+        Timer {
+            id: glideTimer
+            interval: TvTheme.animationFast * 2
+            onTriggered: focusRing.gliding = false
+        }
+
+        function updateGeometry() {
+            if (target === null) {
+                targetOnScreen = false
+                return
+            }
+
+            // Map both corners so a scaled target is measured correctly
+            var pos = target.mapToItem(parent, 0, 0)
+            var end = target.mapToItem(parent, target.width, target.height)
+            var left = pos.x - ringMargin
+            var top = pos.y - ringMargin
+            var right = end.x + ringMargin
+            var bottom = end.y + ringMargin
+
+            // Keep the ring inside any clipping ancestors, and inside the page
+            // area so a partially scrolled control doesn't draw over the toolbar
+            for (var item = target.parent; item; item = item.parent) {
+                if (item.clip || item === stackView) {
+                    var clipPos = item.mapToItem(parent, 0, 0)
+                    left = Math.max(left, clipPos.x)
+                    top = Math.max(top, clipPos.y)
+                    right = Math.min(right, clipPos.x + item.width)
+                    bottom = Math.min(bottom, clipPos.y + item.height)
+                }
+            }
+
+            targetOnScreen = right > left && bottom > top && target.width > 0 && target.height > 0
+            x = left
+            y = top
+            width = right - left
+            height = bottom - top
+        }
+
+        onTargetChanged: {
+            // Only glide from a control that was showing the ring. Otherwise
+            // the ring would fly in from wherever it was last shown.
+            if (SystemProperties.tvMode && visible && target !== null) {
+                gliding = true
+                glideTimer.restart()
+            }
+            else {
+                gliding = false
+            }
+
+            updateGeometry()
+        }
+
+        // Follow the target while it moves (scrolling, animations, layout changes)
+        Timer {
+            interval: 16
+            repeat: true
+            running: focusRing.target !== null
+            onTriggered: focusRing.updateGeometry()
         }
     }
 }
