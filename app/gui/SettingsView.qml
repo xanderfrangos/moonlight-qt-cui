@@ -10,6 +10,10 @@ import InputModeTracker 1.0
 import SystemProperties 1.0
 
 Flickable {
+    // The TV mode toolbar and hint bar are transparent, so settings must not
+    // scroll underneath them
+    clip: SystemProperties.tvMode
+
     id: settingsPage
     objectName: qsTr("Settings")
 
@@ -225,7 +229,7 @@ Flickable {
         width: singleColumn ? settingsPage.width : settingsPage.width / 2
         spacing: 15
 
-        GroupBox {
+        SettingsGroupBox {
             id: basicSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
@@ -1098,7 +1102,7 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsGroupBox {
 
             id: audioSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
@@ -1192,7 +1196,7 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsGroupBox {
             id: hostSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
@@ -1232,7 +1236,7 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsGroupBox {
             id: uiSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
@@ -1642,7 +1646,7 @@ Flickable {
         width: singleColumn ? settingsPage.width : settingsPage.width / 2
         spacing: 15
 
-        GroupBox {
+        SettingsGroupBox {
             id: inputSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
@@ -1790,7 +1794,7 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsGroupBox {
             id: gamepadSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
@@ -1865,7 +1869,7 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsGroupBox {
             id: advancedSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12

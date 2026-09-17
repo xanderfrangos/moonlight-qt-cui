@@ -122,6 +122,35 @@ ApplicationWindow {
         }
     }
 
+    // The TV mode title: the names of the pages in the stack, with the
+    // current page last. The arguments make bindings update on navigation.
+    function breadcrumbText(depth, currentItem) {
+        var names = []
+        for (var i = 0; i < depth; i++) {
+            var page = stackView.get(i)
+            if (page && page.objectName) {
+                names.push(page.objectName.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"))
+            }
+        }
+
+        names = names.slice(-3)
+        if (names.length === 0) {
+            return ""
+        }
+
+        var current = names.pop()
+        if (names.length === 0) {
+            return current
+        }
+
+        var separator = "  \u203A  "
+        return "<font color=\"" + TvTheme.textSecondary + "\">" + names.join(separator) + separator + "</font>" + current
+    }
+
+    function isInPopup(item) {
+        return item !== null && isSelfOrDescendantOf(item, Overlay.overlay)
+    }
+
     function isSelfOrDescendantOf(item, ancestor) {
         for (; item; item = item.parent) {
             if (item === ancestor) {
@@ -361,16 +390,29 @@ ApplicationWindow {
 
     header: ToolBar {
         id: toolBar
-        height: 60
+        height: SystemProperties.tvMode ? 72 : 60
         anchors.topMargin: 5
         anchors.bottomMargin: 5
 
+        // TV mode shows the window's background through the toolbar. This is
+        // a Binding rather than an assignment in Component.onCompleted, which
+        // can run after the window has been shown and drawn a frame with the
+        // toolbar still visible. Bindings are applied before any of those
+        // handlers run.
+        Binding {
+            target: toolBar.background
+            property: "opacity"
+            value: 0
+            when: SystemProperties.tvMode
+        }
+
         Label {
             id: titleLabel
-            visible: toolBar.width > 700
+            // TV mode shows a left-aligned breadcrumb in the row instead
+            visible: !SystemProperties.tvMode && toolBar.width > 700
             anchors.fill: parent
             text: stackView.currentItem.objectName
-            font.pointSize: 20
+            font.pointSize: SystemProperties.tvMode ? 22 : 20
             elide: Label.ElideRight
             horizontalAlignment: Qt.AlignHCenter
             verticalAlignment: Qt.AlignVCenter
@@ -378,8 +420,8 @@ ApplicationWindow {
 
         RowLayout {
             spacing: 10
-            anchors.leftMargin: 10
-            anchors.rightMargin: 10
+            anchors.leftMargin: SystemProperties.tvMode ? 24 : 10
+            anchors.rightMargin: SystemProperties.tvMode ? 24 : 10
             anchors.fill: parent
 
             NavigableToolButton {
@@ -401,14 +443,17 @@ ApplicationWindow {
                 id: titleRowLabel
                 font.pointSize: titleLabel.font.pointSize
                 elide: Label.ElideRight
-                horizontalAlignment: Qt.AlignHCenter
+                horizontalAlignment: SystemProperties.tvMode ? Qt.AlignLeft : Qt.AlignHCenter
                 verticalAlignment: Qt.AlignVCenter
                 Layout.fillWidth: true
+                Layout.leftMargin: SystemProperties.tvMode ? 8 : 0
+                textFormat: SystemProperties.tvMode ? Text.StyledText : Text.PlainText
 
                 // We need this label to always be visible so it can occupy
                 // the remaining space in the RowLayout. To "hide" it, we
                 // just set the text to empty string.
-                text: !titleLabel.visible ? stackView.currentItem.objectName : ""
+                text: SystemProperties.tvMode ? breadcrumbText(stackView.depth, stackView.currentItem) :
+                                                !titleLabel.visible ? stackView.currentItem.objectName : ""
             }
 
             Label {
@@ -569,6 +614,24 @@ ApplicationWindow {
                 ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Settings") + (settingsShortcut.nativeText ? (" ("+settingsShortcut.nativeText+")") : "")
             }
+
+            // TV mode: a clock, since the app usually runs fullscreen
+            Label {
+                id: clockLabel
+                visible: SystemProperties.tvMode
+                Layout.leftMargin: 16
+                font.pointSize: 18
+
+                Timer {
+                    interval: 1000
+                    repeat: true
+                    triggeredOnStart: true
+                    running: clockLabel.visible
+                    onTriggered: {
+                        clockLabel.text = Qt.formatTime(new Date(), Qt.locale().timeFormat(Locale.ShortFormat))
+                    }
+                }
+            }
         }
     }
 
@@ -679,6 +742,18 @@ ApplicationWindow {
                 }
             }
         }
+    }
+
+    footer: TvHintBar {
+        visible: SystemProperties.tvMode
+
+        // Streaming and quitting pages have no title and take no input
+        active: stackView.currentItem !== null && stackView.currentItem.objectName !== ""
+        inPopup: isInPopup(window.activeFocusItem)
+        inGrid: window.activeFocusItem !== null &&
+                (window.activeFocusItem instanceof GridView || window.activeFocusItem.grid !== undefined)
+        canGoBack: stackView.depth > 1
+        canOpenSettings: !(stackView.currentItem instanceof SettingsView)
     }
 
     // A clearly visible indicator around the focused control while navigating
