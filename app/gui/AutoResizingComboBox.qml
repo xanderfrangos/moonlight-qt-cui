@@ -51,11 +51,8 @@ ComboBox {
         SdlGamepadKeyNavigation.setUiNavMode(true)
     }
 
-    Keys.onLeftPressed: {
-        decrementCurrentIndex()
-    }
-
-    Keys.onRightPressed: {
-        incrementCurrentIndex()
-    }
+    // Left and Right intentionally do not change the selection. The value may
+    // only be changed through the popup, so gamepad users navigating across
+    // the page never alter a setting by accident. Unhandled Left/Right key
+    // events propagate to the parent view for spatial focus navigation.
 }

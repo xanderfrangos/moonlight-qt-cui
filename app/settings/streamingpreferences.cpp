@@ -24,7 +24,9 @@
 #define SER_FULLSCREEN "fullscreen"
 #define SER_VSYNC "vsync"
 #define SER_ENABLEVRR "enablevrr"
-#define SER_VRRSMOOTHNESS "vrrsmoothness"
+#define SER_VRRLATENCYFIX "vrrlatencyfix"
+#define SER_VRRLATENCYMODE "vrrlatencymode"
+#define SER_SMOOTHVRRFRAMETIMING "smoothvrrframetiming"
 #define SER_GAMEOPTS "gameopts"
 #define SER_HOSTAUDIO "hostaudio"
 #define SER_MULTICONT "multicontroller"
@@ -43,6 +45,9 @@
 #define SER_CONNWARNINGS "connwarnings"
 #define SER_CONFWARNINGS "confwarnings"
 #define SER_UIDISPLAYMODE "uidisplaymode"
+#define SER_UISCALE "uiscale"
+#define SER_DISABLEHOVER "disablehover"
+#define SER_TVMODE "tvmode"
 #define SER_RICHPRESENCE "richpresence"
 #define SER_GAMEPADMOUSE "gamepadmouse"
 #define SER_DEFAULTVER "defaultver"
@@ -137,7 +142,22 @@ void StreamingPreferences::reload()
     autoAdjustBitrate = settings.value(SER_AUTOADJUSTBITRATE, true).toBool();
     enableVsync = settings.value(SER_VSYNC, true).toBool();
     enableVrr = settings.value(SER_ENABLEVRR, false).toBool();
-    vrrSmoothness = settings.value(SER_VRRSMOOTHNESS, false).toBool();
+    // VRR adaptive presentation always requires tearing permission. Remove
+    // the retired override so stale profiles cannot disable native VRR.
+    settings.remove(QStringLiteral("allowvrrtearing"));
+    vrrLatencyMode = VLM_BALANCED;
+    if (settings.contains(SER_VRRLATENCYMODE)) {
+        bool validMode = false;
+        const int savedMode = settings.value(SER_VRRLATENCYMODE).toInt(&validMode);
+        if (validMode && savedMode >= VLM_SMOOTH && savedMode <= VLM_LOW_LATENCY) {
+            vrrLatencyMode = savedMode;
+        }
+    }
+    else if (settings.contains(SER_VRRLATENCYFIX)) {
+        // Preserve the old checkbox choice while new users start on Balanced Target.
+        vrrLatencyMode = settings.value(SER_VRRLATENCYFIX).toBool() ? VLM_BALANCED_TARGET : VLM_SMOOTH;
+    }
+    smoothVrrFrameTiming = settings.value(SER_SMOOTHVRRFRAMETIMING, true).toBool();
     gameOptimizations = settings.value(SER_GAMEOPTS, true).toBool();
     playAudioOnHost = settings.value(SER_HOSTAUDIO, false).toBool();
     multiController = settings.value(SER_MULTICONT, true).toBool();
@@ -177,7 +197,10 @@ void StreamingPreferences::reload()
     uiDisplayMode = static_cast<UIDisplayMode>(settings.value(SER_UIDISPLAYMODE,
                                                static_cast<int>(settings.value(SER_STARTWINDOWED, true).toBool() ? UIDisplayMode::UI_WINDOWED
                                                                                                                  : UIDisplayMode::UI_MAXIMIZED)).toInt());
-    language = static_cast<Language>(settings.value(SER_LANGUAGE,
+    uiScale = loadUiScale();
+    disableHover = loadDisableHover();
+    tvMode = loadTvMode();
+    language =static_cast<Language>(settings.value(SER_LANGUAGE,
                                                     static_cast<int>(Language::LANG_AUTO)).toInt());
 
 
@@ -327,6 +350,34 @@ QString StreamingPreferences::getSuffixFromLanguage(StreamingPreferences::Langua
     }
 }
 
+int StreamingPreferences::loadUiScale()
+{
+    QSettings settings;
+
+    // Only accept the scale factors offered in the UI
+    static const int k_ValidScales[] = { 100, 125, 150, 175, 200, 250, 300, 350, 400 };
+    int scale = settings.value(SER_UISCALE, 100).toInt();
+    for (int validScale : k_ValidScales) {
+        if (scale == validScale) {
+            return scale;
+        }
+    }
+
+    return 100;
+}
+
+bool StreamingPreferences::loadDisableHover()
+{
+    QSettings settings;
+    return settings.value(SER_DISABLEHOVER, false).toBool();
+}
+
+bool StreamingPreferences::loadTvMode()
+{
+    QSettings settings;
+    return settings.value(SER_TVMODE, false).toBool();
+}
+
 void StreamingPreferences::save()
 {
     QSettings settings;
@@ -339,7 +390,13 @@ void StreamingPreferences::save()
     settings.setValue(SER_AUTOADJUSTBITRATE, autoAdjustBitrate);
     settings.setValue(SER_VSYNC, enableVsync);
     settings.setValue(SER_ENABLEVRR, enableVrr);
-    settings.setValue(SER_VRRSMOOTHNESS, vrrSmoothness);
+    settings.setValue(SER_VRRLATENCYMODE, vrrLatencyMode);
+    settings.remove("vrrlatencyoscillation");
+    settings.remove("gamescopemailbox"); // Retired Mailbox A/B experiment.
+    settings.remove("gamescoperepaint");
+    settings.remove("gamescopeforcecomposition");
+    settings.setValue(SER_SMOOTHVRRFRAMETIMING, smoothVrrFrameTiming);
+    settings.remove("v2queue"); // The interval queue is now the production policy.
     settings.setValue(SER_GAMEOPTS, gameOptimizations);
     settings.setValue(SER_HOSTAUDIO, playAudioOnHost);
     settings.setValue(SER_MULTICONT, multiController);
@@ -363,6 +420,9 @@ void StreamingPreferences::save()
     settings.setValue(SER_RENDERER, static_cast<int>(rendererSelection));
     settings.setValue(SER_WINDOWMODE, static_cast<int>(windowMode));
     settings.setValue(SER_UIDISPLAYMODE, static_cast<int>(uiDisplayMode));
+    settings.setValue(SER_UISCALE, uiScale);
+    settings.setValue(SER_DISABLEHOVER, disableHover);
+    settings.setValue(SER_TVMODE, tvMode);
     settings.setValue(SER_LANGUAGE, static_cast<int>(language));
     settings.setValue(SER_DEFAULTVER, CURRENT_DEFAULT_VER);
     settings.setValue(SER_SWAPMOUSEBUTTONS, swapMouseButtons);

@@ -6,9 +6,14 @@ import QtQuick.Window 2.2
 import StreamingPreferences 1.0
 import ComputerManager 1.0
 import SdlGamepadKeyNavigation 1.0
+import InputModeTracker 1.0
 import SystemProperties 1.0
 
 Flickable {
+    // The TV mode toolbar and hint bar are transparent, so settings must not
+    // scroll underneath them
+    clip: SystemProperties.tvMode
+
     id: settingsPage
     objectName: qsTr("Settings")
 
@@ -16,8 +21,14 @@ Flickable {
 
     boundsBehavior: Flickable.OvershootBounds
 
+    // Stack the two setting columns vertically when the page is too narrow
+    // to fit both side by side, such as with a large GUI scale
+    readonly property bool singleColumn: width < 1000
+
     contentWidth: settingsColumn1.width > settingsColumn2.width ? settingsColumn1.width : settingsColumn2.width
-    contentHeight: settingsColumn1.height > settingsColumn2.height ? settingsColumn1.height : settingsColumn2.height
+    contentHeight: singleColumn ?
+                       settingsColumn1.height + settingsColumn2.height :
+                       (settingsColumn1.height > settingsColumn2.height ? settingsColumn1.height : settingsColumn2.height)
 
     ScrollBar.vertical: ScrollBar {
         anchors {
@@ -26,15 +37,132 @@ Flickable {
         }
     }
 
-    function isChildOfFlickable(item) {
-        while (item) {
-            if (item.parent === contentItem) {
+    // Some GUI preferences are only applied when Moonlight starts. Offer to
+    // restart if the saved values no longer match what is currently in effect.
+    function promptRestartIfNeeded() {
+        // A command line option keeps TV mode fixed across a restart
+        var tvModeAfterRestart = SystemProperties.tvModeOverridden ? SystemProperties.tvMode : StreamingPreferences.tvMode
+
+        // TV mode always disables hover effects
+        var hoverDisabledAfterRestart = StreamingPreferences.disableHover || tvModeAfterRestart
+
+        if ((SystemProperties.supportsUiScale && StreamingPreferences.uiScale !== SystemProperties.activeUiScale) ||
+                hoverDisabledAfterRestart !== SystemProperties.hoverEffectsDisabled ||
+                tvModeAfterRestart !== SystemProperties.tvMode) {
+            restartDialog.open()
+        }
+    }
+
+    NavigableMessageDialog {
+        id: tvModeScaleDialog
+        standardButtons: Dialog.Yes | Dialog.No
+        text: qsTr("Your display has a high resolution. Would you also like to increase the GUI scale to 200% so it is easier to read from a distance?")
+        onAccepted: {
+            StreamingPreferences.uiScale = 200
+            for (var i = 0; i < uiScaleListModel.count; i++) {
+                if (uiScaleListModel.get(i).val === 200) {
+                    uiScaleComboBox.currentIndex = i
+                    break
+                }
+            }
+        }
+
+        // Ask about restarting once the scale question has been answered
+        onClosed: promptRestartIfNeeded()
+    }
+
+    NavigableMessageDialog {
+        id: restartDialog
+        standardButtons: Dialog.Yes | Dialog.No
+        text: qsTr("Moonlight must be restarted for this change to take effect. Restart now?")
+        onAccepted: SystemProperties.restartApplication()
+    }
+
+    function isDescendantOf(item, ancestor) {
+        for (item = item ? item.parent : null; item; item = item.parent) {
+            if (item === ancestor) {
                 return true
             }
-
-            item = item.parent
         }
         return false
+    }
+
+    function isChildOfFlickable(item) {
+        return isDescendantOf(item, contentItem)
+    }
+
+    // Moves focus to the nearest focusable control to the left or right of
+    // fromItem. Controls that share a row are preferred; otherwise the closest
+    // control vertically in that direction (e.g. in the other column) is used.
+    // If nothing lies in that direction, focus stays where it is.
+    function navigateHorizontally(fromItem, forward) {
+        if (!isChildOfFlickable(fromItem)) {
+            return
+        }
+
+        var from = fromItem.mapToItem(contentItem, 0, 0)
+        var fromLeft = from.x
+        var fromRight = from.x + fromItem.width
+        var fromTop = from.y
+        var fromBottom = from.y + fromItem.height
+
+        var bestItem = null
+        var bestOverlaps = false
+        var bestScore = 0
+
+        // Walk the tab focus chain, which only contains visible, enabled controls
+        var item = fromItem
+        for (var i = 0; i < 1000; i++) {
+            item = item.nextItemInFocusChain(true)
+            if (!item || item === fromItem) {
+                break
+            }
+            if (!isChildOfFlickable(item)) {
+                continue
+            }
+
+            var pos = item.mapToItem(contentItem, 0, 0)
+            var left = pos.x
+            var right = pos.x + item.width
+
+            // Horizontal gap in the requested direction. Allow a tiny overlap
+            // to tolerate rounding in adjacent layouts.
+            var dx = forward ? left - fromRight : fromLeft - right
+            if (dx < -2) {
+                continue
+            }
+            dx = Math.max(dx, 0)
+
+            var dy = Math.max(0, pos.y - fromBottom, fromTop - (pos.y + item.height))
+            var overlaps = dy === 0
+
+            // Among overlapping controls, prefer the nearest one whose vertical
+            // center is best aligned with ours.
+            var centerDy = Math.abs((pos.y + item.height / 2) - (fromTop + fromItem.height / 2))
+            var score = overlaps ? dx + centerDy : dy * 10 + dx
+
+            if (bestItem === null ||
+                    (overlaps && !bestOverlaps) ||
+                    (overlaps === bestOverlaps && score < bestScore)) {
+                bestItem = item
+                bestOverlaps = overlaps
+                bestScore = score
+            }
+        }
+
+        if (bestItem !== null) {
+            bestItem.forceActiveFocus(Qt.TabFocus)
+        }
+    }
+
+    // Left/Right key events from focused controls that don't consume them
+    // (check boxes, combo boxes, buttons) bubble up to here.
+    Keys.onLeftPressed: {
+        navigateHorizontally(Window.activeFocusItem, false)
+    }
+
+    Keys.onRightPressed: {
+        navigateHorizontally(Window.activeFocusItem, true)
     }
 
     NumberAnimation on contentY {
@@ -95,11 +223,13 @@ Flickable {
 
     Column {
         padding: 10
+        // Leave room for the scroll bar when this column spans the page
+        rightPadding: singleColumn ? 20 : 10
         id: settingsColumn1
-        width: settingsPage.width / 2
+        width: singleColumn ? settingsPage.width : settingsPage.width / 2
         spacing: 15
 
-        GroupBox {
+        SettingsGroupBox {
             id: basicSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
@@ -609,10 +739,7 @@ Flickable {
                                 }
                             }
 
-                            // VrrRatePolicy preserves every saved custom value.  An
-                            // exact native refresh is intentionally absent in VRR
-                            // mode, so leave the first valid choice selected if a
-                            // stale external setting reaches this UI.
+                            // Saved custom and native maximum choices remain visible.
                             if (!found) {
                                 currentIndex = model.count > 0 ? 0 : -1
                             }
@@ -677,7 +804,7 @@ Flickable {
                     width: parent.width
                     spacing: 5
 
-                    Slider {
+                    NavigableSlider {
                         id: slider
 
                         value: StreamingPreferences.bitrateKbps
@@ -798,7 +925,7 @@ Flickable {
                     onVrrForcedChanged: reinitialize()
                     visible: SystemProperties.hasDesktopEnvironment
                     enabled: !SystemProperties.rendererAlwaysFullScreen && !vrrForced
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     textRole: "text"
                     onActivated: {
                         StreamingPreferences.windowMode = model.get(currentIndex).val
@@ -806,7 +933,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: vrrForced ?
                                       qsTr("Borderless windowed mode is required for active VRR streaming. Your saved display mode will be restored for non-VRR sessions.")
                                     :
@@ -819,7 +946,7 @@ Flickable {
 
                     CheckBox {
                         id: vsyncCheck
-                        hoverEnabled: true
+                        hoverEnabled: !SystemProperties.hoverEffectsDisabled
                         text: qsTr("V-Sync")
                         font.pointSize:  12
                         checked: StreamingPreferences.enableVsync
@@ -829,13 +956,13 @@ Flickable {
 
                         ToolTip.delay: 1000
                         ToolTip.timeout: 5000
-                        ToolTip.visible: hovered
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                         ToolTip.text: qsTr("Disabling V-Sync allows sub-frame rendering latency, but it can display visible tearing")
                     }
 
                     CheckBox {
                         id: framePacingCheck
-                        hoverEnabled: true
+                        hoverEnabled: !SystemProperties.hoverEffectsDisabled
                         text: qsTr("Frame pacing")
                         font.pointSize:  12
                         enabled: StreamingPreferences.enableVsync
@@ -845,13 +972,13 @@ Flickable {
                         }
                         ToolTip.delay: 1000
                         ToolTip.timeout: 5000
-                        ToolTip.visible: hovered
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                         ToolTip.text: qsTr("Frame pacing reduces micro-stutter by delaying frames that come in too early")
                     }
 
                     CheckBox {
-                        hoverEnabled: true
-                        text: qsTr("Enable VRR")
+                        hoverEnabled: !SystemProperties.hoverEffectsDisabled
+                        text: qsTr("VRR")
                         font.pointSize: 12
                         enabled: StreamingPreferences.enableVsync
                         checked: StreamingPreferences.enableVrr
@@ -861,31 +988,93 @@ Flickable {
 
                         ToolTip.delay: 1000
                         ToolTip.timeout: 5000
-                        ToolTip.visible: hovered
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                         ToolTip.text: enabled ?
-                                          qsTr("VRR uses paced adaptive presentation with best-effort tear avoidance. Sessions without enough refresh-rate headroom use fixed V-Sync. Borderless fullscreen is used while VRR is active.")
+                                          qsTr("VRR uses adaptive presentation in borderless fullscreen. Choose your display's full refresh rate, or a lower VRR option for more headroom or lower latency.")
                                         :
                                           qsTr("VRR requires V-Sync. Enable V-Sync to change this setting.")
                     }
                 }
 
-                CheckBox {
+                Column {
                     width: parent.width
-                    hoverEnabled: true
-                    text: qsTr("VRR smoothness")
-                    font.pointSize: 12
-                    enabled: StreamingPreferences.enableVsync &&
-                             StreamingPreferences.enableVrr
-                    checked: StreamingPreferences.vrrSmoothness
-                    onCheckedChanged: {
-                        StreamingPreferences.vrrSmoothness = checked
+                    spacing: 5
+                    visible: StreamingPreferences.enableVrr
+                    enabled: StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("VRR timing")
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
                     }
 
+                    AutoResizingComboBox {
+                        id: vrrLatencyModeComboBox
+                        textRole: "text"
+                        model: ListModel {
+                            id: vrrLatencyModeListModel
+                            ListElement {
+                                text: qsTr("Low Latency")
+                                val: StreamingPreferences.VLM_LOW_LATENCY
+                            }
+                            ListElement {
+                                text: qsTr("Balanced Target")
+                                val: StreamingPreferences.VLM_BALANCED_TARGET
+                            }
+                            ListElement {
+                                text: qsTr("Smooth")
+                                val: StreamingPreferences.VLM_SMOOTH
+                            }
+                        }
+                        currentIndex: {
+                            for (var i = 0; i < vrrLatencyModeListModel.count; i++) {
+                                if (vrrLatencyModeListModel.get(i).val === StreamingPreferences.vrrLatencyMode) {
+                                    return i
+                                }
+                            }
+                            return 1
+                        }
+                        onActivated: {
+                            StreamingPreferences.vrrLatencyMode = vrrLatencyModeListModel.get(currentIndex).val
+                        }
+                        Component.onCompleted: {
+                            recalculateWidth()
+                            languageChanged.connect(recalculateWidth)
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: StreamingPreferences.vrrLatencyMode === StreamingPreferences.VLM_LOW_LATENCY ?
+                                  qsTr("Minimizes added delay. Uneven delivery can cause more stutter or skipped frames.") :
+                              StreamingPreferences.vrrLatencyMode === StreamingPreferences.VLM_SMOOTH ?
+                                  qsTr("Uses more padding and holds it longer for steadier motion, with more input delay.") :
+                                  qsTr("Targets steadier motion with a moderate timing reserve and balanced input delay.")
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: qsTr("Applies at all VRR frame rates. Reconnect the stream after changing this setting.")
+                    }
+                }
+
+                CheckBox {
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
+                    text: qsTr("Reduce judder")
+                    font.pointSize: 12
+                    visible: StreamingPreferences.enableVrr
+                    enabled: StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
+                    checked: StreamingPreferences.smoothVrrFrameTiming
+                    onCheckedChanged: StreamingPreferences.smoothVrrFrameTiming = checked
+
                     ToolTip.delay: 1000
-                    ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
-                    ToolTip.text: enabled ? qsTr("Allows VRR to retain one additional frame during short rendering stalls. This can reduce stutter but may add up to one frame of latency.")
-                                              : qsTr("Enable V-Sync and VRR to use the smoothness queue.")
+                    ToolTip.timeout: 10000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Gently adjusts when frames are displayed to reduce uneven timing, using existing buffering to keep added latency low. Does not blend images or eliminate game stalls.") + "\n\n" +
+                                  qsTr("Reconnect the stream after changing this setting.")
                 }
 
                 CheckBox {
@@ -904,7 +1093,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: enabled ?
                                       qsTr("The stream will be HDR-capable, but some games may require an HDR monitor on your host PC to enable HDR mode.")
                                     :
@@ -913,7 +1102,7 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsGroupBox {
 
             id: audioSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
@@ -984,7 +1173,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("You must restart any game currently in progress for this setting to take effect")
                 }
 
@@ -1001,13 +1190,13 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Mutes Moonlight's audio when you Alt+Tab out of the stream or click on a different window.")
                 }
             }
         }
 
-        GroupBox {
+        SettingsGroupBox {
             id: hostSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
@@ -1041,13 +1230,13 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("This will close the app or game you are streaming when you end your stream. You will lose any unsaved progress!")
                 }
             }
         }
 
-        GroupBox {
+        SettingsGroupBox {
             id: uiSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
@@ -1290,6 +1479,106 @@ Flickable {
                     }
                 }
 
+                Label {
+                    width: parent.width
+                    id: uiScaleTitle
+                    text: qsTr("GUI scale")
+                    font.pointSize: 12
+                    wrapMode: Text.Wrap
+                    visible: SystemProperties.supportsUiScale
+                }
+
+                AutoResizingComboBox {
+                    id: uiScaleComboBox
+                    visible: SystemProperties.supportsUiScale
+                    textRole: "text"
+                    model: ListModel {
+                        id: uiScaleListModel
+                    }
+
+                    Component.onCompleted: {
+                        var scales = [100, 125, 150, 175, 200, 250, 300, 350, 400]
+                        currentIndex = 0
+                        for (var i = 0; i < scales.length; i++) {
+                            uiScaleListModel.append({ "text": qsTr("%1%").arg(scales[i]), "val": scales[i] })
+                            if (scales[i] === StreamingPreferences.uiScale) {
+                                currentIndex = i
+                            }
+                        }
+
+                        activated(currentIndex)
+                    }
+
+                    // ::onActivated must be used, as it only listens for when the index is changed by a human
+                    onActivated: {
+                        var scale = uiScaleListModel.get(currentIndex).val
+                        if (StreamingPreferences.uiScale !== scale) {
+                            StreamingPreferences.uiScale = scale
+                            promptRestartIfNeeded()
+                        }
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Increases the size of text and controls in Moonlight, such as when using a TV. Requires restarting Moonlight.")
+                }
+
+                CheckBox {
+                    id: disableHoverCheck
+                    width: parent.width
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
+                    text: qsTr("Disable mouse hover effects")
+                    font.pointSize: 12
+                    checked: StreamingPreferences.disableHover
+                    onToggled: {
+                        StreamingPreferences.disableHover = checked
+                        promptRestartIfNeeded()
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Prevents controls from highlighting under the mouse cursor. Useful when navigating with a gamepad or remote. Requires restarting Moonlight.")
+                }
+
+                CheckBox {
+                    id: tvModeCheck
+                    width: parent.width
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
+                    text: qsTr("TV mode")
+                    font.pointSize: 12
+                    checked: StreamingPreferences.tvMode
+                    onToggled: {
+                        StreamingPreferences.tvMode = checked
+
+                        // Offer a larger scale when enabling TV mode on a 4K or larger display
+                        if (checked && !SystemProperties.tvModeOverridden &&
+                                SystemProperties.supportsUiScale && StreamingPreferences.uiScale === 100 &&
+                                Screen.width * Screen.devicePixelRatio >= 3840) {
+                            tvModeScaleDialog.open()
+                        }
+                        else {
+                            promptRestartIfNeeded()
+                        }
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("A GUI suited to gamepads and TVs. Runs fullscreen with larger controls and no mouse hover effects. Requires restarting Moonlight.")
+                }
+
+                Label {
+                    width: parent.width
+                    text: SystemProperties.tvMode ?
+                              qsTr("TV mode is currently turned on by the --tv-mode command line option.") :
+                              qsTr("TV mode is currently turned off by the --no-tv-mode command line option.")
+                    font.pointSize: 9
+                    wrapMode: Text.Wrap
+                    visible: SystemProperties.tvModeOverridden
+                }
+
                 CheckBox {
                     id: connectionWarningsCheck
                     width: parent.width
@@ -1325,7 +1614,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Updates your Discord status to display the name of the game you're streaming.")
                 }
 
@@ -1341,7 +1630,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Prevents the screensaver from starting or the display from going to sleep while streaming.")
                 }
             }
@@ -1351,12 +1640,13 @@ Flickable {
     Column {
         padding: 10
         rightPadding: 20
-        anchors.left: settingsColumn1.right
+        x: singleColumn ? 0 : settingsColumn1.width
+        y: singleColumn ? settingsColumn1.height : 0
         id: settingsColumn2
-        width: settingsPage.width / 2
+        width: singleColumn ? settingsPage.width : settingsPage.width / 2
         spacing: 15
 
-        GroupBox {
+        SettingsGroupBox {
             id: inputSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
@@ -1369,7 +1659,7 @@ Flickable {
 
                 CheckBox {
                     id: absoluteMouseCheck
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     width: parent.width
                     text: qsTr("Optimize mouse for remote desktop instead of games")
                     font.pointSize:  12
@@ -1380,7 +1670,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 10000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("This enables seamless mouse control without capturing the client's mouse cursor. It is ideal for remote desktop usage but will not work in most games.") + " " +
                                   qsTr("You can toggle this while streaming using Ctrl+Alt+Shift+M.") + "\n\n" +
                                   qsTr("NOTE: Due to a bug in GeForce Experience, this option may not work properly if your host PC has multiple monitors.")
@@ -1392,7 +1682,7 @@ Flickable {
 
                     CheckBox {
                         id: captureSysKeysCheck
-                        hoverEnabled: true
+                        hoverEnabled: !SystemProperties.hoverEffectsDisabled
                         text: qsTr("Capture system keyboard shortcuts")
                         font.pointSize: 12
                         enabled: SystemProperties.hasDesktopEnvironment
@@ -1400,7 +1690,7 @@ Flickable {
 
                         ToolTip.delay: 1000
                         ToolTip.timeout: 10000
-                        ToolTip.visible: hovered
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                         ToolTip.text: qsTr("This enables the capture of system-wide keyboard shortcuts like Alt+Tab that would normally be handled by the client OS while streaming.") + "\n\n" +
                                       qsTr("NOTE: Certain keyboard shortcuts like Ctrl+Alt+Del on Windows cannot be intercepted by any application, including Moonlight.")
                     }
@@ -1463,7 +1753,7 @@ Flickable {
 
                 CheckBox {
                     id: absoluteTouchCheck
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     width: parent.width
                     text: qsTr("Use touchscreen as a virtual trackpad")
                     font.pointSize:  12
@@ -1474,13 +1764,13 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("When checked, the touchscreen acts like a trackpad. When unchecked, the touchscreen will directly control the mouse pointer.")
                 }
 
                 CheckBox {
                     id: swapMouseButtonsCheck
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     width: parent.width
                     text: qsTr("Swap left and right mouse buttons")
                     font.pointSize:  12
@@ -1492,7 +1782,7 @@ Flickable {
 
                 CheckBox {
                     id: reverseScrollButtonsCheck
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     width: parent.width
                     text: qsTr("Reverse mouse scrolling direction")
                     font.pointSize: 12
@@ -1504,7 +1794,7 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsGroupBox {
             id: gamepadSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
@@ -1527,7 +1817,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("This switches gamepads into a Nintendo-style button layout")
                 }
 
@@ -1543,14 +1833,14 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Forces a single gamepad to always stay connected to the host, even if no gamepads are actually connected to this PC.") + " " +
                                   qsTr("Only enable this option when streaming a game that doesn't support gamepads being connected after startup.")
                 }
 
                 CheckBox {
                     id: gamepadMouseCheck
-                    hoverEnabled: true
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     width: parent.width
                     text: qsTr("Enable mouse control with gamepads by holding the 'Start' button")
                     font.pointSize: 12
@@ -1573,13 +1863,13 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Allows Moonlight to capture gamepad inputs even if it's not the current window in focus")
                 }
             }
         }
 
-        GroupBox {
+        SettingsGroupBox {
             id: advancedSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
@@ -1774,7 +2064,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: enabled ?
                                       qsTr("Good for streaming desktop and text-heavy games, but not recommended for fast-paced games.")
                                     :
@@ -1796,7 +2086,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("This unlocks extremely high video bitrates for use with Sunshine hosts. It should only be used when streaming over an Ethernet LAN connection.")
                 }
 
@@ -1844,7 +2134,7 @@ Flickable {
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Display real-time stream performance information while streaming.") + "\n\n" +
                                   qsTr("You can toggle it at any time while streaming using Ctrl+Alt+Shift+S or Select+L1+R1+X.") + "\n\n" +
                                   qsTr("The performance overlay is not supported on Steam Link or Raspberry Pi.")

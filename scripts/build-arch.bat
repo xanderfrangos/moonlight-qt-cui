@@ -120,6 +120,15 @@ if defined CI_VERSION (
     set /p VERSION=<%SOURCE_ROOT%\app\version.txt
 )
 
+rem MSI compares only the first three ProductVersion fields, so VRR releases
+rem cannot stay at 6.1.0.0. Map CI_VERSION 6.1.0-vrr17 to PE/MSI 6.2.17.
+if not defined MOONLIGHT_PE_VERSION if defined CI_VERSION (
+    for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "if ($env:CI_VERSION -match '-vrr(\d+)$') { '6.2.' + $Matches[1] }"`) do set MOONLIGHT_PE_VERSION=%%v
+    if defined MOONLIGHT_PE_VERSION (
+        echo Using Windows PE/MSI version !MOONLIGHT_PE_VERSION! from CI_VERSION=%CI_VERSION%
+    )
+)
+
 rem Use the correct VC tools for the specified architecture
 if /I "%ARCH%" EQU "x64" (
     rem x64 is a special case that doesn't match %PROCESSOR_ARCHITECTURE%

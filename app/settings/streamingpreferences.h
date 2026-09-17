@@ -19,6 +19,12 @@ public:
 
     void reload();
 
+    // These preferences must be applied before the QGuiApplication is created,
+    // so they can be read directly from storage without a preferences instance.
+    static int loadUiScale();
+    static bool loadDisableHover();
+    static bool loadTvMode();
+
     enum AudioConfig
     {
         AC_STEREO,
@@ -44,6 +50,21 @@ public:
         VDS_FORCE_SOFTWARE
     };
     Q_ENUM(VideoDecoderSelection)
+
+    // Persisted IDs also identify the VRR controller's timing profile. Keep
+    // the numeric values stable when changing the user-facing names.
+    enum VrrLatencyMode
+    {
+        VLM_SMOOTH = 0,
+        VLM_BALANCED_TARGET = 1,
+        VLM_LOW_LATENCY = 2,
+
+        // Source compatibility for code using the former profile names.
+        VLM_SMOOTHEST = VLM_SMOOTH,
+        VLM_BALANCED = VLM_BALANCED_TARGET,
+        VLM_LOWEST_LATENCY = VLM_LOW_LATENCY
+    };
+    Q_ENUM(VrrLatencyMode)
 
     // Mac only (for now)
     enum RendererSelection
@@ -128,7 +149,8 @@ public:
     Q_PROPERTY(bool autoAdjustBitrate MEMBER autoAdjustBitrate NOTIFY autoAdjustBitrateChanged)
     Q_PROPERTY(bool enableVsync MEMBER enableVsync NOTIFY enableVsyncChanged)
     Q_PROPERTY(bool enableVrr MEMBER enableVrr NOTIFY enableVrrChanged)
-    Q_PROPERTY(bool vrrSmoothness MEMBER vrrSmoothness NOTIFY vrrSmoothnessChanged)
+    Q_PROPERTY(int vrrLatencyMode MEMBER vrrLatencyMode NOTIFY vrrLatencyModeChanged)
+    Q_PROPERTY(bool smoothVrrFrameTiming MEMBER smoothVrrFrameTiming NOTIFY smoothVrrFrameTimingChanged)
     Q_PROPERTY(bool gameOptimizations MEMBER gameOptimizations NOTIFY gameOptimizationsChanged)
     Q_PROPERTY(bool playAudioOnHost MEMBER playAudioOnHost NOTIFY playAudioOnHostChanged)
     Q_PROPERTY(bool multiController MEMBER multiController NOTIFY multiControllerChanged)
@@ -152,6 +174,9 @@ public:
     Q_PROPERTY(WindowMode windowMode MEMBER windowMode NOTIFY windowModeChanged)
     Q_PROPERTY(WindowMode recommendedFullScreenMode MEMBER recommendedFullScreenMode CONSTANT)
     Q_PROPERTY(UIDisplayMode uiDisplayMode MEMBER uiDisplayMode NOTIFY uiDisplayModeChanged)
+    Q_PROPERTY(int uiScale MEMBER uiScale NOTIFY uiScaleChanged)
+    Q_PROPERTY(bool disableHover MEMBER disableHover NOTIFY disableHoverChanged)
+    Q_PROPERTY(bool tvMode MEMBER tvMode NOTIFY tvModeChanged)
     Q_PROPERTY(bool swapMouseButtons MEMBER swapMouseButtons NOTIFY mouseButtonsChanged)
     Q_PROPERTY(bool muteOnFocusLoss MEMBER muteOnFocusLoss NOTIFY muteOnFocusLossChanged)
     Q_PROPERTY(bool backgroundGamepad MEMBER backgroundGamepad NOTIFY backgroundGamepadChanged)
@@ -176,7 +201,11 @@ public:
     bool autoAdjustBitrate;
     bool enableVsync;
     bool enableVrr;
-    bool vrrSmoothness;
+    int vrrLatencyMode;
+    // Re-present the last frame inside a host gap longer than the panel's
+    // adaptive-refresh floor, so the panel never engages its own
+    // low-framerate compensation.
+    bool smoothVrrFrameTiming;
     bool gameOptimizations;
     bool playAudioOnHost;
     bool multiController;
@@ -206,6 +235,13 @@ public:
     WindowMode windowMode;
     WindowMode recommendedFullScreenMode;
     UIDisplayMode uiDisplayMode;
+    // GUI scale in percent. Takes effect on the next launch.
+    int uiScale;
+    // Disables hover effects in the GUI. Takes effect on the next launch.
+    bool disableHover;
+    // Controller and TV friendly GUI. Takes effect on the next launch and
+    // can be overridden with --tv-mode/--no-tv-mode.
+    bool tvMode;
     Language language;
     CaptureSysKeysMode captureSysKeysMode;
     RendererSelection rendererSelection;
@@ -217,7 +253,8 @@ signals:
     void autoAdjustBitrateChanged();
     void enableVsyncChanged();
     void enableVrrChanged();
-    void vrrSmoothnessChanged();
+    void vrrLatencyModeChanged();
+    void smoothVrrFrameTimingChanged();
     void gameOptimizationsChanged();
     void playAudioOnHostChanged();
     void multiControllerChanged();
@@ -232,6 +269,9 @@ signals:
     void enableYUV444Changed();
     void videoDecoderSelectionChanged();
     void uiDisplayModeChanged();
+    void uiScaleChanged();
+    void disableHoverChanged();
+    void tvModeChanged();
     void windowModeChanged();
     void framePacingChanged();
     void connectionWarningsChanged();

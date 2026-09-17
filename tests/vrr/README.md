@@ -1,5 +1,239 @@
 # VRR deterministic tests
 
+The interval-quality queue is now the production VRR policy (responsive
+revision 7). There is no queue-policy A/B checkbox; saved `v2queue` values are ignored and
+removed when settings are saved. Every normal session uses 0.5 ms tolerance for
+Low Latency and Balanced Target and 0.2 ms for Smooth, with severity-weighted
+preset histories and targets of
+99% / 99.5% / 99.99% for Low Latency / Balanced Target / Smooth. Their clean
+holds are 6 / 8 / 10 seconds and release speeds are 125 / 100 / 50 us per
+second. Their score histories are 1 / 2 / 5 minutes respectively. Growth
+requires both below-target quality and fresh readiness-related interval error.
+See architecture.md for the complete measurement and bounds.
+
+Historical policy implementations remain available through explicit captured
+controller parameters; session configuration no longer selects a queue-policy A/B arm.
+Both ordinary and warm fixture exports inherit the current production policy.
+Existing historical arithmetic and trace tests remain, and the revision-6/7/8
+replay support is covered by the deterministic suites below. A passing local
+replay test is not a gameplay or optical-smoothness claim. The trace queue
+concurrency test covers 60,000 rows from three
+producers plus bounded-full/empty behavior.
+
+Linux Vulkan on Wayland now attaches presentation-time feedback to each native
+surface submission and records correlated compositor timestamps for native
+cadence diagnostics, as DXGI/composition do. Production buffer adaptation uses
+readiness prediction independently of these observations. The Vulkan swapchain's fixed mode does not change when the
+controller requests a per-frame DXGI latch mode. Clock uncertainty is recorded
+in the optional schema-5 `presentation_uncertainty_us` trace column and replayed.
+Gaming Mode retains its X11/HDR Gamescope WSI path. On that path, the Vulkan
+proc-address bridge tags libplacebo's native presents with IDs and obtains actual
+presentation times through Gamescope's `VK_GOOGLE_display_timing` implementation.
+It preserves the original extension chain, semaphore waits, present results, and
+HDR swapchain. Desired presentation time remains zero, so the observer does not
+introduce a second scheduler. Gamescope timestamps are converted from monotonic
+time into the worker clock, with bounded uncertainty. Unknown IDs, stale results,
+failed presents, and the first sample after swapchain resets cannot establish a
+cadence interval. Regular X11 without the Gamescope WSI layer is still unsupported.
+Missing platform timing support leaves native display measurement unavailable
+and produces a startup warning. Production always uses submission estimates for
+its user-facing cadence report, even when native display timing is available;
+native observations remain separate tracking evidence. Readiness prediction
+independently controls padding in both directions.
+
+`tst_vulkantiming` tests this dispatch bridge with fake Vulkan entry points,
+including delayed completion IDs, clock conversion, swapchain errors, unchanged
+presentation arguments, unrelated devices, and device teardown. Build it with
+the other VRR tests when Vulkan headers are available. It does not replace a
+Gaming Mode/HDR session test against the installed Gamescope layer.
+
+`tst_waylandfeedback` uses a private in-process Wayland server, without a real
+window or GPU. It checks commit association, IDs, timestamp conversion, VRR's
+zero refresh interval, discarded frames, reset cleanup, bounded pending objects,
+timeouts, and unsupported clocks. It is built when wayland-server and SDL2 are
+available. The timing-controller suite compares delayed Wayland and DXGI feedback
+and requires identical padding and sample counts without display-hitch-driven growth.
+These checks do not replace validation during a real compositor streaming session.
+
+`tst_incomingframetiming` checks the overlay's last-30-interval population
+variance and soft score `100 / (1 + (standardDeviationMs / 6)^4)`. It covers
+low jitter remaining essentially smooth, increasing variance and stall count,
+stable 120/60/50/30/29.97 FPS, 60-to-50 transitions, exact window expiry,
+large-stall numerical stability, missing frames, timestamp resets/wrap, and
+unavailable coverage. This diagnostic does not change the controller or buffer.
+
+`tst_dxgipresent` tests the shared D3D11 native-call boundary with a fake
+swapchain, without Windows or Qt dependencies. It verifies synchronized
+`Present(1, 0)`, adaptive `Present(0, ALLOW_TEARING)`, mode transitions, legacy
+interval-zero calls, telemetry parameter agreement, and result propagation.
+It does not replace a Windows renderer build or a live scanout test.
+
+`tst_presentationclock` checks QPC scaling and the composition API's clock correlation,
+including uncertainty, stale/future events, clock reversals, and integer bounds.
+Windows builds additionally produce `compositionprobe.exe`, a manual fullscreen
+probe that opens a window only with `--run`. It shares the production presenter
+and reports independent-flip coverage, submission-to-display latency, display
+intervals, and buffer availability. For example:
+
+```powershell
+.\vrr\release\compositionprobe.exe --run --fps 116 --seconds 10 --output composition-probe.json
+```
+
+Use `compositionprobe --check` for a noninteractive runtime/driver and
+8-bit/10-bit buffer initialization check. It uses a hidden window and the
+production presenter, catching API-resolution failures without claiming scanout
+coverage. The presentation clock uses QPC scaled by its actual frequency,
+avoiding the interrupt-clock export dependency and the observed epoch mismatch.
+Regression coverage includes a 20 ms mismatch that previously made valid display
+timestamps appear future-dated; that number is a test fixture, not a correction.
+The hardware probe reports raw independent events and rejected timestamps separately.
+This setup check cannot validate visible output. Changes to surface setup must
+also exercise `--run` and inspect the displayed test image. The missing-source-
+rectangle regression passed initialization but produced zero display statistics;
+explicitly setting the full buffer rectangle restores visible content. A run
+with composition events but no independent-flip events still fails the timing
+coverage gate and must not be reported as passing that gate.
+
+It requires Windows 11 build 22000.194 or newer and driver support for independent
+flip. A successful run requires at least 90% steady-state measurement coverage
+and p99 submission-to-display below one refresh; it does not prove optical VRR,
+tear freedom, or absence of added end-to-end latency in the full application.
+The application selects this API automatically after checking OS and driver
+support, retaining DXGI presentation on unsupported systems or setup failure.
+Neither the helper nor the probe deliberately queues an extra frame period.
+
+On Linux, `tst_plvkpresentation` checks surface-mode selection. The Gamescope
+regression case exposes FIFO and Mailbox without Immediate and requires Mailbox
+with the experiment enabled, or the prior WSI FIFO mode with it disabled.
+It also covers the FIFO-only WSI compatibility path, unsupported backends, and
+preservation of ordinary Wayland and X11/KMSDRM choices. The test cannot prove
+which mode an affected device exposes or whether Gamescope displays each frame.
+
+On Linux, `tst_plvkswapchain` covers the persistent present-mode classification:
+Mailbox provides latch protection through synchronized stale-image replacement,
+while Immediate and FIFO retain software spacing. It is built when libplacebo
+development files are available. The worker tests also verify that the same
+protection request reaches preparation before acquisition and reaches Present
+unchanged after a slow preparation. These checks do not establish compositor
+or physical scanout behavior.
+
+Linux Vulkan keeps the startup-selected present mode for the lifetime of one
+persistent swapchain; per-frame latch decisions never destroy or recreate it.
+Persistent Mailbox counts as protected presentation and omits the redundant
+software spacing floor, while Immediate and FIFO retain that floor. The
+Gamescope WSI FIFO compatibility path retains its compositor-owned behavior.
+The latency presets cap adaptive padding independently of native mode: half a
+fitted source frame for Low Latency, one frame for Balanced Target, and three
+frames for Smooth in live sessions. Explicit historical replay parameters can
+retain the configured stream-rate basis. Smooth is additionally allowed up to
+24 ms, subject to queue capacity. Stale-work replacement remains a separate
+two-frame rule.
+
+New live VRR sessions always enable native adaptive-presentation permission and
+record the schema-5 `session_allow_tearing` field as true. Worker tests retain a
+test-only false fixture for historical exact replay. Set
+`MOONLIGHT_VRR_TEST_EXPORT_NO_TEAR_TRACE` to export that fixture for `vrrreplay
+--require-exact-baseline`. Replay-config tests preserve the strict DXGI argument
+contract for old captures: unlatched flags zero require explicit off permission;
+absent historical permission still requires `ALLOW_TEARING`. Native capability
+checks remain unchanged. A replay of one arm cannot model the other arm's
+driver blocking or establish optical tear freedom; that comparison needs fresh
+captures and visual checks on the affected Windows/Linux device.
+
+The FPS picker offers native VRR rates and preserves saved custom values; the
+reduced-rate Low Latency VRR recommendation has been removed. The worker no
+longer generates gap-fill repeats when new frames are unavailable.
+
+Low Latency and Balanced Target cap playout padding at 16 ms; Smooth caps it at
+24 ms. Reduce judder optionally smooths
+credible source cadence; transitions follow raw RTP slots. Historical policies remain replayable.
+For controller accuracy, use `simulation.sender_cadence.spacing_accuracy_percent`
+and `spacing_errors_over_2ms`: both long and short spacing errors count. The
+existing sender/arrival stall exclusions and denominator are unchanged. Raw
+presented jerk also includes game-driven cadence changes and is reported
+separately; it is not the interval-quality preset target.
+`configs/game-spacing-validation.json` gates the nominal production scenario
+at 99.95% spacing accuracy, the preset padding caps, p99 decode-to-submission <= 30 ms and zero
+modeled interval violations. Its injected fault scenarios gate latency and
+interval safety separately; they do not claim 99.95% under post-target faults.
+The all-arrival queue simulator uses the capture's `can_latch_present` capability;
+forcing it off invents software-floor backlog on a latch-capable session.
+
+Production sets `playout_responsive_buffer=7`: Low Latency targets 99% over
+1 minute, Balanced Target 99.5% over 2 minutes, and Smooth 99.99% over 5 minutes.
+A shortfall through 1 ms does not grow the buffer. A 1-2 ms shortfall permits
+growth only above 50% prevalence in the live window, while any shortfall over
+2 ms starts the two-second fresh-miss boost. A 500 us margin and 1 ms minimum
+remain. Version-20 five-minute raw-readiness history is diagnostic
+only; cached tails cannot grow or hold the live buffer. Recovery headroom
+speeds gradual release rather than being subtracted from readiness demand.
+Preset limits use the fitted source period in live sessions, so 120/19/30 FPS
+desktop changes cannot expand them and a below-nominal source is not clipped to
+the negotiated rate. Smoothing follows raw source slots during rate transitions
+until 200 ms of credible cadence returns; delivery learning continues against
+RTP spacing. Historical traces default the observed-period switch to zero.
+
+Windows D3D11 also enables bounded GPU-readiness adaptation. Completed
+present-ready fence waits are kept in a ten-second p99 window with a 500 us
+margin, slewed by at most 1 ms per sample and released at 250 us/s, capped at
+12 ms and one source period. The resulting lead advances render start only;
+it does not move the presentation target or turn a failed fence into a valid
+sample. `gpu_readiness_lead_us` and `gpu_readiness_applied_us` make the decision
+and measured wait visible in schema-5 traces. `playout_capacity_telemetry=1`
+also records unclamped demand when the cadence cap limits the applied buffer.
+
+Linux Vulkan uses the same bounded readiness estimator. After flushing the
+render queue, it polls the acquired libplacebo swapchain texture with
+`pl_tex_poll(..., 0)` until its GPU references are idle, with a 50 ms / 100,000
+poll bound. The shared `gpu_ready_wait_*` and completion-bound fields describe
+that CPU observation bracket; D3D11 signal/event/fence fields remain unset.
+Successful polls release the decoder surface before target waiting, while a
+timeout, device failure, or lifecycle interruption abandons the image and is
+never used as a readiness-training sample. Failed poll timestamps remain
+available for diagnosis but leave `gpu_ready_timing_valid=0`. Replay applies
+Vulkan-specific poll/result validation instead of the D3D11 HRESULT/fence
+audit.
+
+Historical production sets `playout_prediction_only=1`: readiness prediction controls both
+growth and release, independently of display feedback. Required protection is
+readiness p99.95 plus any recent readiness-miss boost, with 3 ms of headroom.
+Growth is bounded at 500 us per update; gradual release requires warmed readiness
+history, not native confirmation. The existing five-minute readiness window
+still ages burst history and cached samples. Intentional pacing, acquisition
+waits and post-submission display delay do not become more readiness demand.
+
+Display observations cannot change compositor lead or the scanout floor in
+this policy. They remain optional trace/cadence diagnostics, with absent display
+events reported as unavailable or through separately labeled submission
+estimates. The selected latency preset still limits the allowed padding. The
+historical version-18 profiles isolate that policy from native-hitch estimates;
+current version-20 diagnostics cannot hold the live buffer high. The three-frame queue
+and preset padding caps are unchanged. Missing `playout_prediction_only` defaults to zero;
+the historical native-hitch and combined-feedback policies remain replayable.
+Controller regressions cover growth and later release without display events,
+delivery/render/scheduler faults, startup without double-counted protection,
+latency/spacing bounds, and identical scheduling despite display-only hitches.
+`--require-exact-baseline` selects that captured policy; an ordinary replay or
+the `session-policy` scenario selects the current production policy instead.
+`configs/responsive-buffer-stress.json` covers nominal, decision, preparation,
+submission and scheduler-burst scenarios with explicit latency and interval
+bounds. Deterministic desktop fixtures additionally require clean 120/19/30 FPS
+transitions to remain at 1 ms, real faults to acquire protection, and recovery
+within seconds across all presets with smoothing enabled and disabled.
+The spacing lifecycle audit accepts a zero correction floor only when the
+reconstructed controller also disables that software floor. It still validates
+the deficit, wait ordering, and any required nonzero floor.
+
+For a 3 ms sweep, report `simulation.sender_cadence.client_spacing_pairs`,
+`client_spacing_errors_over_3ms`, `client_spacing_accuracy_percent`, and
+`client_spacing_error_us`. These additive fields preserve the older 2 ms metrics.
+They exclude source gaps over 25 ms (reported as `source_stall_pairs`) but include
+long network/decode arrival gaps. They score submission timing, not confirmed
+native display intervals; report native sample/miss coverage separately before
+making a 99.95% visible-smoothness claim. Use gameplay captures for gameplay
+optimization, not desktop/idle sessions. Hold publication if a requested latency
+and smoothness target has not been established.
+
 The VRR test tree is opt-in so regular application and package builds do not
 gain test targets. From an out-of-tree build directory, configure it with:
 
@@ -20,6 +254,19 @@ create an SDL window, decoder, renderer, network connection, or Qt event loop.
 The policy executable is an app-less QtTest binary and only compiles the pure
 FPS policy source.
 
+`vrrqueuesim` complements the fixed-lifecycle replay by sorting every row of
+an expanded trace back into producer-arrival order and replaying the bounded
+worker queue around the real timing controller. It uses the capture's ordered
+preparation and Present-call durations, reports capacity and stale drops, and
+scores source-spacing error, presentation jerk, queue depth, and latency. Use
+it when a candidate changes worker occupancy or would retain frames that the
+recorded run discarded:
+
+```sh
+python scripts/decode-vrr-trace.py capture.vrrtrace capture.csv
+./vrrqueuesim capture.csv --config configs/queue-controller-sweep.json
+```
+
 The timing-controller executable also exercises cumulative RTP cadence
 learning for every integer rate from 30 through 116 FPS on a 120 Hz-quantized
 capture clock, a continuous one-FPS-per-second sweep in both directions,
@@ -33,8 +280,9 @@ half-scanout budget, while stable render work remains outside that ceiling.
 `LiGetMicroseconds()` epoch. It verifies the bounded worker queue,
 drop accounting, minimize/restore discard and fresh-frame behavior, deferred
 AVFrame lifetime, presenter eligibility rejection, display-period spacing,
-one-source-period low-latency staleness and the opt-in additional smoothness
-period,
+two-source-period low-latency staleness and the opt-in additional smoothness
+period, including regression coverage that ordinary one-period worker
+occupancy does not manufacture a content drop,
 native submission timing across pre-submit work and blocking
 returns, clean-close trace accounting, explicit window-state rebase
 provenance, and the minimal prepare/present/cancel contract. D3D11 completes
@@ -78,7 +326,9 @@ Schema 5 retains the schema-4 tear signals and adds the complete resolved
 controller parameter set, controller call duration and learned-model state,
 stale-check age, render/target wait boundaries, both spacing-floor checks,
 correction-wait boundaries, explicit worker-requested rebase cause, and
-terminal time. Header-resolved schema-5 extensions also record the native
+terminal time. The parameter set includes the source-frame-relative playout
+cap so new captures distinguish the 0.5/1/2-frame presets while older headers
+retain their historical default. Header-resolved schema-5 extensions also record the native
 queue policy, render baseline, render-tail insurance, pacing-latency budget,
 presentation backend/result, signed `GetLastPresentCount()` and
 `GetFrameStatistics()` results, the exact DXGI Present sync interval/flags,
@@ -311,8 +561,8 @@ External high-speed capture remains the authority for validating a suspected
 hardware/driver failure.
 
 Set `MOONLIGHT_VRR_DEEP_TRACE=1` for native flip diagnosis. It adds native-call
-timing, DXGI present/frame-statistics values, and `gpu_ready_*` timing that
-proves queued rendering completed inside preparation and before `Present()`.
+timing, backend presentation values, and `gpu_ready_*` timing that proves
+queued rendering completed inside preparation and before the native submit.
 The CPU return from the fence wait is only an upper bound on the actual GPU
 completion instant. D3D11 records the fence-signal start and a bracketed
 `GetCompletedValue()` poll, including the exact target and completed values.
@@ -337,9 +587,17 @@ D3D11 reuses the previous post-Present observation for the diagnostic
 before-state, so deep mode does not add synchronous DXGI queries around
 `Present()`; the essential post-Present submission/latch queries are collected
 in both modes.
-Diagnostic readiness requires exact `S_OK` results for both fence HRESULTs,
-`WAIT_OBJECT_0`, valid GPU-ready timing, and a reproducible completion bracket
-on every presented frame. It rejects any row where the
+On Linux Vulkan, the same `gpu_ready_*` columns carry the libplacebo
+`pl_tex_poll(..., 0)` observation around the acquired swapchain texture. Vulkan
+leaves D3D11 signal/event/fence values unset; result 0 means the texture became
+idle, 1 is the bounded timeout (50 ms or the poll-iteration guard), and 2 is
+an interrupted or failed observation.
+Only result 0 sets `gpu_ready_timing_valid`; failed rows retain their raw poll
+timestamps for diagnosis and never enter readiness training. Replay audits
+these rows with Vulkan-specific result, ordering, and completion-bound rules.
+For D3D11, diagnostic readiness requires exact `S_OK` results for both fence
+HRESULTs, `WAIT_OBJECT_0`, valid GPU-ready timing, and a reproducible completion
+bracket on every presented frame. It rejects any row where the
 signal/poll/wait order falls outside preparation, the recorded lower/upper
 bound cannot be derived from the raw observations, or the reported wait
 duration disagrees with its start/end timestamps. It likewise verifies that
@@ -504,8 +762,9 @@ The summary's `capture.telemetry_coverage` object distinguishes unavailable
 native diagnostics from valid zero-duration measurements. Deep-trace native
 Present and GPU-readiness distributions contain only samples whose matching
 validity bit was recorded. GPU completion is reported as lower/upper bounds
-and an uncertainty distribution, separate from the exact CPU fence-wait
-duration. The same object reports exact fence/wait result counts, partial
+and an uncertainty distribution, separate from the exact CPU completion-wait
+duration (a D3D11 fence wait or Vulkan texture poll). The same object reports
+exact fence/wait result counts, partial
 attempts, stage-relationship failures, and presented-frame exact-success
 coverage. `diagnostic_readiness` applies explicit gates rather
 than treating a successful process exit as proof: schema/sequence integrity,
@@ -646,9 +905,168 @@ timeline for that display; controller/cadence results remain available:
 .\vrr\release\vrrreplay.exe capture.vrrtrace --display-hz 120 --stream-fps 116
 ```
 
+VRR uses adaptive timestamp playout with a **Reduce judder** preference
+under the VRR checkbox. It defaults to enabled, preserving saved preference choices,
+and is snapshotted for the stream, including decoder resets. The stream CLI
+can override it with `--vrr-smooth-frame-timing` or
+`--no-vrr-smooth-frame-timing` without saving the override. The label rename
+preserves the `smoothvrrframetiming` saved preference key.
+
+Disabling smoothing follows mapped RTP intervals more closely. It disables
+both `controller.playout_metronome_enabled` and
+`controller.playout_smoothing_gain_per_mille`; turning off only the metronome
+would leave the production gain smoother active. Adaptive jitter buffering, clock
+tracking, readiness constraints, and refresh-spacing protection remain active.
+Consequently, this mode preserves feasible timestamp variation but does not
+promise exact game presentation timing: the supplied timestamps may reflect
+capture timing, and late frames, display limits, or buffering/clock corrections
+can still change an interval. The deterministic timestamp-mode test preserves
+alternating source intervals under independent delivery jitter and verifies
+that a late-frame catch-up burst still respects the display floor.
+
+The resolved parameters are already recorded in schema-5 traces, so the
+recorded mode is recoverable without a new trace field. An exact baseline
+must still pass before treating a capture as an A/B reference. The replay's
+`session-policy` scenario continues to select the default smoothed policy;
+explicitly set both parameters above to zero to evaluate timestamp-following
+candidates.
+
+With smoothing enabled, production uses the gain smoother: it advances by a
+tracked source period and pulls 50 percent toward the mapped timestamp slot,
+with a 10-percent period EMA and a 2 ms positive adjustment cap. The cap does
+not bound total client latency. The metronome remains disabled. The production
+controller test covers approximately 77 FPS host jitter in all three timing
+presets, smoothing off/on, a host stall, a late wake, and a change to 60 FPS.
+It requires reduced interval jerk, bounded latency and queue occupancy, and
+settling at the new rate without persistent smoothing debt.
+
+The retired metronome policy is available for replay with
+`controller.timestamp_playout_enabled` and
+`controller.playout_metronome_enabled`. The sender's RTP time is mapped into
+the local clock, and the presented slot advances from the last presented slot
+by the fitted source period to reduce the influence of host stamp wobble and
+arrival jitter on presentation intervals. The tick period is the cumulative
+endpoint fit filtered over `playout_metronome_period_window_frames` before the negotiated-rate
+floor is applied (clamping each noisy fit first biased the mean above the
+true period and the tick drifted). Phase is corrected toward the mapped slot
+by a bounded step: lag the schedule knowingly took on (a late frame presented
+when ready, a floor wait) and known movement of the mapping (offset tracking,
+delay attack or release) are owed exactly and paid at up to
+`playout_phase_step_period_per_mille` of a period per frame; whatever remains
+is a slow filtered residual (`playout_phase_residual_window_frames`, a
+`playout_phase_deadband_us` deadband, `playout_phase_step_minimum_us` steps)
+that follows clock drift without chasing stamp wobble. A frame that arrives
+after its tick presents when ready, since on a VRR panel one interval
+stretched by the shortfall is less visible than a repeated frame, and the
+schedule continues from that slot. `missed_ticks` records whole periods of
+shortfall; the worker drops a frame that missed a tick only when a fresher
+successor is already queued, and otherwise only past a four-period age
+bound. An error beyond `playout_smoothing_snap_per_mille` of a period, a
+material rate change, or a source gap restarts the metronome on the raw
+slot. This metronome policy remains selectable for older captures; production
+uses the gain smoother described above.
+
+The playout delay is the cushion in front of the tick and is self-calibrated
+per source-rate band (`controller.playout_delay_adaptive`): each band, the
+fitted source rate divided by `playout_band_width_hz`, keeps a reservoir of
+frame lateness against the slot the metronome is trying to reach (the tick
+with its outstanding lag excluded, so a schedule still walking back a late
+frame does not hide lateness from the calibrator), and targets the
+`playout_delay_percentile_per_mille` lateness (p99.9) plus
+`playout_delay_margin_us`. The frame that ends an arrival stall and the
+frames the stall held up behind it (`playout_stall_burst_exclusion`, the gap
+in source periods) are excluded: their lateness is the stall's backlog, not
+the link's jitter. A band starts at the larger of `playout_delay_start_us`
+and `playout_delay_start_period_per_mille` of the source period (two
+periods, so a fresh session is never short of cushion), rises at most
+`playout_delay_attack_us` per frame, releases at most
+`playout_delay_release_us` per frame and only after
+`playout_delay_release_samples`, and is capped at the larger of
+`playout_delay_maximum_us` and `playout_delay_maximum_period_per_mille` of
+the period, then by `playout_delay_cap_source_period_per_mille` when the
+current preset supplies it. A cap that shrinks with the fitted period is
+approached at the release rate. The former "smoothness" option, one extra source interval of
+queue age and one extra source period of render-lead budget, was retired: on
+a render-bound client it deepened the standing backlog and saturated the
+worker without reducing hitches. Captures made under it still replay with
+that budget through `additional_queued_frame` and
+`pacing_latency_queue_mode_extra`, which the production policy sets to zero.
+A band unused for `playout_band_stale_us` re-converges from the start value.
+The production policy sets `playout_band_width_hz` wider than any source
+rate so the whole session shares one reservoir: separate per-band delays
+each opened at the start value and moved the presented slot by their
+difference whenever the fitted rate crossed a band edge. Under the metronome,
+`playout_motion_deadband_enabled` compares each stamp with the grid: a
+deviation inside the learned jitter bound (`playout_motion_percentile` of
+recent in-band deviations scaled by `playout_motion_gain_per_mille`, held
+between `playout_motion_floor_us` and
+`playout_motion_ceiling_period_per_mille` of the period) is absorbed by the
+grid, and a larger one presents on its stamp and restarts the grid there. A
+provisional cadence segment after a major departure must span
+`rate_candidate_minimum_us` of sender time before its fit replaces the source
+rate, so a few long stamps are a hitch rather than a new rate.
+With `playout_delay_adaptive` off, `controller.source_playout_delay_us` is
+the fixed delay. The applied delay is recorded per frame as
+`playout_delay_us` and the tick's lag behind the raw slot as
+`cadence_smoothing_us`. The mapping offset is the windowed minimum of
+decode-complete minus RTP time (`playout_offset_window_us`), slewed at most
+`playout_offset_slew_us` per frame. A frame whose mapped source time sits
+more than a period in the future is waited for; only
+`playout_offset_reseed_frames` consecutive such frames re-seed the mapping,
+so one early outlier cannot make every following frame late. Under latched
+presentation the production policy imposes no software spacing floor
+(`latched_floor_disabled`): the flip queue orders those presents, and a
+floor of one display period plus a guard could never sustain a source at the
+refresh rate. No learned readiness reserve is applied or reported. All
+resolved values are captured in the trace parameters, so exact replay and
+candidate sweeps use the production policy without inferring it from the
+queue-mode flag. Note that a `--set` or config scenario is treated as
+customized and does not inherit the session policy: a sweep must set
+`controller.timestamp_playout_enabled=1` and
+`controller.playout_metronome_enabled=1` explicitly alongside the delay.
+The adaptive readiness parameters remain available for replaying older
+captures and for explicit experiments.
+
+New live sessions enable `playout_offset_cadence_gate=1` and
+`playout_offset_slew_us_per_second=2400`, capped by
+`playout_offset_maximum_step_us=100`, with
+`playout_offset_source_clock=1`. Cadence breaks retire the observation
+window without reseeding either the applied mapping or the interval buffer.
+Ineligible samples cannot train the new floor. Monotonic unwrapped RTP time
+controls aging and slew, preventing local decode/renderer/GPU backlog from steering the
+source mapping; the value being mapped is still readiness minus RTP. A zero
+decode-clock switch preserves exact replay of the initial worker-clock captures,
+and zero-valued gate/rate defaults preserve older exact replay. The
+per-frame `playout_offset_slew_us` setting is used only with the new rate at zero.
+
+The added controller fixtures cover both slew directions at 30/60/120/240 FPS,
+fractional correction, gap/clock-reset behavior, a poisoned transition minimum,
+and unchanged steady targets/padding across all presets. Latch-capable and
+non-latch-capable fixtures cover the shared policies used by DXGI/Vulkan Mailbox
+and Vulkan Immediate/FIFO respectively; they do not emulate a compositor or GPU.
+The worker capture fixture checks the new serialized parameters, and replay
+config tests cover round trips, legacy absence and invalid values. These new
+fixtures have not been executed in the Patchwork sandbox.
+
+`configs/offset-recovery-60-on-120.json` pins the supplied September 15 trace's
+captured controller settings, with separate gate-only, elapsed-only and combined
+scenarios. It intentionally leaves GPU-readiness adaptation at the capture's
+old setting so this comparison isolates the mapper. It does not inherit today's
+production session settings. Run an exact baseline first; see
+[the investigation note](../../docs/vrr-offset-recovery.md) for the required
+current-policy and native Linux follow-up. No candidate results are claimed.
+
 The replay is intentionally a fixed-recorded-admission model: it preserves the
 session's actual queue admission/drop and presentation lifecycle while using
-the real arrival timestamps and exogenous renderer costs. This makes
+the real arrival timestamps and exogenous renderer costs. One lifecycle instant
+is re-derived rather than copied: the candidate's decision time follows the
+worker-occupancy model (`decision_time_model`), which places it at the
+simulated previous submission plus the recorded post-submission gap whenever
+the recorded worker was still busy when the frame arrived, and at the recorded
+instant otherwise. Copying the recorded instant verbatim clamped every
+candidate that presented earlier than the recording to a stale "now" and
+manufactured spacing errors that the live worker would not produce. The
+unchanged reference policy still reproduces the recorded instant exactly. This makes
 timing-policy A/B results deterministic and permits an exact unchanged-policy
 baseline. A controller change that also changes decoder backpressure, queue
 admission, present-mode cost, or host/network latency still needs a live
@@ -743,6 +1161,16 @@ A future policy should derive them from measured scheduler wake error,
 present-ready uncertainty, and native presentation/scanout evidence so latch
 selection reflects whether the current system can reliably use its available
 headroom.
+
+Adaptive presentation also requires a coherent source phase. After startup,
+a cadence-rate change, or a source-phase discontinuity, production uses the
+latched path until `controller.cadence_stability_latch_frames` consecutive
+clean cadence observations have completed (64 by default). This prevents a
+source hitch followed by a decoder burst from placing multiple immediate
+presents into one physical scanout interval. Stable sources with sufficient
+headroom return to adaptive presentation after the recovery window. Older
+schema-5 captures that lack this parameter replay it as zero so their original
+presentation decisions remain exact.
 
 `display.present_transport_us` is also the deterministic phase-sweep control.
 Sweep it from zero through one scanout period to test whether a candidate
@@ -869,6 +1297,68 @@ Use `replay-scenarios.example.json` as the batch format. Top-level parameters
 are inherited by each named scenario, scenario parameters override them, and
 CLI `--set` values have final precedence. Assertions use dotted result paths
 and `<`, `<=`, `==`, `>=`, or `>`; a failed assertion exits with code 4.
+Batch scenarios run concurrently because each scenario is independent. The
+automatic limit is the available logical-processor count, capped at sixteen;
+use `--jobs N` to select an explicit limit or `--jobs 1` to force serial
+execution. Results remain in configuration order regardless of completion
+order, and the batch summary records `parallel_jobs` and `elapsed_ms`.
+Distribution summaries include p99.5, p99.9, and p99.95 in addition to the
+standard p50/p90/p95/p99 values, so extreme-tail sweeps do not require a large
+per-frame timeline.
+
+Every summary also carries sender-spacing cadence: each consecutive pair of
+presented frames is compared against the sender's own RTP spacing, excluding
+pairs whose sender or arrival interval exceeds 25 ms, and a pair presented more
+than 2 ms wider than the sender spacing is a hitch attributed to late arrival
+(ready offset above the playout delay), a render-lead jump, the display floor,
+or other. The same metric is computed for the recorded session
+(`original_sender_*`, `observed.sender_cadence`), the candidate
+(`replay_sender_*`, `simulation.sender_cadence`), and a stock-style
+present-on-render emulation built from decode completion plus the recorded
+prepare and present durations (`stock_sender_*`). Because the replay's own
+band residual measures each policy against its own source clock, use the
+sender-spacing fields to compare policies with different clock models.
+
+The sender-spacing fields score fidelity to the host's stamps, which is not
+the same as smoothness: host presentation stamps jitter frame to frame (about
++-2 ms at 1440p and +-5 ms at 4K on the reference rig) even for a game at a
+steady rate, so a policy that copies them exactly scores near zero there
+while showing that jitter on the panel. The `*_presented_jerk_*` fields
+(`presented_jerk_us` distribution, `presented_jerk_over_2ms_per_mille`) score
+the evenness of what was shown: the change in presented interval from one
+pair to the next, over the same stall-excluded pairs. That is the quantity
+the viewer perceives as stutter and the one to optimize; the sender-spacing
+fields remain the check that the policy is not drifting away from the
+source. `scripts\vrr-sweep-table.ps1` prints both.
+
+The production policy smooths the cadence
+(`controller.playout_smoothing_gain_per_mille`, 200): each target advances
+from the previous presented slot by a tracked source period (an EMA with
+`playout_smoothing_period_alpha_per_mille`, re-seeded from the cumulative
+rate fit when they disagree by a quarter) and pulls toward the frame's raw
+mapped slot by the gain, so a 5 ms stamp excursion moves the slot 1 ms.
+The lag behind the raw slot is capped at `playout_smoothing_max_lag_us`
+(6 ms); a rebase, material rate change, phase discontinuity, host stall or
+burst, or an error over `playout_smoothing_snap_per_mille` of a period snaps
+back to the raw slot. The calibrator sees lateness against the smoothed slot
+so the delay pays for the schedule running ahead of a late stamp. Gain 0
+disables it; `tests\vrr\configs\playout-smoothing-sweep.json` sweeps gain,
+period alpha, lag cap and delay maximum. The calibrated period EMA is 100 per
+mille and the adaptive-delay start and cap are 950 per mille of one source
+period. Across the identifiable sustained-gameplay corpus this policy reduced
+presented pairs with over 2 ms of jerk on every trace without saturating the
+worker model.
+`replay_worker_saturated` is set when the worker-occupancy decision model
+shifts the median decision by more than a source period: the candidate keeps
+the single worker busier than the source cadence, the live worker would shed
+frames through its stale check, and this fixed-admission replay lets latency
+run away instead, so treat that scenario's numbers as invalid. The playout
+delay sweeps are `tests\vrr\configs\playout-delay-sweep-lowlatency.json`
+(the production budget) and `playout-delay-sweep-smoothness.json` (the retired
+extra render-lead budget, which saturates render-bound captures);
+`mode-compare.json` pits the two retired mode policies against the single
+production policy. Run one with `--config ... --jobs 0 --output sweep.json`
+and print the table with `scripts\vrr-sweep-table.ps1 sweep.json`.
 
 `mode: fixed` preserves recorded admission and lifecycle for rigorous A/B
 controller comparisons. `mode: worker` requires schema 5 and audits recorded
@@ -883,3 +1373,108 @@ To include these targets in a top-level developer build, the integration
 project should add `tests` to its `SUBDIRS` only inside
 `contains(CONFIG, tests)`. That wiring is intentionally outside this test-only
 directory.
+
+
+### Per-frame production presentation protection
+
+Production sets `playout_adaptive_only=0` and `playout_per_frame_latch=2`.
+Slots closer than a display period plus guard plus safety headroom use native protection when the
+presenter supports it, removing the software floor for that slot. DXGI can
+alternate synchronized and tearing presents; composition provides native
+ordering without DXGI flags. The controller suite checks bounded latency at
+120 FPS / 120 Hz, recovery from late submissions, and return to adaptive mode
+with source-rate headroom. Explicit adaptive-only and rate-protection policies
+remain covered for historical replay.
+
+Revision 2 restores VRR12's 225 us entry / 400 us exit headroom thresholds
+on the planned slot. Revision 1 retains the historical period-plus-guard rule;
+revision 0 retains the cadence-based policy. Boundary tests exercise both
+thresholds across all presets and 60/120/144/165/240/360 Hz. The 116/120 fixture
+checks restored protection with unchanged planned deadlines and buffer depth,
+alongside the explicit revision-1 result. These checks do not measure native
+blocking or physical tearing. Use the rebuilt replay for revision-2 captures.
+
+On persistent Vulkan Immediate/FIFO, `canLatchAdaptivePresent()` stays false.
+The software floor includes the entry margin instead of requesting a mode
+change. Tests exercise this floor across the same presets/refresh rates,
+including late submissions. Persistent Mailbox supplies native protection.
+The Vulkan selection/capability suites cover those distinctions; no per-frame
+request recreates or replaces the swapchain. Native Linux visual behavior
+still requires a live Linux test.
+
+Display timing evidence is explicit: `latch_time_kind` is 0 (unavailable),
+1 (refresh reference), or 2 (display event). Production enables
+`controller.playout_require_display_events=1`; DXGI refresh references cannot
+supply latency learning, native hitch adaptation, or measured client cadence.
+Submission estimates supply a separately labeled cadence percentage while
+verified events are unavailable. Windows composition records backend value 3
+and independent-flip display events, without populating DXGI-specific fields.
+Production scheduling and buffer adaptation ignore both display events and
+submission-interval estimates; readiness prediction is their only feedback.
+Old captures omit that controller field and retain zero for exact historical
+replay. A historical exact match does not validate refresh-reference timestamps
+as actual display events. Regression tests cover the shared refresh timestamp
+from the Windows-host capture and genuine delayed display events separately.
+
+### Gamescope composition checkbox
+
+`tst_gamescopecomposition` validates the connection-scoped compositor guard:
+unchecked/Desktop no-ops, readback before mutation, preservation of an already
+forced setting, restoration on normal exit and partial setup failure, malformed
+zero-exit replies, and retry after failed restoration. It uses injected commands
+and does not claim live Gamescope smoothness validation.
+
+Linux current-policy replay selects readiness-attributed growth for a declared
+Vulkan backend (`playout_readiness_hitch_threshold_us=2000`). Exact replay
+retains recorded parameters, including the historical zero default. When
+isolating this change with a custom scenario, provide the complete captured
+controller snapshot before overriding the threshold: partial custom scenarios
+start from generic defaults, not the captured policy. Readiness-attribution
+and cache isolation regressions are in `tst_vrrtimingcontroller`.
+
+`tst_gamescoperepaint` uses an isolated Wayland protocol server to verify the
+optional per-frame Gamescope repaint helper. It covers request acknowledgements,
+coalescing/backpressure, protocol absence/rejection, disconnect, and bounded
+teardown without touching a real compositor. It does not establish display
+cadence or equivalence with Steam's performance overlay.
+# Observed latency comparison
+
+See [the capture procedure](../../docs/vrr-latency-captures.md). Run
+`python3 tests/vrr/test_latency_report.py` for the observed-report contracts.
+`scripts/report-vrr-latency.py` compares actual captures, preserving the distinction
+between immutable decoder output, later GPU readiness, and present-call return.
+It does not substitute replay scenarios for missing measured presets.
+
+### Responsive buffer revision 4
+
+Production resolves `playout_responsive_buffer=4`. Values 0 through 3 remain
+available for exact historical replay. Revision 3 records the selected target
+in `playout_on_time_target_per_million` and learning window in
+`playout_readiness_window_us`; revision 4 adds thresholded misses and excludes
+pacing-queue residence from the decode-ready timestamp. The rolling 30-second
+outcome readout always counts client drops and lateness over 2 ms as misses,
+counts 1-2 ms lateness only above 50% prevalence, tolerates lateness through
+1 ms, and measures lateness before deadline recovery clamps.
+Replay exposes `observed.readiness` and `simulation.readiness`, including
+misses over 1 ms and 2 ms. Targets are best effort within the existing caps.
+Quantile, expiry, preset selection and drop-accounting tests cover this policy.
+Controller regressions cover stable 9/17 ms alternating source intervals, early
+readiness slack covering a smoothed deadline, and the existing 120/19/30 FPS
+desktop transitions and fault recovery in every timing preset.
+
+`tst_dxgipresent` also exercises the shared Windows fence-wait helper. Completion
+must follow the actual fence value despite missing or stale event notifications;
+timeouts, native wait failures, device removal, and a stalled clock stay bounded.
+The helper blocks in 1 ms event slices within the existing 50 ms total budget.
+These tests do not prove the cause of a particular driver's event delay or
+measure physical display cadence.
+
+Replay distinguishes `decoder_output_us` (immutable CPU output and the latency
+origin) from `decode_complete_us` (decoder output plus a blocking GPU fence wait,
+excluding time already spent in the pacing queue).
+Timestamp integrity validates output before admission, readiness before the
+decision, and the recorded decode wait inside the worker lifecycle. Older
+captures without immutable output retain their historical boundary. Busy-worker
+reconstruction caps a learned idle floor by the current row's observed readiness;
+a long startup wait cannot shift an otherwise unchanged replay. Both contracts
+have deterministic regressions in `tst_vrrreplayconfig`.

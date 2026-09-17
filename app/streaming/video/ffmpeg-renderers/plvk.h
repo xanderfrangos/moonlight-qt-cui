@@ -10,8 +10,20 @@
 #include <libplacebo/log.h>
 #include <libplacebo/renderer.h>
 #include <libplacebo/vulkan.h>
+#include "overlaycompletion.h"
 
 #include <atomic>
+
+#ifdef Q_OS_LINUX
+#include "vulkantiming.h"
+#endif
+
+#ifdef HAS_WAYLAND
+#include "waylandfeedback/wayland.h"
+#ifdef Q_OS_LINUX
+#include "gamescoperepaint.h"
+#endif
+#endif
 
 #ifdef Q_OS_DARWIN
 class MetalVulkanTextureFactory {
@@ -40,6 +52,7 @@ private:
 
 class PlVkRenderer : public IFFmpegRenderer, public IVrrFramePresenter {
 public:
+    QString getCalibrationIdentity() override;
     PlVkRenderer(AVHWDeviceType hwDeviceType = AV_HWDEVICE_TYPE_NONE, IFFmpegRenderer *backendRenderer = nullptr);
     virtual ~PlVkRenderer() override;
     virtual bool initialize(PDECODER_PARAMETERS params) override;
@@ -47,8 +60,13 @@ public:
     virtual void renderFrame(AVFrame* frame) override;
     virtual IVrrFramePresenter* getVrrFramePresenter() override;
     virtual VrrFallbackReason checkSupport() const override;
+    virtual bool canLatchAdaptivePresent() const override;
+    virtual uint64_t waitForDecode(AVFrame* frame) override;
     virtual VrrPrepareResult prepareFrame(AVFrame* frame,
                                           uint64_t decodeBoundary) override;
+    virtual VrrPrepareResult prepareFrame(AVFrame* frame,
+                                          uint64_t decodeBoundary,
+                                          const VrrPresentRequest& request) override;
     virtual VrrPresentFeedback presentAdaptive(
         const VrrPresentRequest& request) override;
     virtual VrrPresentFeedback cancelFrame() override;
@@ -80,6 +98,7 @@ private:
     bool submitPendingSwapchainFrame();
     void finishVrrRenderTiming();
     bool cancelVrrFrame();
+    bool waitForVrrGpuReady(VrrPresentFeedback& feedback);
     void queueRenderDeviceReset();
 
     bool createSwapchain(int depth);
@@ -120,6 +139,7 @@ private:
     VkSurfaceKHR m_VkSurface = VK_NULL_HANDLE;
     int m_SwapchainDepth = 0;
     VkPresentModeKHR m_VkPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+    VkPresentModeKHR m_VrrAdaptivePresentMode = VK_PRESENT_MODE_FIFO_KHR;
     pl_vulkan m_Vulkan = nullptr;
     pl_swapchain m_Swapchain = nullptr;
     pl_renderer m_Renderer = nullptr;
@@ -149,6 +169,24 @@ private:
     bool m_VrrFramePrepared = false;
     bool m_VrrRenderSucceeded = false;
     bool m_VrrRenderTimingActive = false;
+    // Readiness evidence from the current prepared frame is copied into the
+    // eventual present or cancellation result. Vulkan may have to submit an
+    // acquired image to abandon it, and the worker must not lose the GPU wait
+    // that happened before that neutral submission.
+    VrrPresentFeedback m_VrrGpuReadyFeedback;
+    uint64_t m_PresentationId = 0;
+    bool m_LoggedPresentationFeedback = false;
+#ifdef Q_OS_LINUX
+    std::unique_ptr<VulkanTiming> m_GamescopeTiming;
+#endif
+#ifdef HAS_WAYLAND
+    std::unique_ptr<Vrr13::WaylandFeedback> m_PresentationFeedback;
+#ifdef Q_OS_LINUX
+    std::unique_ptr<GamescopeRepaint> m_GamescopeRepaint;
+#endif
+#endif
+
+    std::unique_ptr<OverlayCompletion> m_OverlayCompletion;
 
     // Overlay state
     SDL_SpinLock m_OverlayLock = 0;
