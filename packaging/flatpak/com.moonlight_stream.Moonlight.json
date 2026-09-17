@@ -1,0 +1,204 @@
+{
+    "app-id": "com.moonlight_stream.Moonlight",
+    "runtime": "org.kde.Platform",
+    "runtime-version": "6.10",
+    "sdk": "org.kde.Sdk",
+    "command": "moonlight",
+    "rename-icon": "moonlight",
+    "finish-args": [
+        "--share=network",
+        "--socket=fallback-x11",
+        "--socket=wayland",
+        "--share=ipc",
+        "--socket=pulseaudio",
+        "--device=all",
+        "--talk-name=org.freedesktop.ScreenSaver",
+        "--env=IGNORE_RFI_LATENCY_BUG=1",
+        "--env=QT_QUICK_CONTROLS_STYLE=Material",
+        "--env=LIBVA_DRIVER_NAME=",
+        "--unset-env=LIBVA_DRIVER_NAME",
+        "--env=LIBVA_DRIVERS_PATH=",
+        "--unset-env=LIBVA_DRIVERS_PATH",
+        "--filesystem=xdg-run/gamescope-0",
+        "--filesystem=host-os:ro"
+    ],
+    "cleanup": [
+        "/include",
+        "*.a",
+        "/share/ffmpeg"
+    ],
+    "modules": [
+        {
+            "name": "libplacebo",
+            "buildsystem": "meson",
+            "build-options": {
+                "config-opts": [
+                    "-Ddemos=false",
+                    "-Dvulkan=enabled",
+                    "-Dopengl=disabled",
+                    "-Dshaderc=enabled"
+                ]
+            },
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/haasn/libplacebo.git",
+                    "commit": "2d0979fb54e025e904c7372666fffbf5dae40f66"
+                },
+                {
+                    "type": "patch",
+                    "path": "../../app/deploy/linux/appimage/libplacebo-disable-internally-synchronized-queues.patch"
+                }
+            ],
+            "cleanup": [
+                "/include",
+                "/lib/pkgconfig"
+            ]
+        },
+        {
+            "name": "SDL3",
+            "buildsystem": "cmake-ninja",
+            "builddir": true,
+            "build-options": {
+                "config-opts": [
+                    "-DSDL_ALSA=OFF",
+                    "-DSDL_RPATH=OFF",
+                    "-DSDL_KMSDRM=OFF",
+                    "-DSDL_INSTALL_DOCS=OFF",
+                    "-DSDL_TEST_LIBRARY=OFF",
+                    "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"
+                ]
+            },
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/libsdl-org/SDL.git",
+                    "tag": "release-3.4.12"
+                }
+            ]
+        },
+        {
+            "name": "SDL2-compat",
+            "buildsystem": "cmake-ninja",
+            "builddir": true,
+            "build-options": {
+                "config-opts": [
+                    "-DSDL2COMPAT_TESTS=OFF"
+                ]
+            },
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/libsdl-org/sdl2-compat.git",
+                    "tag": "release-2.32.70"
+                }
+            ]
+        },
+        {
+            "name": "SDL2_ttf",
+            "buildsystem": "cmake-ninja",
+            "builddir": true,
+            "build-options": {
+                "config-opts": [
+                    "-DSDL2TTF_VENDORED=ON",
+                    "-DSDL2TTF_SAMPLES=OFF"
+                ]
+            },
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/libsdl-org/SDL_ttf.git",
+                    "commit": "a883e490e30fb44a5336ea3dcb990c6982c5216f"
+                }
+            ]
+        },
+        {
+            "name": "dav1d",
+            "buildsystem": "meson",
+            "config-opts": [
+                "-Denable_tools=false",
+                "-Denable_tests=false"
+            ],
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://code.videolan.org/videolan/dav1d.git",
+                    "tag": "1.5.3"
+                }
+            ]
+        },
+        {
+            "name": "ffmpeg",
+            "build-options": {
+                "config-opts": [
+                    "--fatal-warnings",
+                    "--disable-stripping",
+                    "--enable-pic",
+                    "--enable-lto",
+                    "--enable-shared",
+                    "--disable-static",
+                    "--disable-all",
+                    "--enable-avcodec",
+                    "--enable-avformat",
+                    "--enable-swscale",
+                    "--enable-decoder=h264",
+                    "--enable-decoder=hevc",
+                    "--enable-decoder=av1",
+                    "--enable-hwaccel=h264_vaapi",
+                    "--enable-hwaccel=hevc_vaapi",
+                    "--enable-hwaccel=av1_vaapi",
+                    "--enable-hwaccel=h264_vdpau",
+                    "--enable-hwaccel=hevc_vdpau",
+                    "--enable-hwaccel=av1_vdpau",
+                    "--enable-libdrm",
+                    "--enable-hwaccel=h264_vulkan",
+                    "--enable-hwaccel=hevc_vulkan",
+                    "--enable-hwaccel=av1_vulkan",
+                    "--enable-libdav1d",
+                    "--enable-decoder=libdav1d"
+                ]
+            },
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/FFmpeg/FFmpeg.git",
+                    "tag": "n8.1.1"
+                }
+            ]
+        },
+        {
+            "name": "moonlight",
+            "buildsystem": "qmake",
+            "config-opts": [
+                "QMAKE_RPATHDIR=/app/lib",
+                "PREFIX=/app"
+            ],
+            "build-options": {
+                "config-opts": [
+                    "CONFIG+=disable-cuda"
+                ],
+                "arch": {
+                    "x86_64": {
+                        "config-opts": [
+                            "CONFIG+=disable-libdrm"
+                        ]
+                    }
+                }
+            },
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/xanderfrangos/moonlight-qt-cui.git",
+                    "disable-shallow-clone": true,
+                    "commit": "0000000000000000000000000000000000000000"
+                },
+                {
+                    "type": "shell",
+                    "commands": [
+                        "echo 0.0.0 > app/version.txt"
+                    ]
+                }
+            ]
+        }
+    ]
+}
