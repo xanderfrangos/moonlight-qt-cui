@@ -92,9 +92,13 @@ jobs:
           manifest = json.loads(Path('flatpak-build/files/manifest.json').read_text())
           modules = {m['name']: m for m in manifest['modules']}
           moonlight_git_source = next(s for s in modules['moonlight']['sources'] if s.get('type') == 'git')
-          assert moonlight_git_source['url'] == 'https://github.com/' + os.environ['GITHUB_REPOSITORY'] + '.git'
-          assert moonlight_git_source['commit'] == os.environ['GITHUB_SHA']
-          assert any(s['type'] == 'patch' and 'libplacebo-disable-internally-synchronized-queues.patch' in s['path'] for s in modules['libplacebo']['sources'])
+          expected_url = 'https://github.com/' + os.environ['GITHUB_REPOSITORY'] + '.git'
+          if moonlight_git_source['url'] != expected_url:
+              raise SystemExit(f"Unexpected moonlight source URL: {moonlight_git_source['url']}")
+          if moonlight_git_source['commit'] != os.environ['GITHUB_SHA']:
+              raise SystemExit(f"Unexpected moonlight source commit: {moonlight_git_source['commit']}")
+          if not any(s['type'] == 'patch' and 'libplacebo-disable-internally-synchronized-queues.patch' in s['path'] for s in modules['libplacebo']['sources']):
+              raise SystemExit('Expected libplacebo patch not found in exported manifest')
           PY
       - uses: actions/upload-artifact@v6
         with:
