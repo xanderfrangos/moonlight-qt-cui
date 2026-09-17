@@ -21,14 +21,25 @@ ItemDelegate {
     // Animated from 0 to 1 when the card first appears
     property real appearProgress: 1.0
 
-    property real focusDim: tvCard && grid.activeFocus && !highlighted ? 0.7 : 1.0
+    // Set by delegates while this card's own popup (like its context menu)
+    // is open. Focus moves into the popup, but the card stays selected.
+    property bool popupOpen: false
+
+    // The card is selected when it has focus in the grid or its popup is
+    // open. The TV mode visuals follow this rather than highlighted, so the
+    // card doesn't shrink and move its context menu when the menu opens.
+    readonly property bool tvSelected: highlighted || (popupOpen && grid.currentItem === this)
+
+    readonly property bool gridInUse: grid.activeFocus ||
+                                      (grid.currentItem !== null && grid.currentItem.popupOpen === true)
+    property real focusDim: tvCard && gridInUse && !tvSelected ? 0.7 : 1.0
     Behavior on focusDim { NumberAnimation { duration: TvTheme.animationNormal } }
 
     highlighted: grid.activeFocus && grid.currentItem === this
 
     // Draw the focused card above its neighbors so it can grow over them
-    z: highlighted ? 1 : 0
-    scale: tvCard && highlighted ? 1.08 : 1.0
+    z: tvSelected ? 1 : 0
+    scale: tvCard && tvSelected ? 1.08 : 1.0
     Behavior on scale {
         enabled: tvCard
         NumberAnimation { duration: TvTheme.animationNormal; easing.type: Easing.OutCubic }
