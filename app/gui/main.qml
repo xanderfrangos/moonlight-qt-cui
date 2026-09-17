@@ -698,8 +698,9 @@ ApplicationWindow {
                 return null
             }
 
+            // TV mode grid cards draw their own focus glow
             var item = window.activeFocusItem
-            return (item && item.visualFocus === true) ? item : null
+            return (item && item.visualFocus === true && item.tvCard !== true) ? item : null
         }
 
         property bool targetOnScreen: false
@@ -747,11 +748,13 @@ ApplicationWindow {
                 return
             }
 
+            // Map both corners so a scaled target is measured correctly
             var pos = target.mapToItem(parent, 0, 0)
+            var end = target.mapToItem(parent, target.width, target.height)
             var left = pos.x - ringMargin
             var top = pos.y - ringMargin
-            var right = pos.x + target.width + ringMargin
-            var bottom = pos.y + target.height + ringMargin
+            var right = end.x + ringMargin
+            var bottom = end.y + ringMargin
 
             // Keep the ring inside any clipping ancestors, and inside the page
             // area so a partially scrolled control doesn't draw over the toolbar
