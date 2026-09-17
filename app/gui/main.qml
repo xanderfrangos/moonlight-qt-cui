@@ -180,6 +180,15 @@ ApplicationWindow {
                 GradientStop { position: 1.0; color: TvTheme.backgroundBottom }
             }
         }
+
+        // Pages can show art behind themselves by providing tvBackdropSource
+        TvBackdrop {
+            anchors.fill: parent
+            visible: SystemProperties.tvMode
+            source: SystemProperties.tvMode && stackView.currentItem &&
+                    stackView.currentItem.tvBackdropSource !== undefined ?
+                        stackView.currentItem.tvBackdropSource : ""
+        }
     }
 
     StackView {

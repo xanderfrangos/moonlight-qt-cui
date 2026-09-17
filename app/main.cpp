@@ -56,6 +56,7 @@
 #include "settings/streamingpreferences.h"
 #include "gui/sdlgamepadkeynavigation.h"
 #include "gui/inputmodetracker.h"
+#include "gui/blurredimageprovider.h"
 #include "windowsvblankvirtualization.h"
 
 #if defined(Q_OS_WIN32)
@@ -1076,6 +1077,7 @@ int main(int argc, char *argv[])
     }
 
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("blurred"), new BlurredImageProvider());
     QString initialView;
     bool hasGUI = true;
 
