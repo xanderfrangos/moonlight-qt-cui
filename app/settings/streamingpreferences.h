@@ -23,6 +23,7 @@ public:
     // so they can be read directly from storage without a preferences instance.
     static int loadUiScale();
     static bool loadDisableHover();
+    static bool loadTvMode();
 
     enum AudioConfig
     {
@@ -158,6 +159,7 @@ public:
     Q_PROPERTY(UIDisplayMode uiDisplayMode MEMBER uiDisplayMode NOTIFY uiDisplayModeChanged)
     Q_PROPERTY(int uiScale MEMBER uiScale NOTIFY uiScaleChanged)
     Q_PROPERTY(bool disableHover MEMBER disableHover NOTIFY disableHoverChanged)
+    Q_PROPERTY(bool tvMode MEMBER tvMode NOTIFY tvModeChanged)
     Q_PROPERTY(bool swapMouseButtons MEMBER swapMouseButtons NOTIFY mouseButtonsChanged)
     Q_PROPERTY(bool muteOnFocusLoss MEMBER muteOnFocusLoss NOTIFY muteOnFocusLossChanged)
     Q_PROPERTY(bool backgroundGamepad MEMBER backgroundGamepad NOTIFY backgroundGamepadChanged)
@@ -215,6 +217,9 @@ public:
     int uiScale;
     // Disables hover effects in the GUI. Takes effect on the next launch.
     bool disableHover;
+    // Controller and TV friendly GUI. Takes effect on the next launch and
+    // can be overridden with --tv-mode/--no-tv-mode.
+    bool tvMode;
     Language language;
     CaptureSysKeysMode captureSysKeysMode;
     RendererSelection rendererSelection;
@@ -242,6 +247,7 @@ signals:
     void uiDisplayModeChanged();
     void uiScaleChanged();
     void disableHoverChanged();
+    void tvModeChanged();
     void windowModeChanged();
     void framePacingChanged();
     void connectionWarningsChanged();
