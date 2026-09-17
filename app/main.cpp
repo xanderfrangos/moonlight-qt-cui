@@ -1045,6 +1045,7 @@ int main(int argc, char *argv[])
                                                    [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
                                                        return StreamingPreferences::get(qmlEngine);
                                                    });
+    qmlRegisterSingletonType(QUrl("qrc:/gui/TvTheme.qml"), "TvTheme", 1, 0, "TvTheme");
 
     // Create the identity manager on the main thread
     IdentityManager::get();
