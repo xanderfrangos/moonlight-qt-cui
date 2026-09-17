@@ -26,6 +26,9 @@ public:
     Q_PROPERTY(bool hasDiscordIntegration MEMBER hasDiscordIntegration CONSTANT)
     Q_PROPERTY(bool usesMaterial3Theme MEMBER usesMaterial3Theme CONSTANT)
     Q_PROPERTY(QString versionString MEMBER versionString CONSTANT)
+    Q_PROPERTY(bool supportsUiScale MEMBER supportsUiScale CONSTANT)
+    Q_PROPERTY(int activeUiScale MEMBER activeUiScale CONSTANT)
+    Q_PROPERTY(bool hoverEffectsDisabled MEMBER hoverEffectsDisabled CONSTANT)
 
     // Properties queried asynchronously (startAsyncLoad() must be called!)
     Q_PROPERTY(bool hasHardwareAcceleration MEMBER hasHardwareAcceleration NOTIFY hasHardwareAccelerationChanged)
@@ -42,6 +45,9 @@ public:
     Q_INVOKABLE void startAsyncLoad();
     Q_INVOKABLE void waitForAsyncLoad();
     Q_INVOKABLE void refreshDisplays();
+
+    // Saves preferences, launches a new instance of Moonlight, and quits this one
+    Q_INVOKABLE void restartApplication();
 
 signals:
     void unmappedGamepadsChanged();
@@ -68,6 +74,9 @@ private:
     QString versionString;
     bool usesMaterial3Theme;
     bool isDarwin;
+    bool supportsUiScale;
+    int activeUiScale;
+    bool hoverEffectsDisabled;
 
     // Properties only set if startAsyncLoad() is called
     bool hasHardwareAcceleration;
