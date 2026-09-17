@@ -333,7 +333,8 @@ CenteredGridView {
             var segue = component.createObject(stackView, {
                                                    "appName": model.name,
                                                    "session": appModel.createSessionForApp(index),
-                                                   "isResume": runningId === model.appid
+                                                   "isResume": runningId === model.appid,
+                                                   "boxArt": backdropArt
                                                })
             stackView.push(segue)
         }
@@ -467,12 +468,15 @@ CenteredGridView {
 
         function quitApp() {
             var component = Qt.createComponent("QuitSegue.qml")
-            var params = {"appName": appName, "quitRunningAppFn": function() { appModel.quitRunningApp() }}
+            // The focused game is the one being quit, or the one launching next
+            var params = {"appName": appName, "quitRunningAppFn": function() { appModel.quitRunningApp() },
+                          "boxArt": appGrid.tvBackdropSource}
             if (segueToStream) {
                 // Store the session and app name if we're going to stream after
                 // successfully quitting the old app.
                 params.nextAppName = nextAppName
                 params.nextSession = appModel.createSessionForApp(nextAppIndex)
+                params.nextBoxArt = appGrid.tvBackdropSource
             }
             else {
                 params.nextAppName = null

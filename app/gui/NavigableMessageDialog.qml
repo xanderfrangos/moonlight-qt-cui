@@ -2,6 +2,8 @@ import QtQuick 2.0
 import QtQuick.Controls 2.2
 import QtQuick.Layouts 1.2
 
+import SystemProperties 1.0
+
 NavigableDialog {
     id: dialog
 
@@ -36,8 +38,8 @@ NavigableDialog {
                         "qrc:/res/baseline-error_outline-24px.svg"
             sourceSize {
                 // The icon should be square so use the height as the width too
-                width: 50
-                height: 50
+                width: SystemProperties.tvMode ? 64 : 50
+                height: SystemProperties.tvMode ? 64 : 50
             }
             visible: !showSpinner
         }
@@ -52,8 +54,8 @@ NavigableDialog {
 
             // Cap the width so the dialog doesn't grow horizontally forever. This
             // will cause word wrap to kick in.
-            Layout.maximumWidth: 400
-            Layout.maximumHeight: 400
+            Layout.maximumWidth: SystemProperties.tvMode ? 640 : 400
+            Layout.maximumHeight: SystemProperties.tvMode ? 640 : 400
         }
     }
 
