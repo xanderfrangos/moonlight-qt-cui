@@ -34,7 +34,11 @@ void AutoUpdateChecker::start()
         return;
     }
 
-#if defined(Q_OS_WIN32) || defined(Q_OS_DARWIN) || defined(STEAM_LINK) || defined(APP_IMAGE) // Only run update checker on platforms without auto-update
+// The update check is disabled in this fork. Its versions do not line up with
+// the upstream manifest, so a check would offer to "update" a VRR build to
+// stock Moonlight. Build with MOONLIGHT_ENABLE_UPDATE_CHECK defined to restore
+// the original behavior, which ran only on platforms without auto-update.
+#if defined(MOONLIGHT_ENABLE_UPDATE_CHECK) && (defined(Q_OS_WIN32) || defined(Q_OS_DARWIN) || defined(STEAM_LINK) || defined(APP_IMAGE))
 #if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0) && QT_VERSION < QT_VERSION_CHECK(5, 15, 1) && !defined(QT_NO_BEARERMANAGEMENT)
     // HACK: Set network accessibility to work around QTBUG-80947 (introduced in Qt 5.14.0 and fixed in Qt 5.15.1)
     QT_WARNING_PUSH
