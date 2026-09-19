@@ -584,6 +584,116 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
     m_Window = params->window;
     m_MaxVideoFps = params->frameRate;
 
+    // Attach libplacebo's own dithering when the user asked for it and the
+    // stream carries more bits per component than a common display accepts.
+    // pl_render_fast_params leaves dither_params NULL, which disables dithering
+    // entirely; combined with disable_10bit_sdr below that means 10-bit SDR is
+    // otherwise quantized to an 8-bit backbuffer with nothing to break up the
+    // banding. libplacebo knows the target's bit depth, so there is no display
+    // query here and no need to exclude HDR: dithering runs last, after tone
+    // mapping, against whatever the swapchain actually is.
+    m_RenderParams = pl_render_fast_params;
+
+    // Keep full-precision intermediates. 8-bit FBOs would flatten a 10-bit
+    // source before dithering or debanding ever see it, which is exactly the
+    // banding both are meant to prevent. Set explicitly rather than inherited
+    // so a change to the upstream preset cannot silently undo it.
+    m_RenderParams.force_low_bit_depth_fbos = false;
+
+    if (params->ditheringMode != StreamingPreferences::DM_OFF &&
+            (params->videoFormat & VIDEO_FORMAT_MASK_10BIT)) {
+        const char* kernelName;
+
+        m_DitherParams = pl_dither_default_params;
+
+        switch (params->ditheringMode) {
+        case StreamingPreferences::DM_ORDERED:
+            // Fixed-function ordered matrix. No LUT to build and the cheapest
+            // of the kernels, at the cost of a visible repeating pattern.
+            m_DitherParams.method = PL_DITHER_ORDERED_FIXED;
+            kernelName = "ordered (fixed function)";
+            break;
+        default:
+        case StreamingPreferences::DM_BLUE_NOISE:
+            m_DitherParams.method = PL_DITHER_BLUE_NOISE;
+            kernelName = "blue noise";
+            break;
+        case StreamingPreferences::DM_ERROR_DIFFUSION:
+            m_RenderParams.error_diffusion = &pl_error_diffusion_sierra_lite;
+            kernelName = "error diffusion (Sierra Lite)";
+            break;
+        case StreamingPreferences::DM_ERROR_DIFFUSION_HQ:
+            m_RenderParams.error_diffusion = &pl_error_diffusion_stucki;
+            // A larger blue noise matrix repeats less. It only costs a longer
+            // one-time LUT build, and here it only shows up if error diffusion
+            // turns out to be unavailable and we fall back.
+            m_DitherParams.lut_size = 7;
+            kernelName = "error diffusion (Stucki)";
+            break;
+        }
+
+        // Varying the pattern per frame stops it sitting still in screen space,
+        // at the risk of aliasing on some panels, so it stays opt-in.
+        m_DitherParams.temporal = params->temporalDithering;
+
+        // Error diffusion needs compute shaders and storable textures, and
+        // libplacebo silently falls back to dither_params when it cannot run.
+        // Keep blue noise attached underneath it so that fallback is a good one
+        // rather than no dithering at all.
+        m_RenderParams.dither_params = &m_DitherParams;
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Output dithering enabled: %s (temporal %s)",
+                    kernelName,
+                    m_DitherParams.temporal ? "on" : "off");
+    }
+
+    // Debanding reconstructs gradients in the decoded frame, so unlike
+    // dithering it can repair banding that arrived in the stream. It reads the
+    // source at full precision, which is where a 10-bit stream pays off.
+    if (params->debandMode != StreamingPreferences::DB_OFF) {
+        const char* debandName;
+
+        m_DebandParams = pl_deband_default_params;
+
+        switch (params->debandMode) {
+        case StreamingPreferences::DB_GRAIN_ONLY:
+            // Zero iterations turns this into a pure grain function. It cannot
+            // reconstruct a gradient, but the noise still covers contours that
+            // half-LSB dithering is too fine to reach.
+            m_DebandParams.iterations = 0;
+            debandName = "grain only";
+            break;
+        case StreamingPreferences::DB_LIGHT:
+            m_DebandParams.threshold = 2.0f;
+            m_DebandParams.grain = 2.0f;
+            debandName = "light";
+            break;
+        default:
+        case StreamingPreferences::DB_MEDIUM:
+            // libplacebo's own defaults
+            debandName = "medium";
+            break;
+        case StreamingPreferences::DB_STRONG:
+            // A second pass widens the radius, which is what finds the broad
+            // soft gradients that a single 16px pass walks straight past.
+            m_DebandParams.iterations = 2;
+            m_DebandParams.threshold = 4.0f;
+            m_DebandParams.radius = 24.0f;
+            m_DebandParams.grain = 6.0f;
+            debandName = "strong";
+            break;
+        }
+
+        m_RenderParams.deband_params = &m_DebandParams;
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Debanding enabled: %s (%d iterations, threshold %.1f, radius %.1f, grain %.1f)",
+                    debandName, m_DebandParams.iterations,
+                    m_DebandParams.threshold, m_DebandParams.radius,
+                    m_DebandParams.grain);
+    }
+
     unsigned int instanceExtensionCount = 0;
     if (!SDL_Vulkan_GetInstanceExtensions(params->window, &instanceExtensionCount, nullptr)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -1332,7 +1442,7 @@ bool PlVkRenderer::acquirePendingSwapchainFrame(
     targetFrame.overlays = &m_EmptyOverlay;
 
     beginRenderTiming();
-    if (!pl_render_image(m_Renderer, nullptr, &targetFrame, &pl_render_fast_params)) {
+    if (!pl_render_image(m_Renderer, nullptr, &targetFrame, &m_RenderParams)) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "%s",
                     earlyRenderFailureMessage);
     }
@@ -1921,7 +2031,7 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
     targetFrame.overlays = overlays.data();
     const bool renderSucceeded = pl_render_image(m_Renderer, &mappedFrame,
                                                   &targetFrame,
-                                                  &pl_render_fast_params);
+                                                  &m_RenderParams);
     if (!renderSucceeded) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "pl_render_image() failed");

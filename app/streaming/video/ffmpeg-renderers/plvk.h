@@ -146,6 +146,15 @@ private:
     pl_tex m_Textures[PL_MAX_PLANES] = {};
     pl_color_space m_LastColorspace = {};
 
+    // Render parameters for this session. This is pl_render_fast_params unless
+    // output dithering is enabled, in which case m_DitherParams is attached.
+    // libplacebo dithers to the target's own bit depth as the final step of its
+    // pipeline, so unlike the D3D11 shaders this needs no display query and is
+    // correct for HDR targets too.
+    pl_render_params m_RenderParams = pl_render_fast_params;
+    pl_dither_params m_DitherParams = {};
+    pl_deband_params m_DebandParams = {};
+
 #ifdef PLVK_USE_EARLY_RENDER_TO_WAIT
     pl_overlay m_EmptyOverlay = {};
     pl_overlay_part m_EmptyOverlayPart = {};

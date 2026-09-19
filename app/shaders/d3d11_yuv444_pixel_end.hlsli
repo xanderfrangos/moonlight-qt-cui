@@ -1,4 +1,4 @@
-min16float4 main(ShaderInput input) : SV_TARGET
+VIDEO_SHADER_OUTPUT main(ShaderInput input) : SV_TARGET
 {
     min16float3 yuv = swizzle(videoTex.Sample(theSampler, input.tex));
 
@@ -8,5 +8,5 @@ min16float4 main(ShaderInput input) : SV_TARGET
     // Multiply by the conversion matrix for this colorspace
     yuv = mul(yuv, cscMatrix);
 
-    return min16float4(yuv, 1.0);
+    return FINISH_VIDEO_SHADER(yuv, input.pos.xy);
 }

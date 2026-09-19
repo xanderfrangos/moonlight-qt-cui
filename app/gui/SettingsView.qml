@@ -1099,6 +1099,176 @@ Flickable {
                                     :
                                       qsTr("HDR streaming is not supported on this PC.")
                 }
+
+                Column {
+                    width: parent.width
+                    spacing: 5
+                    visible: SystemProperties.supportsVideoDithering
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("Dither 10-bit video")
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                    }
+
+                    AutoResizingComboBox {
+                        id: ditheringModeComboBox
+                        textRole: "text"
+                        model: ListModel {
+                            id: ditheringModeListModel
+                            ListElement {
+                                text: qsTr("Off")
+                                val: StreamingPreferences.DM_OFF
+                            }
+                            ListElement {
+                                text: qsTr("Fast")
+                                val: StreamingPreferences.DM_ORDERED
+                            }
+                            ListElement {
+                                text: qsTr("Balanced")
+                                val: StreamingPreferences.DM_BLUE_NOISE
+                            }
+                            ListElement {
+                                text: qsTr("High Quality")
+                                val: StreamingPreferences.DM_ERROR_DIFFUSION
+                            }
+                            ListElement {
+                                text: qsTr("Highest Quality")
+                                val: StreamingPreferences.DM_ERROR_DIFFUSION_HQ
+                            }
+                        }
+                        currentIndex: {
+                            for (var i = 0; i < ditheringModeListModel.count; i++) {
+                                if (ditheringModeListModel.get(i).val === StreamingPreferences.ditheringMode) {
+                                    return i
+                                }
+                            }
+                            return 0
+                        }
+                        onActivated: {
+                            StreamingPreferences.ditheringMode = ditheringModeListModel.get(currentIndex).val
+                        }
+                        Component.onCompleted: {
+                            recalculateWidth()
+                            languageChanged.connect(recalculateWidth)
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: StreamingPreferences.ditheringMode === StreamingPreferences.DM_OFF ?
+                                  qsTr("10-bit video is reduced to the output depth without dithering, which can show banding in gradients.") :
+                              StreamingPreferences.ditheringMode === StreamingPreferences.DM_ORDERED ?
+                                  qsTr("Cheapest kernel. Breaks up banding with a fixed pattern that can be visible up close.") :
+                              StreamingPreferences.ditheringMode === StreamingPreferences.DM_BLUE_NOISE ?
+                                  qsTr("Recommended. Good quality with a small, steady cost per frame.") :
+                              StreamingPreferences.ditheringMode === StreamingPreferences.DM_ERROR_DIFFUSION ?
+                                  qsTr("Better gradients at a higher GPU cost. Falls back to Balanced if the GPU cannot run it.") :
+                                  qsTr("Best gradients at the highest GPU cost, which may add latency. Falls back to Balanced if the GPU cannot run it.")
+                    }
+
+                    CheckBox {
+                        id: temporalDithering
+                        width: parent.width
+                        text: qsTr("Vary the pattern each frame")
+                        font.pointSize: 12
+
+                        visible: StreamingPreferences.ditheringMode !== StreamingPreferences.DM_OFF
+                        checked: StreamingPreferences.temporalDithering
+                        onCheckedChanged: {
+                            StreamingPreferences.temporalDithering = checked
+                        }
+
+                        ToolTip.delay: 1000
+                        ToolTip.timeout: 10000
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                        ToolTip.text: qsTr("Stops the dither pattern from sitting still on screen, which can otherwise look like a faint fixed texture during motion. Some panels show this as flicker, so try it both ways.")
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: qsTr("Only affects 10-bit streams. Reconnect the stream after changing this setting.")
+                    }
+                }
+
+                Column {
+                    width: parent.width
+                    spacing: 5
+                    visible: SystemProperties.supportsVideoDebanding
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("Smooth banded gradients")
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                    }
+
+                    AutoResizingComboBox {
+                        id: debandModeComboBox
+                        textRole: "text"
+                        model: ListModel {
+                            id: debandModeListModel
+                            ListElement {
+                                text: qsTr("Off")
+                                val: StreamingPreferences.DB_OFF
+                            }
+                            ListElement {
+                                text: qsTr("Grain Only")
+                                val: StreamingPreferences.DB_GRAIN_ONLY
+                            }
+                            ListElement {
+                                text: qsTr("Light")
+                                val: StreamingPreferences.DB_LIGHT
+                            }
+                            ListElement {
+                                text: qsTr("Medium")
+                                val: StreamingPreferences.DB_MEDIUM
+                            }
+                            ListElement {
+                                text: qsTr("Strong")
+                                val: StreamingPreferences.DB_STRONG
+                            }
+                        }
+                        currentIndex: {
+                            for (var i = 0; i < debandModeListModel.count; i++) {
+                                if (debandModeListModel.get(i).val === StreamingPreferences.debandMode) {
+                                    return i
+                                }
+                            }
+                            return 0
+                        }
+                        onActivated: {
+                            StreamingPreferences.debandMode = debandModeListModel.get(currentIndex).val
+                        }
+                        Component.onCompleted: {
+                            recalculateWidth()
+                            languageChanged.connect(recalculateWidth)
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: StreamingPreferences.debandMode === StreamingPreferences.DB_OFF ?
+                                  qsTr("Wide, soft gradients keep whatever banding the host encoder left in them.") :
+                              StreamingPreferences.debandMode === StreamingPreferences.DB_GRAIN_ONLY ?
+                                  qsTr("Cheapest. Covers contours with noise without rebuilding the gradient.") :
+                              StreamingPreferences.debandMode === StreamingPreferences.DB_LIGHT ?
+                                  qsTr("Gentle. Keeps fine detail, so heavy banding may still show.") :
+                              StreamingPreferences.debandMode === StreamingPreferences.DB_MEDIUM ?
+                                  qsTr("Recommended starting point for visible banding in dark scenes.") :
+                                  qsTr("Reaches the widest gradients at the highest GPU cost, and can soften fine detail.")
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: qsTr("Rebuilds gradients before they are reduced for output, so unlike dithering it can also reduce banding that came from the host. Reconnect the stream after changing this setting.")
+                    }
+                }
             }
         }
 

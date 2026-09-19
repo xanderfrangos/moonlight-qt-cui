@@ -52,6 +52,13 @@ typedef struct _CSC_CONST_BUF
 
     // Max UV coordinates to avoid sampling alignment padding
     float chromaUVMax[2];
+
+    // Quantization levels for the dithering shaders, (2^bits - 1) for the
+    // display we're rendering to. Unread by the non-dithering shaders.
+    float ditherLevels;
+
+    // Padding floats to end on a 16-byte boundary
+    float padding2[3];
 } CSC_CONST_BUF, *PCSC_CONST_BUF;
 static_assert(sizeof(CSC_CONST_BUF) % 16 == 0, "Constant buffer sizes must be a multiple of 16");
 
@@ -60,6 +67,30 @@ static const std::array<const char*, D3D11VARenderer::PixelShaders::_COUNT> k_Vi
     "d3d11_yuv420_pixel.fxc",
     "d3d11_ayuv_pixel.fxc",
     "d3d11_y410_pixel.fxc",
+};
+
+// The same shaders built with DITHER_OUTPUT. They quantize to the display's
+// bit depth with an ordered dither instead of leaving 10-bit video to be
+// truncated further down the display pipeline.
+typedef struct _DITHER_FRAME_CONST_BUF
+{
+    // Temporal dithering phase for this frame, in [0, 1)
+    float ditherPhase;
+
+    // Padding floats to end on a 16-byte boundary
+    float padding[3];
+} DITHER_FRAME_CONST_BUF, *PDITHER_FRAME_CONST_BUF;
+static_assert(sizeof(DITHER_FRAME_CONST_BUF) % 16 == 0, "Constant buffer sizes must be a multiple of 16");
+
+// Advancing the phase by an irrational fraction spreads successive frames
+// evenly over the threshold range instead of cycling through a short pattern.
+static const float k_DitherPhaseStep = 0.6180339887f;
+
+static const std::array<const char*, D3D11VARenderer::PixelShaders::_COUNT> k_VideoDitherShaderNames =
+{
+    "d3d11_yuv420_dither_pixel.fxc",
+    "d3d11_ayuv_dither_pixel.fxc",
+    "d3d11_y410_dither_pixel.fxc",
 };
 
 namespace {
@@ -252,6 +283,11 @@ D3D11VARenderer::D3D11VARenderer(int decoderSelectionPass)
       m_VrrPriorFrameStatsTimeUs(0),
       m_VrrPriorFrameStatsPresentRefreshSequence(0),
       m_VrrPriorFrameStatsRefreshSequence(0),
+      m_DitherActive(false),
+      m_DitherLevels(255.0f),
+      m_DitherStateChanged(false),
+      m_TemporalDither(false),
+      m_DitherPhase(0.0f),
       m_OverlayLock(0),
       m_HwDeviceContext(nullptr)
 {
@@ -274,6 +310,12 @@ D3D11VARenderer::~D3D11VARenderer()
     for (auto& shader : m_VideoPixelShaders) {
         shader.Reset();
     }
+
+    for (auto& shader : m_VideoDitherPixelShaders) {
+        shader.Reset();
+    }
+
+    m_DitherFrameBuffer.Reset();
 
     for (auto& textureSrvs : m_VideoTextureResourceViews) {
         for (auto& srv : textureSrvs) {
@@ -1092,20 +1134,146 @@ void D3D11VARenderer::bindVideoVertexBuffer(bool frameChanged, AVFrame* frame)
     m_RenderDeviceContext->IASetVertexBuffers(0, 1, m_VideoVertexBuffer.GetAddressOf(), &stride, &offset);
 }
 
+// Returns the bits per color component of the display we're presenting to, or
+// zero if the display pipeline won't tell us.
+int D3D11VARenderer::queryDisplayBitsPerComponent()
+{
+    if (!m_SwapChain) {
+        return 0;
+    }
+
+    ComPtr<IDXGIOutput> output;
+    HRESULT hr = m_SwapChain->GetContainingOutput(&output);
+    if (FAILED(hr)) {
+        // GetContainingOutput() fails for windows that DXGI can't place on a
+        // single output. Fall back to the monitor Windows says the window is on.
+        if (m_VrrWindowHandle == nullptr || !m_Factory) {
+            return 0;
+        }
+
+        HMONITOR monitor = MonitorFromWindow(m_VrrWindowHandle, MONITOR_DEFAULTTONEAREST);
+        if (monitor == nullptr) {
+            return 0;
+        }
+
+        ComPtr<IDXGIAdapter1> adapter;
+        for (UINT adapterIndex = 0;
+             SUCCEEDED(m_Factory->EnumAdapters1(adapterIndex, adapter.ReleaseAndGetAddressOf()));
+             adapterIndex++) {
+            ComPtr<IDXGIOutput> candidate;
+            for (UINT outputIndex = 0;
+                 SUCCEEDED(adapter->EnumOutputs(outputIndex, candidate.ReleaseAndGetAddressOf()));
+                 outputIndex++) {
+                DXGI_OUTPUT_DESC outputDesc;
+                if (SUCCEEDED(candidate->GetDesc(&outputDesc)) && outputDesc.Monitor == monitor) {
+                    output = candidate;
+                    break;
+                }
+            }
+
+            if (output) {
+                break;
+            }
+        }
+
+        if (!output) {
+            return 0;
+        }
+    }
+
+    ComPtr<IDXGIOutput6> output6;
+    if (FAILED(output.As(&output6))) {
+        return 0;
+    }
+
+    DXGI_OUTPUT_DESC1 outputDesc;
+    if (FAILED(output6->GetDesc1(&outputDesc))) {
+        return 0;
+    }
+
+    return (int)outputDesc.BitsPerColor;
+}
+
+// Decides whether the dithering shaders should be bound for the display we're
+// presenting to. Safe to call again whenever that display may have changed.
+void D3D11VARenderer::refreshDitherState()
+{
+    // Nothing to do if this session never loaded the dithering shaders
+    if (!m_VideoDitherPixelShaders[0]) {
+        return;
+    }
+
+    const int displayBits = queryDisplayBitsPerComponent();
+
+    // An unreadable depth is treated as 8-bit: that's the common case, and the
+    // user asked for dithering rather than for us to guess conservatively.
+    int effectiveBits = displayBits != 0 ? displayBits : 8;
+
+    // A display that can show every bit the stream carries gains nothing from
+    // dithering, so leave those frames alone.
+    const bool active = effectiveBits < 10;
+
+    // Clamp before shifting so a nonsense value from the driver can't produce
+    // a degenerate quantizer.
+    effectiveBits = std::max(4, std::min(effectiveBits, 9));
+    const float levels = (float)((1 << effectiveBits) - 1);
+
+    if (active != m_DitherActive || levels != m_DitherLevels) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "10-bit video dithering %s (display reports %d bits per component)",
+                    active ? "enabled" : "disabled",
+                    displayBits);
+
+        m_DitherActive = active;
+        m_DitherLevels = levels;
+
+        // bindColorConversion() only rebuilds the constant buffer when the
+        // frame format changes, so ask it for one more upload.
+        m_DitherStateChanged = true;
+    }
+}
+
 void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame)
 {
     bool yuv444 = (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_YUV444);
     auto framesContext = (AVHWFramesContext*)frame->hw_frames_ctx->data;
+
+    // PQ output is quantized by the display's own HDR pipeline, so dither only
+    // the SDR case where we know what the final encoding is.
+    const bool dither = m_DitherActive && frame->color_trc != AVCOL_TRC_SMPTE2084;
+    const auto& videoShaders = dither ? m_VideoDitherPixelShaders : m_VideoPixelShaders;
+
+    if (dither && m_DitherFrameBuffer) {
+        if (m_TemporalDither) {
+            // Rotate the whole threshold set by a new phase each frame. The set
+            // stays uniformly spaced, so every frame remains a valid dither.
+            m_DitherPhase += k_DitherPhaseStep;
+            if (m_DitherPhase >= 1.0f) {
+                m_DitherPhase -= 1.0f;
+            }
+
+            D3D11_MAPPED_SUBRESOURCE mapping;
+            if (SUCCEEDED(m_RenderDeviceContext->Map(m_DitherFrameBuffer.Get(), 0,
+                                                     D3D11_MAP_WRITE_DISCARD, 0, &mapping))) {
+                DITHER_FRAME_CONST_BUF frameBuf = {};
+                frameBuf.ditherPhase = m_DitherPhase;
+                memcpy(mapping.pData, &frameBuf, sizeof(frameBuf));
+                m_RenderDeviceContext->Unmap(m_DitherFrameBuffer.Get(), 0);
+            }
+        }
+
+        m_RenderDeviceContext->PSSetConstantBuffers(1, 1, m_DitherFrameBuffer.GetAddressOf());
+    }
 
     if (yuv444) {
         // We'll need to use one of the 4:4:4 shaders for this pixel format
         switch (m_TextureFormat)
         {
         case DXGI_FORMAT_AYUV:
-            m_RenderDeviceContext->PSSetShader(m_VideoPixelShaders[PixelShaders::GENERIC_AYUV].Get(), nullptr, 0);
+            m_RenderDeviceContext->PSSetShader(videoShaders[PixelShaders::GENERIC_AYUV].Get(), nullptr, 0);
             break;
         case DXGI_FORMAT_Y410:
-            m_RenderDeviceContext->PSSetShader(m_VideoPixelShaders[PixelShaders::GENERIC_Y410].Get(), nullptr, 0);
+            m_RenderDeviceContext->PSSetShader(videoShaders[PixelShaders::GENERIC_Y410].Get(), nullptr, 0);
             break;
         default:
             SDL_assert(false);
@@ -1113,13 +1281,15 @@ void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame)
     }
     else {
         // We'll need to use the generic 4:2:0 shader for this colorspace and color range combo
-        m_RenderDeviceContext->PSSetShader(m_VideoPixelShaders[PixelShaders::GENERIC_YUV_420].Get(), nullptr, 0);
+        m_RenderDeviceContext->PSSetShader(videoShaders[PixelShaders::GENERIC_YUV_420].Get(), nullptr, 0);
     }
 
     // If nothing has changed since last frame, we're done
-    if (!frameChanged) {
+    if (!frameChanged && !m_DitherStateChanged) {
         return;
     }
+
+    m_DitherStateChanged = false;
 
     D3D11_BUFFER_DESC constDesc = {};
     constDesc.ByteWidth = sizeof(CSC_CONST_BUF);
@@ -1153,6 +1323,8 @@ void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame)
                                   ((float)(frame->width - 1) / framesContext->width) : 1.0f;
     constBuf.chromaUVMax[1] = frame->height != (int)framesContext->height ?
                                   ((float)(frame->height - 1) / framesContext->height) : 1.0f;
+
+    constBuf.ditherLevels = m_DitherLevels;
 
     D3D11_SUBRESOURCE_DATA constData = {};
     constData.pSysMem = &constBuf;
@@ -1555,6 +1727,9 @@ bool D3D11VARenderer::notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO stateInfo)
             releasePreparedVrrFrame();
         }
         refreshVrrDisplayState();
+
+        // The new display may have a different bit depth than the old one
+        refreshDitherState();
         unlockContext(this);
 
         // We've handled this state change
@@ -3242,6 +3417,85 @@ bool D3D11VARenderer::setupRenderingResources()
                          hr);
             return false;
         }
+    }
+
+    // Load the dithering variants when this session could use them: the option
+    // is on and the stream carries more bits per component than an ordinary
+    // display can show. Whether they actually get bound depends on the display
+    // we end up on, which can change while we're streaming.
+    //
+    // This renderer has one ordered kernel, so every enabled mode maps onto it.
+    // Only libplacebo can honor the higher-quality kernels.
+    if (m_DecoderParams.ditheringMode != StreamingPreferences::DM_OFF &&
+            (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_10BIT))
+    {
+        if (m_DecoderParams.debandMode != StreamingPreferences::DB_OFF) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "D3D11 has no debanding; ignoring deband mode %d",
+                        m_DecoderParams.debandMode);
+        }
+
+        if (m_DecoderParams.ditheringMode != StreamingPreferences::DM_ORDERED) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "D3D11 has a single ordered dithering kernel; using it "
+                        "instead of the selected mode %d",
+                        m_DecoderParams.ditheringMode);
+        }
+
+        for (int i = 0; i < PixelShaders::_COUNT; i++)
+        {
+            QByteArray ditherPixelShaderBytecode = Path::readDataFile(k_VideoDitherShaderNames[i]);
+
+            hr = m_RenderDevice->CreatePixelShader(ditherPixelShaderBytecode.constData(), ditherPixelShaderBytecode.length(), nullptr, &m_VideoDitherPixelShaders[i]);
+            if (FAILED(hr)) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "ID3D11Device::CreatePixelShader() failed for the dithering shaders: %x",
+                             hr);
+
+                // Dithering is a quality option, not a requirement, so fall
+                // back to the undithered shaders instead of failing here.
+                for (auto& shader : m_VideoDitherPixelShaders) {
+                    shader.Reset();
+                }
+                break;
+            }
+        }
+
+        // A dynamic buffer so temporal dithering can rewrite the phase every
+        // frame without recreating it. It stays zero-filled (fixed pattern)
+        // when temporal dithering is off.
+        if (m_VideoDitherPixelShaders[0]) {
+            m_TemporalDither = m_DecoderParams.temporalDithering;
+
+            D3D11_BUFFER_DESC frameDesc = {};
+            frameDesc.ByteWidth = sizeof(DITHER_FRAME_CONST_BUF);
+            frameDesc.Usage = D3D11_USAGE_DYNAMIC;
+            frameDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            frameDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+            DITHER_FRAME_CONST_BUF frameBuf = {};
+            D3D11_SUBRESOURCE_DATA frameData = {};
+            frameData.pSysMem = &frameBuf;
+
+            hr = m_RenderDevice->CreateBuffer(&frameDesc, &frameData, &m_DitherFrameBuffer);
+            if (FAILED(hr)) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "ID3D11Device::CreateBuffer() failed for the dither frame buffer: %x",
+                             hr);
+
+                // The shaders read b1 unconditionally, so drop dithering rather
+                // than draw with an unbound constant buffer.
+                for (auto& shader : m_VideoDitherPixelShaders) {
+                    shader.Reset();
+                }
+            }
+            else if (m_TemporalDither) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "Temporal dithering enabled");
+            }
+        }
+
+        refreshDitherState();
     }
 
     // We use a common sampler for all pixel shaders
