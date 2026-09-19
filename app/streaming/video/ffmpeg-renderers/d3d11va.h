@@ -240,6 +240,12 @@ private:
     bool m_DitherActive;
     float m_DitherLevels;
     bool m_DitherStateChanged;
+    // Temporal dithering advances a phase every frame, so it needs a buffer
+    // that can be rewritten per frame rather than the format-change-driven
+    // CSC constant buffer.
+    bool m_TemporalDither;
+    float m_DitherPhase;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_DitherFrameBuffer;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_VideoVertexBuffer;
 
     // Only valid if !m_BindDecoderOutputTextures

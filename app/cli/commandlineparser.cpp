@@ -333,6 +333,13 @@ StreamCommandLineParser::StreamCommandLineParser()
         {"high",     StreamingPreferences::DM_ERROR_DIFFUSION},
         {"highest",  StreamingPreferences::DM_ERROR_DIFFUSION_HQ},
     };
+    m_DebandModeMap = {
+        {"off",    StreamingPreferences::DB_OFF},
+        {"grain",  StreamingPreferences::DB_GRAIN_ONLY},
+        {"light",  StreamingPreferences::DB_LIGHT},
+        {"medium", StreamingPreferences::DB_MEDIUM},
+        {"strong", StreamingPreferences::DB_STRONG},
+    };
 }
 
 StreamCommandLineParser::~StreamCommandLineParser()
@@ -383,6 +390,8 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     parser.addToggleOption("hdr", "HDR streaming");
     parser.addToggleOption("yuv444", "YUV 4:4:4 sampling, if supported");
     parser.addChoiceOption("dithering", "dithering kernel used when 10-bit video must be reduced for output", m_DitheringModeMap.keys());
+    parser.addToggleOption("temporal-dithering", "a dither pattern that varies each frame");
+    parser.addChoiceOption("deband", "debanding strength applied to the decoded frame", m_DebandModeMap.keys());
     parser.addChoiceOption("capture-system-keys", "capture system key combos", m_CaptureSysKeysModeMap.keys());
     parser.addChoiceOption("video-codec", "video codec", m_VideoCodecMap.keys());
     parser.addChoiceOption("video-decoder", "video decoder", m_VideoDecoderMap.keys());
@@ -516,6 +525,14 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     // Resolve --dithering option
     if (parser.isSet("dithering")) {
         preferences->ditheringMode = mapValue(m_DitheringModeMap, parser.getChoiceOptionValue("dithering"));
+    }
+
+    // Resolve --temporal-dithering and --no-temporal-dithering options
+    preferences->temporalDithering = parser.getToggleOptionValue("temporal-dithering", preferences->temporalDithering);
+
+    // Resolve --deband option
+    if (parser.isSet("deband")) {
+        preferences->debandMode = mapValue(m_DebandModeMap, parser.getChoiceOptionValue("deband"));
     }
     
     // Resolve --capture-system-keys option

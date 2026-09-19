@@ -99,6 +99,14 @@ SystemProperties::SystemProperties()
     supportsVideoDithering = false;
 #endif
 
+    // Only libplacebo has debanding. On Windows 10-bit always goes through the
+    // D3D11VA renderer, which has no equivalent, so don't offer it there.
+#if defined(HAVE_LIBPLACEBO_VULKAN) && !defined(Q_OS_WIN32)
+    supportsVideoDebanding = true;
+#else
+    supportsVideoDebanding = false;
+#endif
+
     QString nativeArch = QSysInfo::currentCpuArchitecture();
 
 #ifdef Q_OS_WIN32

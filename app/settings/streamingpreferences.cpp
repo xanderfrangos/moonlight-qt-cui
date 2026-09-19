@@ -36,6 +36,8 @@
 #define SER_YUV444 "yuv444"
 #define SER_DITHERING "dithering"   // Retired bool, migrated to SER_DITHERINGMODE
 #define SER_DITHERINGMODE "ditheringmode"
+#define SER_TEMPORALDITHERING "temporaldithering"
+#define SER_DEBANDMODE "debandmode"
 #define SER_VIDEODEC "videodec"
 #define SER_WINDOWMODE "windowmode"
 #define SER_MDNS "mdns"
@@ -150,6 +152,15 @@ void StreamingPreferences::reload()
     else if (settings.contains(SER_DITHERING)) {
         // Carry over the old on/off checkbox to the balanced kernel.
         ditheringMode = settings.value(SER_DITHERING).toBool() ? DM_BLUE_NOISE : DM_OFF;
+    }
+    temporalDithering = settings.value(SER_TEMPORALDITHERING, false).toBool();
+    debandMode = DB_OFF;
+    if (settings.contains(SER_DEBANDMODE)) {
+        bool validMode = false;
+        const int savedMode = settings.value(SER_DEBANDMODE).toInt(&validMode);
+        if (validMode && savedMode >= DB_OFF && savedMode <= DB_STRONG) {
+            debandMode = savedMode;
+        }
     }
     bitrateKbps = settings.value(SER_BITRATE, getDefaultBitrate(width, height, fps, enableYUV444)).toInt();
     unlockBitrate = settings.value(SER_UNLOCK_BITRATE, false).toBool();
@@ -430,6 +441,8 @@ void StreamingPreferences::save()
     settings.setValue(SER_HDR, enableHdr);
     settings.setValue(SER_YUV444, enableYUV444);
     settings.setValue(SER_DITHERINGMODE, ditheringMode);
+    settings.setValue(SER_TEMPORALDITHERING, temporalDithering);
+    settings.setValue(SER_DEBANDMODE, debandMode);
     settings.remove(SER_DITHERING); // Superseded by the kernel selection
     settings.setValue(SER_VIDEOCFG, static_cast<int>(videoCodecConfig));
     settings.setValue(SER_VIDEODEC, static_cast<int>(videoDecoderSelection));

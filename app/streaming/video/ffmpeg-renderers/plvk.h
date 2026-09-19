@@ -153,6 +153,7 @@ private:
     // correct for HDR targets too.
     pl_render_params m_RenderParams = pl_render_fast_params;
     pl_dither_params m_DitherParams = {};
+    pl_deband_params m_DebandParams = {};
 
 #ifdef PLVK_USE_EARLY_RENDER_TO_WAIT
     pl_overlay m_EmptyOverlay = {};

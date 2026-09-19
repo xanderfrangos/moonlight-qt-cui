@@ -11,6 +11,15 @@
 
 #define VIDEO_SHADER_OUTPUT float4
 
+// Temporal dithering phase for this frame, in [0, 1). Zero when temporal
+// dithering is off, which leaves the pattern fixed in screen space. It lives in
+// its own constant buffer because it changes every frame, while CSC_CONST_BUF
+// is only rebuilt when the frame format does.
+cbuffer DITHER_FRAME_CONST_BUF : register(b1)
+{
+    float ditherPhase;
+};
+
 // ditherLevels is (2^bitsPerComponent - 1) for the display we're rendering to.
 // It arrives in the tail of CSC_CONST_BUF.
 float3 orderedDither(min16float3 color, float2 screenPos, float levels)
@@ -28,8 +37,11 @@ float3 orderedDither(min16float3 color, float2 screenPos, float levels)
                  (((xy >> 2u) & 1u) << 1) |
                   ((y  >> 2u) & 1u);
 
-    // Half a step of offset keeps the pattern centered on the rounded value
-    float threshold = ((float)index + 0.5f) / 64.0f;
+    // Half a step of offset keeps the pattern centered on the rounded value.
+    // Advancing the whole set by ditherPhase and wrapping rotates it without
+    // disturbing its spacing, so each frame stays a valid dither while the
+    // per-pixel threshold decorrelates over time.
+    float threshold = frac(((float)index + 0.5f) / 64.0f + ditherPhase);
 
     // Quantize at full precision. The result is already an exact display-depth
     // value, so the truncation further down the display pipeline is a no-op.

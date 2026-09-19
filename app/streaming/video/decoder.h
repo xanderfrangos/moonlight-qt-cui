@@ -103,6 +103,10 @@ typedef struct _DECODER_PARAMETERS {
     // single ordered kernel and approximates the rest. Other renderers ignore
     // this entirely.
     int ditheringMode = 0;
+    // Vary the dither pattern per frame. Ignored when ditheringMode is off.
+    bool temporalDithering = false;
+    // StreamingPreferences::DebandMode. Only libplacebo implements this.
+    int debandMode = 0;
     // Strictly obtained during Session initialization. A value of zero means
     // the session was not qualified for VRR; Pacer must not substitute a
     // legacy 60 Hz fallback when this path is requested.
