@@ -593,6 +593,24 @@ ApplicationWindow {
             }
 
             NavigableToolButton {
+                id: controllersButton
+                visible: SystemProperties.tvMode
+
+                iconSource: "qrc:/res/ic_videogame_asset_white_48px.svg"
+
+                onClicked: navigateTo("qrc:/gui/ControllerView.qml", ControllerView)
+
+                Keys.onDownPressed: {
+                    stackView.currentItem.forceActiveFocus(Qt.TabFocus)
+                }
+
+                ToolTip.delay: 1000
+                ToolTip.timeout: 3000
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                ToolTip.text: qsTr("Controllers")
+            }
+
+            NavigableToolButton {
                 id: settingsButton
 
                 iconSource:  "qrc:/res/settings.svg"

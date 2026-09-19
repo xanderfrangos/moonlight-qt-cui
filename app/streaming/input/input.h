@@ -179,6 +179,10 @@ private:
     GamepadState*
     findStateForGamepad(SDL_JoystickID id);
 
+    bool isControllerEnabled(const QString& id) const;
+
+    int preferredControllerIndex(const QString& id) const;
+
     void sendGamepadState(GamepadState* state);
 
     void sendGamepadBatteryState(GamepadState* state, SDL_JoystickPowerLevel level);
@@ -214,6 +218,8 @@ private:
     bool m_SwapMouseButtons;
     bool m_ReverseScrollDirection;
     bool m_SwapFaceButtons;
+    QStringList m_ControllerOrder;
+    QStringList m_DisabledControllers;
 
     bool m_MouseWasInVideoRegion;
     bool m_PendingMouseButtonsAllUpOnVideoRegionLeave;

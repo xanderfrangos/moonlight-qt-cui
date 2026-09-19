@@ -1,7 +1,10 @@
 #include "streaming/session.h"
 
 #include <Limelight.h>
+#include <algorithm>
+#include <climits>
 #include "SDL_compat.h"
+#include "settings/controlleridentity.h"
 #include "settings/mappingmanager.h"
 
 #include <QtMath>
@@ -577,28 +580,6 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
             }
         }
 
-        // We used to use SDL_GameControllerGetPlayerIndex() here but that
-        // can lead to strange issues due to bugs in Windows where an Xbox
-        // controller will join as player 2, even though no player 1 controller
-        // is connected at all. This pretty much screws any attempt to use
-        // the gamepad in single player games, so just assign them in order from 0.
-        i = 0;
-
-        for (; i < MAX_GAMEPADS; i++) {
-            SDL_assert(m_GamepadState[i].controller != controller);
-            if (m_GamepadState[i].controller == NULL) {
-                // Found an empty slot
-                break;
-            }
-        }
-
-        if (i == MAX_GAMEPADS) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "No open gamepad slots found!");
-            SDL_GameControllerClose(controller);
-            return;
-        }
-
         SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(SDL_GameControllerGetJoystick(controller)),
                                   guidStr, sizeof(guidStr));
         if (m_IgnoreDeviceGuids.contains(guidStr, Qt::CaseInsensitive))
@@ -606,6 +587,35 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "Skipping ignored device with GUID: %s",
                         guidStr);
+            SDL_GameControllerClose(controller);
+            return;
+        }
+
+        const QString controllerId = ControllerIdentity::fromController(controller);
+        if (!isControllerEnabled(controllerId)) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Skipping disabled gamepad: %s",
+                        qPrintable(ControllerIdentity::displayName(controller)));
+            SDL_GameControllerClose(controller);
+            return;
+        }
+
+        // Use the saved order for controllers present when streaming starts.
+        // A controller connected later takes a free slot instead of renumbering
+        // players that are already active on the host.
+        i = m_MultiController ? preferredControllerIndex(controllerId) : 0;
+        if (i < 0 || i >= MAX_GAMEPADS || m_GamepadState[i].controller != nullptr) {
+            for (i = 0; i < MAX_GAMEPADS; i++) {
+                SDL_assert(m_GamepadState[i].controller != controller);
+                if (m_GamepadState[i].controller == nullptr) {
+                    break;
+                }
+            }
+        }
+
+        if (i == MAX_GAMEPADS) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "No open gamepad slots found!");
             SDL_GameControllerClose(controller);
             return;
         }
@@ -1064,7 +1074,9 @@ int SdlInputHandler::getAttachedGamepadMask()
             SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(i),
                                       guidStr, sizeof(guidStr));
 
-            if (!m_IgnoreDeviceGuids.contains(guidStr, Qt::CaseInsensitive))
+            const QString controllerId = ControllerIdentity::fromDeviceIndex(i);
+            if (!m_IgnoreDeviceGuids.contains(guidStr, Qt::CaseInsensitive) &&
+                    isControllerEnabled(controllerId) && count < MAX_GAMEPADS)
             {
                 mask |= (1 << count++);
             }
@@ -1072,4 +1084,38 @@ int SdlInputHandler::getAttachedGamepadMask()
     }
 
     return mask;
+}
+
+bool SdlInputHandler::isControllerEnabled(const QString& id) const
+{
+    return !id.isEmpty() && !m_DisabledControllers.contains(id);
+}
+
+int SdlInputHandler::preferredControllerIndex(const QString& id) const
+{
+    QStringList attachedIds;
+    const int numJoysticks = SDL_NumJoysticks();
+    for (int deviceIndex = 0; deviceIndex < numJoysticks; deviceIndex++) {
+        if (!SDL_IsGameController(deviceIndex)) {
+            continue;
+        }
+
+        char guidStr[33];
+        SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(deviceIndex),
+                                  guidStr, sizeof(guidStr));
+        const QString candidateId = ControllerIdentity::fromDeviceIndex(deviceIndex);
+        if (!m_IgnoreDeviceGuids.contains(guidStr, Qt::CaseInsensitive) &&
+                isControllerEnabled(candidateId) && !attachedIds.contains(candidateId)) {
+            attachedIds.append(candidateId);
+        }
+    }
+
+    std::stable_sort(attachedIds.begin(), attachedIds.end(), [this](const QString& left, const QString& right) {
+        int leftIndex = m_ControllerOrder.indexOf(left);
+        int rightIndex = m_ControllerOrder.indexOf(right);
+        if (leftIndex < 0) leftIndex = INT_MAX;
+        if (rightIndex < 0) rightIndex = INT_MAX;
+        return leftIndex < rightIndex;
+    });
+    return attachedIds.indexOf(id);
 }

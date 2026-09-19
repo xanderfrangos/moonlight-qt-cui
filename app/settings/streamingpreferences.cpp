@@ -30,6 +30,8 @@
 #define SER_GAMEOPTS "gameopts"
 #define SER_HOSTAUDIO "hostaudio"
 #define SER_MULTICONT "multicontroller"
+#define SER_CONTROLLERORDER "controllerorder"
+#define SER_DISABLEDCONTROLLERS "disabledcontrollers"
 #define SER_AUDIOCFG "audiocfg"
 #define SER_VIDEOCFG "videocfg"
 #define SER_HDR "hdr"
@@ -186,6 +188,8 @@ void StreamingPreferences::reload()
     gameOptimizations = settings.value(SER_GAMEOPTS, true).toBool();
     playAudioOnHost = settings.value(SER_HOSTAUDIO, false).toBool();
     multiController = settings.value(SER_MULTICONT, true).toBool();
+    controllerOrder = settings.value(SER_CONTROLLERORDER).toStringList();
+    disabledControllers = settings.value(SER_DISABLEDCONTROLLERS).toStringList();
     enableMdns = settings.value(SER_MDNS, true).toBool();
     quitAppAfter = settings.value(SER_QUITAPPAFTER, false).toBool();
     absoluteMouseMode = settings.value(SER_ABSMOUSEMODE, false).toBool();
@@ -425,6 +429,8 @@ void StreamingPreferences::save()
     settings.setValue(SER_GAMEOPTS, gameOptimizations);
     settings.setValue(SER_HOSTAUDIO, playAudioOnHost);
     settings.setValue(SER_MULTICONT, multiController);
+    settings.setValue(SER_CONTROLLERORDER, controllerOrder);
+    settings.setValue(SER_DISABLEDCONTROLLERS, disabledControllers);
     settings.setValue(SER_MDNS, enableMdns);
     settings.setValue(SER_QUITAPPAFTER, quitAppAfter);
     settings.setValue(SER_ABSMOUSEMODE, absoluteMouseMode);

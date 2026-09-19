@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QRect>
 #include <QQmlEngine>
+#include <QStringList>
 #include <QVariantList>
 
 class StreamingPreferences : public QObject
@@ -236,6 +237,12 @@ public:
     bool gameOptimizations;
     bool playAudioOnHost;
     bool multiController;
+    // Stable controller IDs in preferred host player order. Controllers not
+    // present in this list are appended when first discovered.
+    QStringList controllerOrder;
+    // Stable controller IDs that remain available to the Moonlight UI but are
+    // not passed through to the streaming host.
+    QStringList disabledControllers;
     bool enableMdns;
     bool quitAppAfter;
     bool absoluteMouseMode;

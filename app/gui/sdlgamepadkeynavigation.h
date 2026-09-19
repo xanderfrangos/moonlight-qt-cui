@@ -2,6 +2,7 @@
 
 #include <QTimer>
 #include <QEvent>
+#include <QVariantList>
 
 #include "SDL_compat.h"
 
@@ -10,6 +11,7 @@
 class SdlGamepadKeyNavigation : public QObject
 {
     Q_OBJECT
+    Q_PROPERTY(QVariantList controllers READ controllers NOTIFY controllersChanged)
 
 public:
     SdlGamepadKeyNavigation(StreamingPreferences* prefs);
@@ -25,6 +27,15 @@ public:
     Q_INVOKABLE void setUiNavMode(bool settingsMode);
 
     Q_INVOKABLE int getConnectedGamepads();
+
+    Q_INVOKABLE void setControllerEnabled(const QString& id, bool enabled);
+
+    Q_INVOKABLE void moveController(const QString& id, int direction);
+
+    QVariantList controllers() const;
+
+signals:
+    void controllersChanged();
 
 private:
     enum NavDirection
@@ -50,13 +61,24 @@ private:
 
     void updateTimerState();
 
+    void addGamepad(SDL_GameController* controller);
+
+    QStringList connectedControllerIdsInOrder() const;
+
+    struct UiGamepad
+    {
+        SDL_GameController* controller;
+        QString id;
+        QString name;
+    };
+
 private slots:
     void onPollingTimerFired();
 
 private:
     StreamingPreferences* m_Prefs;
     QTimer* m_PollingTimer;
-    QList<SDL_GameController*> m_Gamepads;
+    QList<UiGamepad> m_Gamepads;
     bool m_Enabled;
     bool m_UiNavMode;
     bool m_FirstPoll;
