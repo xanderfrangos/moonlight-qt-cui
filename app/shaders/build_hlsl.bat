@@ -4,3 +4,8 @@ fxc /T ps_5_0 /O3 /Fo d3d11_overlay_pixel.fxc d3d11_overlay_pixel.hlsl
 fxc /T ps_5_0 /O3 /Fo d3d11_yuv420_pixel.fxc d3d11_yuv420_pixel.hlsl
 fxc /T ps_5_0 /O3 /Fo d3d11_ayuv_pixel.fxc d3d11_ayuv_pixel.hlsl
 fxc /T ps_5_0 /O3 /Fo d3d11_y410_pixel.fxc d3d11_y410_pixel.hlsl
+
+rem Dithering variants of the video shaders, built from the same sources
+fxc /T ps_5_0 /O3 /D DITHER_OUTPUT=1 /Fo d3d11_yuv420_dither_pixel.fxc d3d11_yuv420_pixel.hlsl
+fxc /T ps_5_0 /O3 /D DITHER_OUTPUT=1 /Fo d3d11_ayuv_dither_pixel.fxc d3d11_ayuv_pixel.hlsl
+fxc /T ps_5_0 /O3 /D DITHER_OUTPUT=1 /Fo d3d11_y410_dither_pixel.fxc d3d11_y410_pixel.hlsl

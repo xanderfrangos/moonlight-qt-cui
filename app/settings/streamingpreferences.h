@@ -132,6 +132,30 @@ public:
     };
     Q_ENUM(Language);
 
+    // Dithering kernel, ordered from cheapest to highest quality. Persisted
+    // IDs must stay stable when changing the user-facing names.
+    enum DitheringMode
+    {
+        DM_OFF = 0,
+        DM_ORDERED = 1,
+        DM_BLUE_NOISE = 2,
+        DM_ERROR_DIFFUSION = 3,
+        DM_ERROR_DIFFUSION_HQ = 4,
+    };
+    Q_ENUM(DitheringMode)
+
+    // Debanding strength. Persisted IDs must stay stable when changing the
+    // user-facing names.
+    enum DebandMode
+    {
+        DB_OFF = 0,
+        DB_GRAIN_ONLY = 1,
+        DB_LIGHT = 2,
+        DB_MEDIUM = 3,
+        DB_STRONG = 4,
+    };
+    Q_ENUM(DebandMode)
+
     enum CaptureSysKeysMode
     {
         CSK_OFF,
@@ -171,6 +195,9 @@ public:
     Q_PROPERTY(VideoCodecConfig videoCodecConfig MEMBER videoCodecConfig NOTIFY videoCodecConfigChanged)
     Q_PROPERTY(bool enableHdr MEMBER enableHdr NOTIFY enableHdrChanged)
     Q_PROPERTY(bool enableYUV444 MEMBER enableYUV444 NOTIFY enableYUV444Changed)
+    Q_PROPERTY(int ditheringMode MEMBER ditheringMode NOTIFY ditheringModeChanged)
+    Q_PROPERTY(bool temporalDithering MEMBER temporalDithering NOTIFY temporalDitheringChanged)
+    Q_PROPERTY(int debandMode MEMBER debandMode NOTIFY debandModeChanged)
     Q_PROPERTY(VideoDecoderSelection videoDecoderSelection MEMBER videoDecoderSelection NOTIFY videoDecoderSelectionChanged)
     Q_PROPERTY(RendererSelection rendererSelection MEMBER rendererSelection NOTIFY rendererSelectionChanged)
     Q_PROPERTY(WindowMode windowMode MEMBER windowMode NOTIFY windowModeChanged)
@@ -236,6 +263,17 @@ public:
     VideoCodecConfig videoCodecConfig;
     bool enableHdr;
     bool enableYUV444;
+    // Dithering kernel used to reduce 10-bit video to the output bit depth in
+    // the renderer instead of letting it be quantized without dithering.
+    // Renderers that cannot honor the exact kernel approximate it.
+    int ditheringMode;
+    // Vary the dither pattern per frame so it stops sitting still in screen
+    // space. Off by default because it can alias on some LCD panels.
+    bool temporalDithering;
+    // Reconstruct banded gradients in the decoded frame before quantization.
+    // Unlike dithering this can fix banding that arrived in the stream, at
+    // the cost of some fine detail.
+    int debandMode;
     VideoDecoderSelection videoDecoderSelection;
     WindowMode windowMode;
     WindowMode recommendedFullScreenMode;
@@ -272,6 +310,9 @@ signals:
     void videoCodecConfigChanged();
     void enableHdrChanged();
     void enableYUV444Changed();
+    void ditheringModeChanged();
+    void temporalDitheringChanged();
+    void debandModeChanged();
     void videoDecoderSelectionChanged();
     void uiDisplayModeChanged();
     void uiScaleChanged();

@@ -89,6 +89,8 @@ private:
     void renderOverlay(Overlay::OverlayType type);
     bool createOverlayVertexBuffer(Overlay::OverlayType type, int width, int height, Microsoft::WRL::ComPtr<ID3D11Buffer>& newVertexBuffer);
     void bindColorConversion(bool frameChanged, AVFrame* frame);
+    int queryDisplayBitsPerComponent();
+    void refreshDitherState();
     void bindVideoVertexBuffer(bool frameChanged, AVFrame* frame);
     void renderVideo(AVFrame* frame, uint64_t decodeBoundary = 0);
     bool checkDecoderSupport(IDXGIAdapter* adapter);
@@ -231,7 +233,19 @@ private:
     uint64_t m_VrrPriorFrameStatsPresentRefreshSequence;
     uint64_t m_VrrPriorFrameStatsRefreshSequence;
 
+    // Dithering is decided per display, so both shader sets stay resident and
+    // a display change only flips which one bindColorConversion() picks.
     std::array<Microsoft::WRL::ComPtr<ID3D11PixelShader>, PixelShaders::_COUNT> m_VideoPixelShaders;
+    std::array<Microsoft::WRL::ComPtr<ID3D11PixelShader>, PixelShaders::_COUNT> m_VideoDitherPixelShaders;
+    bool m_DitherActive;
+    float m_DitherLevels;
+    bool m_DitherStateChanged;
+    // Temporal dithering advances a phase every frame, so it needs a buffer
+    // that can be rewritten per frame rather than the format-change-driven
+    // CSC constant buffer.
+    bool m_TemporalDither;
+    float m_DitherPhase;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_DitherFrameBuffer;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_VideoVertexBuffer;
 
     // Only valid if !m_BindDecoderOutputTextures
