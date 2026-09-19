@@ -182,8 +182,8 @@ void Session::clConnectionStatusUpdate(int connectionStatus)
         return;
     }
 
-    if (s_ActiveSession->m_MouseEmulationRefCount > 0) {
-        // Don't display the overlay if mouse emulation is already using it
+    if (s_ActiveSession->m_MouseEmulationRefCount > 0 || s_ActiveSession->m_GamepadMenuOpen) {
+        // Don't display the overlay if mouse emulation or the gamepad menu is already using it
         return;
     }
 
@@ -631,6 +631,8 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_UnexpectedTermination(true), // Failure prior to streaming is unexpected
       m_InputHandler(nullptr),
       m_MouseEmulationRefCount(0),
+      m_GamepadMenuOpen(false),
+      m_GamepadMenuIndex(0),
       m_FlushingWindowEventsRef(0),
       m_ShouldExit(false),
       m_AsyncConnectionSuccess(false),
@@ -1704,14 +1706,121 @@ void Session::notifyMouseEmulationMode(bool enabled)
     m_MouseEmulationRefCount += enabled ? 1 : -1;
     SDL_assert(m_MouseEmulationRefCount >= 0);
 
-    // We re-use the status update overlay for mouse mode notification
-    if (m_MouseEmulationRefCount > 0) {
+    refreshStatusOverlay();
+}
+
+static const char* k_GamepadMenuItems[] = {
+    "Disconnect",
+    "End Session",
+    "Toggle Stream Statistics",
+};
+
+// The gamepad menu is drawn in a centered box, so it needs brighter text than
+// the status messages that sit unboxed over the video in the corner.
+static const SDL_Color k_StatusColor = {0xCC, 0x00, 0x00, 0xFF};
+static const SDL_Color k_MenuColor = {0xFF, 0xFF, 0xFF, 0xFF};
+static const SDL_Color k_MenuBackground = {0x14, 0x14, 0x14, 0xFF};
+static const SDL_Color k_NoBackground = {0x00, 0x00, 0x00, 0x00};
+
+void Session::refreshStatusOverlay()
+{
+    static_assert(SDL_arraysize(k_GamepadMenuItems) == GamepadMenuItemMax,
+                  "Gamepad menu item labels must match GamepadMenuItem");
+
+    // The status update overlay is shared between the gamepad menu, gamepad mouse
+    // mode, and connection warnings. The menu takes priority while it's up.
+    if (m_GamepadMenuOpen) {
+        char text[512] = "Moonlight";
+
+        for (int i = 0; i < GamepadMenuItemMax; i++) {
+            SDL_strlcat(text, i == m_GamepadMenuIndex ? "\n> " : "\n  ", sizeof(text));
+            SDL_strlcat(text, k_GamepadMenuItems[i], sizeof(text));
+        }
+
+        m_OverlayManager.setOverlayStyle(Overlay::OverlayStatusUpdate, Overlay::OverlayAnchorCenter,
+                                         k_MenuColor, k_MenuBackground);
+        m_OverlayManager.updateOverlayText(Overlay::OverlayStatusUpdate, text);
+        m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
+    }
+    else if (m_MouseEmulationRefCount > 0) {
+        m_OverlayManager.setOverlayStyle(Overlay::OverlayStatusUpdate, Overlay::OverlayAnchorBottomLeft,
+                                         k_StatusColor, k_NoBackground);
         m_OverlayManager.updateOverlayText(Overlay::OverlayStatusUpdate, "Gamepad mouse mode active\nLong press Start to deactivate");
         m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
     }
     else {
+        m_OverlayManager.setOverlayStyle(Overlay::OverlayStatusUpdate, Overlay::OverlayAnchorBottomLeft,
+                                         k_StatusColor, k_NoBackground);
         m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, false);
     }
+}
+
+void Session::openGamepadMenu()
+{
+    if (m_GamepadMenuOpen) {
+        return;
+    }
+
+    m_GamepadMenuOpen = true;
+    m_GamepadMenuIndex = 0;
+    refreshStatusOverlay();
+}
+
+void Session::closeGamepadMenu()
+{
+    if (!m_GamepadMenuOpen) {
+        return;
+    }
+
+    m_GamepadMenuOpen = false;
+    refreshStatusOverlay();
+
+    // Gamepad input was swallowed while the menu was up, so resynchronize the
+    // host with whatever is actually held down now.
+    if (m_InputHandler != nullptr) {
+        m_InputHandler->sendAllGamepadStates();
+    }
+}
+
+void Session::moveGamepadMenuSelection(int delta)
+{
+    SDL_assert(m_GamepadMenuOpen);
+
+    m_GamepadMenuIndex = (m_GamepadMenuIndex + delta + GamepadMenuItemMax) % GamepadMenuItemMax;
+    refreshStatusOverlay();
+}
+
+void Session::activateGamepadMenuSelection()
+{
+    SDL_assert(m_GamepadMenuOpen);
+
+    int selection = m_GamepadMenuIndex;
+    closeGamepadMenu();
+
+    switch (selection) {
+    case GamepadMenuToggleStats:
+        m_OverlayManager.setOverlayState(Overlay::OverlayDebug,
+                                         !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
+        return;
+
+    case GamepadMenuEndSession:
+        // Quit the app running on the host in addition to ending our stream
+        m_Preferences->quitAppAfter = true;
+        break;
+
+    case GamepadMenuDisconnect:
+        break;
+
+    default:
+        SDL_assert(false);
+        return;
+    }
+
+    // Push a quit event to the main loop to tear down the stream
+    SDL_Event event;
+    event.type = SDL_QUIT;
+    event.quit.timestamp = SDL_GetTicks();
+    SDL_PushEvent(&event);
 }
 
 class AsyncConnectionStartThread : public QThread

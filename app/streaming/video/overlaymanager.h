@@ -18,6 +18,12 @@ enum OverlayType {
     OverlayMax
 };
 
+enum OverlayAnchor {
+    OverlayAnchorTopLeft,
+    OverlayAnchorBottomLeft,
+    OverlayAnchorCenter,
+};
+
 class IOverlayRenderer
 {
 public:
@@ -63,11 +69,28 @@ public:
     int getOverlayFontSize(OverlayType type);
     SDL_Surface* getUpdatedOverlaySurface(OverlayType type);
 
+    // Restyles an overlay. This takes effect on the next updateOverlayText()
+    // or setOverlayState() call for that overlay. A background with zero alpha
+    // draws the text directly over the video with no box behind it.
+    void setOverlayStyle(OverlayType type, OverlayAnchor anchor, SDL_Color color, SDL_Color background);
+
+    // Safe to call from render threads without blocking overlay producers
+    OverlayAnchor getOverlayAnchor(OverlayType type);
+
+    // Places an overlay of the given size within a viewport. Renderers whose
+    // coordinate space puts the origin in the lower-left corner (OpenGL, D3D11
+    // NDC) pass originAtBottom.
+    static void getOverlayPosition(OverlayAnchor anchor,
+                                   int overlayWidth, int overlayHeight,
+                                   int viewportWidth, int viewportHeight,
+                                   bool originAtBottom, int& x, int& y);
+
     void setOverlayRenderer(IOverlayRenderer* renderer);
 
 private:
     void run();
     SDL_Surface* RenderTextOutlinedWrapped(TTF_Font* font, const char* text, SDL_Color textColor, SDL_Color outlineColor, int outlineWidth, int wrapWidth);
+    static SDL_Surface* AddBackground(SDL_Surface* textSurface, SDL_Color background, int padding);
 
     struct {
         bool enabled = false;
@@ -76,7 +99,11 @@ private:
         std::chrono::steady_clock::time_point queued;
         int fontSize = 0;
         SDL_Color color = {};
+        SDL_Color background = {};
         char text[1024] = {};
+
+        // Read by renderers without m_StateLock held
+        SDL_atomic_t anchor = {};
 
         TTF_Font* font = nullptr; // Owned exclusively by the overlay worker.
         SDL_Surface* surface = nullptr; // Atomic ownership transfer to renderer.

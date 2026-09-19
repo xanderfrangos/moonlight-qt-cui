@@ -1975,16 +1975,15 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
             Session::get()->getOverlayManager().isOverlayEnabled((Overlay::OverlayType)i)) {
             // Position the overlay
             overlayParts[i].src = { 0, 0, (float)m_Overlays[i].overlay.tex->params.w, (float)m_Overlays[i].overlay.tex->params.h };
-            if (i == Overlay::OverlayStatusUpdate) {
-                // Bottom Left
-                overlayParts[i].dst.x0 = 0;
-                overlayParts[i].dst.y0 = SDL_max(0, targetFrame.crop.y1 - overlayParts[i].src.y1);
-            }
-            else if (i == Overlay::OverlayDebug) {
-                // Top left
-                overlayParts[i].dst.x0 = 0;
-                overlayParts[i].dst.y0 = 0;
-            }
+
+            int x, y;
+            Overlay::OverlayManager::getOverlayPosition(Session::get()->getOverlayManager().getOverlayAnchor((Overlay::OverlayType)i),
+                                                        (int)overlayParts[i].src.x1, (int)overlayParts[i].src.y1,
+                                                        (int)targetFrame.crop.x1, (int)targetFrame.crop.y1,
+                                                        false, x, y);
+
+            overlayParts[i].dst.x0 = x;
+            overlayParts[i].dst.y0 = y;
             overlayParts[i].dst.x1 = overlayParts[i].dst.x0 + overlayParts[i].src.x1;
             overlayParts[i].dst.y1 = overlayParts[i].dst.y0 + overlayParts[i].src.y1;
 

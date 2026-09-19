@@ -1640,18 +1640,15 @@ void D3D11VARenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 bool D3D11VARenderer::createOverlayVertexBuffer(Overlay::OverlayType type, int width, int height, ComPtr<ID3D11Buffer>& newVertexBuffer)
 {
     SDL_FRect renderRect = {};
+    int x, y;
 
-    if (type == Overlay::OverlayStatusUpdate) {
-        // Bottom Left
-        renderRect.x = 0;
-        renderRect.y = 0;
-    }
-    else if (type == Overlay::OverlayDebug) {
-        // Top left
-        renderRect.x = 0;
-        renderRect.y = m_DisplayHeight - height;
-    }
+    // NDC places the origin in the lower-left corner
+    Overlay::OverlayManager::getOverlayPosition(Session::get()->getOverlayManager().getOverlayAnchor(type),
+                                                width, height, m_DisplayWidth, m_DisplayHeight,
+                                                true, x, y);
 
+    renderRect.x = x;
+    renderRect.y = y;
     renderRect.w = width;
     renderRect.h = height;
 

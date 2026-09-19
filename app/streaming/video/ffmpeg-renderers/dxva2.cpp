@@ -657,18 +657,15 @@ void DXVA2Renderer::notifyOverlayUpdated(Overlay::OverlayType type)
     newTexture->UnlockRect(0);
 
     SDL_FRect renderRect = {};
+    int x, y;
 
-    if (type == Overlay::OverlayStatusUpdate) {
-        // Bottom Left
-        renderRect.x = 0;
-        renderRect.y = m_DisplayHeight - newSurface->h;
-    }
-    else if (type == Overlay::OverlayDebug) {
-        // Top left
-        renderRect.x = 0;
-        renderRect.y = 0;
-    }
+    Overlay::OverlayManager::getOverlayPosition(Session::get()->getOverlayManager().getOverlayAnchor(type),
+                                                newSurface->w, newSurface->h,
+                                                m_DisplayWidth, m_DisplayHeight,
+                                                false, x, y);
 
+    renderRect.x = x;
+    renderRect.y = y;
     renderRect.w = newSurface->w;
     renderRect.h = newSurface->h;
 

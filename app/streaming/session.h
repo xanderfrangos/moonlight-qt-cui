@@ -178,6 +178,28 @@ private:
 
     void notifyMouseEmulationMode(bool enabled);
 
+    void refreshStatusOverlay();
+
+    enum GamepadMenuItem {
+        GamepadMenuDisconnect,
+        GamepadMenuEndSession,
+        GamepadMenuToggleStats,
+        GamepadMenuItemMax
+    };
+
+    bool isGamepadMenuOpen() const
+    {
+        return m_GamepadMenuOpen;
+    }
+
+    void openGamepadMenu();
+
+    void closeGamepadMenu();
+
+    void moveGamepadMenuSelection(int delta);
+
+    void activateGamepadMenuSelection();
+
     void updateOptimalWindowDisplayMode();
 
     enum class DecoderAvailability {
@@ -293,6 +315,8 @@ private:
     bool m_UnexpectedTermination;
     SdlInputHandler* m_InputHandler;
     int m_MouseEmulationRefCount;
+    bool m_GamepadMenuOpen;
+    int m_GamepadMenuIndex;
     int m_FlushingWindowEventsRef;
     QStringList m_LaunchWarnings;
     bool m_ShouldExit;

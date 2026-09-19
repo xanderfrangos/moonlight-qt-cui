@@ -18,6 +18,9 @@
 // Determines the maximum motion amount before allowing movement
 #define MOUSE_EMULATION_DEADZONE 2
 
+// How far a stick must be pushed to move the selection in the gamepad menu
+#define GAMEPAD_MENU_STICK_DEADZONE 16384
+
 // Haptic capabilities (in addition to those from SDL_HapticQuery())
 #define ML_HAPTIC_GC_RUMBLE         (1U << 16)
 #define ML_HAPTIC_SIMPLE_RUMBLE     (1U << 17)
@@ -246,9 +249,43 @@ void SdlInputHandler::handleControllerAxisEvent(SDL_ControllerAxisEvent* event)
         SDL_PeepEvents(&nextEvent, 1, SDL_GETEVENT, SDL_CONTROLLERAXISMOTION, SDL_CONTROLLERAXISMOTION);
     }
 
+    // While the gamepad menu is up, the left stick drives the menu rather than the host
+    if (Session::get()->isGamepadMenuOpen()) {
+        int navDir;
+        if (state->lsY > GAMEPAD_MENU_STICK_DEADZONE) {
+            navDir = -1;
+        }
+        else if (state->lsY < -GAMEPAD_MENU_STICK_DEADZONE) {
+            navDir = 1;
+        }
+        else {
+            navDir = 0;
+        }
+
+        // Only move on the transition into a direction, so holding the stick
+        // doesn't run away with the selection
+        if (navDir != state->menuNavDir) {
+            state->menuNavDir = navDir;
+            if (navDir != 0) {
+                Session::get()->moveGamepadMenuSelection(navDir);
+            }
+        }
+        return;
+    }
+
     // Only send the gamepad state to the host if it's not in mouse emulation mode
     if (state->mouseEmulationTimer == 0) {
         sendGamepadState(state);
+    }
+}
+
+void SdlInputHandler::sendAllGamepadStates()
+{
+    for (int i = 0; i < MAX_GAMEPADS; i++) {
+        GamepadState* state = &m_GamepadState[i];
+        if (state->controller != nullptr && state->mouseEmulationTimer == 0) {
+            sendGamepadState(state);
+        }
     }
 }
 
@@ -281,6 +318,34 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
             event->button = SDL_CONTROLLER_BUTTON_X;
             break;
         }
+    }
+
+    // While the gamepad menu is up, buttons drive the menu rather than the host.
+    // We still track them so the host gets an accurate state when the menu closes.
+    if (Session::get()->isGamepadMenuOpen()) {
+        if (event->state == SDL_PRESSED) {
+            state->buttons |= k_ButtonMap[event->button];
+
+            switch (event->button) {
+            case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                Session::get()->moveGamepadMenuSelection(-1);
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+                Session::get()->moveGamepadMenuSelection(1);
+                break;
+            case SDL_CONTROLLER_BUTTON_A:
+                Session::get()->activateGamepadMenuSelection();
+                break;
+            case SDL_CONTROLLER_BUTTON_B:
+                Session::get()->closeGamepadMenu();
+                break;
+            }
+        }
+        else {
+            state->buttons &= ~k_ButtonMap[event->button];
+        }
+
+        return;
     }
 
     if (event->state == SDL_PRESSED) {
@@ -363,16 +428,13 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         }
     }
 
-    // Handle Start+Select+L1+R1 as a gamepad quit combo
+    // Handle Start+Select+L1+R1 as a gamepad menu combo
     if (state->buttons == (PLAY_FLAG | BACK_FLAG | LB_FLAG | RB_FLAG) && qgetenv("NO_GAMEPAD_QUIT") != "1") {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Detected quit gamepad button combo");
+                    "Detected menu gamepad button combo");
 
-        // Push a quit event to the main loop
-        SDL_Event event;
-        event.type = SDL_QUIT;
-        event.quit.timestamp = SDL_GetTicks();
-        SDL_PushEvent(&event);
+        // Bring up the menu rather than disconnecting outright
+        Session::get()->openGamepadMenu();
 
         // Clear buttons down on this gamepad
         LiSendMultiControllerEvent(state->index, m_GamepadMask,

@@ -1565,16 +1565,10 @@ void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         uint32_t dumbBuffer, fbId;
         SDL_Rect overlayRect;
 
-        if (type == Overlay::OverlayStatusUpdate) {
-            // Bottom Left
-            overlayRect.x = 0;
-            overlayRect.y = m_OutputRect.h - newSurface->h;
-        }
-        else if (type == Overlay::OverlayDebug) {
-            // Top left
-            overlayRect.x = 0;
-            overlayRect.y = 0;
-        }
+        Overlay::OverlayManager::getOverlayPosition(Session::get()->getOverlayManager().getOverlayAnchor(type),
+                                                    newSurface->w, newSurface->h,
+                                                    m_OutputRect.w, m_OutputRect.h,
+                                                    false, overlayRect.x, overlayRect.y);
 
         overlayRect.w = newSurface->w;
         overlayRect.h = newSurface->h;

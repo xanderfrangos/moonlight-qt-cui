@@ -442,18 +442,15 @@ void VDPAURenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         }
 
         VdpRect overlayRect;
+        int x, y;
 
-        if (type == Overlay::OverlayStatusUpdate) {
-            // Bottom Left
-            overlayRect.x0 = 0;
-            overlayRect.y0 = m_DisplayHeight - newSurface->h;
-        }
-        else if (type == Overlay::OverlayDebug) {
-            // Top left
-            overlayRect.x0 = 0;
-            overlayRect.y0 = 0;
-        }
+        Overlay::OverlayManager::getOverlayPosition(Session::get()->getOverlayManager().getOverlayAnchor(type),
+                                                    newSurface->w, newSurface->h,
+                                                    m_DisplayWidth, m_DisplayHeight,
+                                                    false, x, y);
 
+        overlayRect.x0 = x;
+        overlayRect.y0 = y;
         overlayRect.x1 = overlayRect.x0 + newSurface->w;
         overlayRect.y1 = overlayRect.y0 + newSurface->h;
 

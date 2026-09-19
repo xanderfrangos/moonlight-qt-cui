@@ -32,6 +32,9 @@ struct GamepadState {
     uint32_t lastAccelEventTime;
 #endif
 
+    // Last stick direction reported to the gamepad menu, for edge detection
+    int menuNavDir;
+
     int buttons;
     short lsX, lsY;
     short rsX, rsY;
@@ -131,6 +134,8 @@ public:
     void handleTouchFingerEvent(SDL_TouchFingerEvent* event);
 
     int getAttachedGamepadMask();
+
+    void sendAllGamepadStates();
 
     void raiseAllKeys();
 

@@ -751,19 +751,10 @@ void VAAPIRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
             return;
         }
 
+        // The position is resolved at render time, once the window size is known
         SDL_Rect overlayRect;
-
-        if (type == Overlay::OverlayStatusUpdate) {
-            // Bottom Left
-            overlayRect.x = 0;
-            overlayRect.y = -newSurface->h;
-        }
-        else if (type == Overlay::OverlayDebug) {
-            // Top left
-            overlayRect.x = 0;
-            overlayRect.y = 0;
-        }
-
+        overlayRect.x = 0;
+        overlayRect.y = 0;
         overlayRect.w = newSurface->w;
         overlayRect.h = newSurface->h;
 
@@ -848,13 +839,10 @@ VAAPIRenderer::renderFrame(AVFrame* frame)
 
             SDL_Rect overlayRect = m_OverlayRect[type];
 
-            // Negative values are relative to the other side of the window
-            if (overlayRect.x < 0) {
-                overlayRect.x += windowWidth;
-            }
-            if (overlayRect.y < 0) {
-                overlayRect.y += windowHeight;
-            }
+            Overlay::OverlayManager::getOverlayPosition(Session::get()->getOverlayManager().getOverlayAnchor((Overlay::OverlayType)type),
+                                                        overlayRect.w, overlayRect.h,
+                                                        windowWidth, windowHeight,
+                                                        false, overlayRect.x, overlayRect.y);
 
             status = vaAssociateSubpicture(vaDeviceContext->display,
                                            m_OverlaySubpicture[type],
