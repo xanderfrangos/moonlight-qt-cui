@@ -70,6 +70,7 @@ private:
         SDL_GameController* controller;
         QString id;
         QString name;
+        QString metadata;
     };
 
 private slots:

@@ -102,7 +102,7 @@ Item {
             delegate: Rectangle {
                 id: controllerRow
                 width: controllerList.width - 16
-                height: 96
+                height: 116
                 radius: TvTheme.cardRadius
                 color: TvTheme.surface
                 border.width: rowFocus ? 2 : 0
@@ -132,9 +132,18 @@ Item {
                         }
 
                         Label {
-                            text: modelData.enabled ? qsTr("Player %1").arg(modelData.playerNumber) : qsTr("Not passed to host")
+                            Layout.fillWidth: true
+                            visible: modelData.metadata.length > 0
+                            text: modelData.metadata
                             color: TvTheme.textSecondary
                             font.pointSize: 13
+                            elide: Text.ElideRight
+                        }
+
+                        Label {
+                            text: modelData.enabled ? qsTr("Player %1").arg(modelData.playerNumber) : qsTr("Not passed to host")
+                            color: TvTheme.textSecondary
+                            font.pointSize: 12
                         }
                     }
 

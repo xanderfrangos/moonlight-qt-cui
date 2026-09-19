@@ -1,5 +1,7 @@
 #include "controlleridentity.h"
 
+#include <QStringList>
+
 namespace
 {
 QString guidString(SDL_Joystick* joystick)
@@ -12,6 +14,37 @@ QString guidString(SDL_Joystick* joystick)
 QString safeUtf8(const char* value)
 {
     return value != nullptr ? QString::fromUtf8(value) : QString();
+}
+
+QString transportName(SDL_GameController* controller)
+{
+    SDL_Joystick* joystick = SDL_GameControllerGetJoystick(controller);
+    const SDL_JoystickGUID guid = SDL_JoystickGetGUID(joystick);
+
+    // SDL GUIDs use the platform bus type in the first two bytes. On the
+    // platforms where these values aren't available, the device path is a
+    // useful secondary signal.
+    const Uint16 bus = static_cast<Uint16>(guid.data[0]) |
+            (static_cast<Uint16>(guid.data[1]) << 8);
+#if SDL_VERSION_ATLEAST(2, 24, 0)
+    const QString path = safeUtf8(SDL_GameControllerPath(controller)).toLower();
+#else
+    const QString path;
+#endif
+
+    if (bus == 0x0005 || path.contains(QStringLiteral("bluetooth")) ||
+            path.contains(QStringLiteral("bthenum"))) {
+        return QStringLiteral("Bluetooth");
+    }
+    if (bus == 0x0003 || path.contains(QStringLiteral("usb")) ||
+            path.contains(QStringLiteral("vid_"))) {
+        return QStringLiteral("USB");
+    }
+    if (path.contains(QStringLiteral("xinput")) || guidString(joystick).startsWith(QStringLiteral("78696e707574"))) {
+        return QStringLiteral("XInput");
+    }
+
+    return QString();
 }
 
 QString baseIdentity(SDL_GameController* controller)
@@ -88,4 +121,35 @@ QString ControllerIdentity::displayName(SDL_GameController* controller)
 {
     const QString name = safeUtf8(SDL_GameControllerName(controller));
     return name.isEmpty() ? QStringLiteral("Controller") : name;
+}
+
+QString ControllerIdentity::displayMetadata(SDL_GameController* controller)
+{
+    if (controller == nullptr) {
+        return QString();
+    }
+
+    QStringList parts;
+    const QString transport = transportName(controller);
+    if (!transport.isEmpty()) {
+        parts.append(transport);
+    }
+
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    const QString serial = safeUtf8(SDL_GameControllerGetSerial(controller)).trimmed();
+    if (!serial.isEmpty()) {
+        parts.append(serial);
+    }
+#endif
+
+    const Uint16 vendor = SDL_GameControllerGetVendor(controller);
+    const Uint16 product = SDL_GameControllerGetProduct(controller);
+    if (vendor != 0) {
+        parts.append(QStringLiteral("VID %1").arg(vendor, 4, 16, QLatin1Char('0')).toUpper());
+    }
+    if (product != 0) {
+        parts.append(QStringLiteral("PID %1").arg(product, 4, 16, QLatin1Char('0')).toUpper());
+    }
+
+    return parts.join(QStringLiteral(" \u00b7 "));
 }

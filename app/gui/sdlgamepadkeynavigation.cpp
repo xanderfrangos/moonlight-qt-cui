@@ -471,6 +471,7 @@ void SdlGamepadKeyNavigation::addGamepad(SDL_GameController* controller)
     gamepad.controller = controller;
     gamepad.id = ControllerIdentity::fromController(controller);
     gamepad.name = ControllerIdentity::displayName(controller);
+    gamepad.metadata = ControllerIdentity::displayMetadata(controller);
     m_Gamepads.append(gamepad);
 
     if (!m_Prefs->controllerOrder.contains(gamepad.id)) {
@@ -523,6 +524,7 @@ QVariantList SdlGamepadKeyNavigation::controllers() const
         QVariantMap item;
         item.insert(QStringLiteral("id"), id);
         item.insert(QStringLiteral("name"), gamepad->name);
+        item.insert(QStringLiteral("metadata"), gamepad->metadata);
         item.insert(QStringLiteral("enabled"), enabled);
         item.insert(QStringLiteral("playerNumber"), enabled ? (m_Prefs->multiController ? playerNumber : 1) : 0);
         item.insert(QStringLiteral("canMoveUp"), i > 0);
