@@ -3,8 +3,11 @@
 #include <QKeyEvent>
 #include <QGuiApplication>
 #include <QWindow>
+#include <algorithm>
+#include <climits>
 
 #include "settings/mappingmanager.h"
+#include "settings/controlleridentity.h"
 #include "inputmodetracker.h"
 
 // Holding a D-pad direction or the left stick repeats navigation after an
@@ -34,6 +37,8 @@ SdlGamepadKeyNavigation::SdlGamepadKeyNavigation(StreamingPreferences* prefs)
 {
     m_PollingTimer = new QTimer(this);
     connect(m_PollingTimer, &QTimer::timeout, this, &SdlGamepadKeyNavigation::onPollingTimerFired);
+    connect(m_Prefs, &StreamingPreferences::multiControllerChanged,
+            this, &SdlGamepadKeyNavigation::controllersChanged);
 }
 
 SdlGamepadKeyNavigation::~SdlGamepadKeyNavigation()
@@ -80,7 +85,7 @@ void SdlGamepadKeyNavigation::enable()
         if (SDL_IsGameController(i)) {
             SDL_GameController* gc = SDL_GameControllerOpen(i);
             if (gc != nullptr) {
-                m_Gamepads.append(gc);
+                addGamepad(gc);
             }
         }
     }
@@ -102,7 +107,7 @@ void SdlGamepadKeyNavigation::disable()
     Q_ASSERT(!m_PollingTimer->isActive());
 
     while (!m_Gamepads.isEmpty()) {
-        SDL_GameControllerClose(m_Gamepads[0]);
+        SDL_GameControllerClose(m_Gamepads[0].controller);
         m_Gamepads.removeAt(0);
     }
 
@@ -214,18 +219,38 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
             break;
         }
         case SDL_CONTROLLERDEVICEADDED:
+        {
             SDL_GameController* gc = SDL_GameControllerOpen(event.cdevice.which);
             if (gc != nullptr) {
                 // SDL_CONTROLLERDEVICEADDED can be reported multiple times for the same
                 // gamepad in rare cases, because SDL doesn't fixup the device index in
                 // the SDL_CONTROLLERDEVICEADDED event if an unopened gamepad disappears
                 // before we've processed the add event.
-                if (!m_Gamepads.contains(gc)) {
-                    m_Gamepads.append(gc);
+                bool alreadyOpen = false;
+                for (const UiGamepad& gamepad : std::as_const(m_Gamepads)) {
+                    if (gamepad.controller == gc) {
+                        alreadyOpen = true;
+                        break;
+                    }
+                }
+                if (!alreadyOpen) {
+                    addGamepad(gc);
                 }
                 else {
                     // We already have this game controller open
                     SDL_GameControllerClose(gc);
+                }
+            }
+            break;
+        }
+        case SDL_CONTROLLERDEVICEREMOVED:
+            for (int i = 0; i < m_Gamepads.size(); i++) {
+                SDL_Joystick* joystick = SDL_GameControllerGetJoystick(m_Gamepads[i].controller);
+                if (SDL_JoystickInstanceID(joystick) == event.cdevice.which) {
+                    SDL_GameControllerClose(m_Gamepads[i].controller);
+                    m_Gamepads.removeAt(i);
+                    emit controllersChanged();
+                    break;
                 }
             }
             break;
@@ -288,7 +313,8 @@ void SdlGamepadKeyNavigation::updateHeldDirection()
 
 SdlGamepadKeyNavigation::NavDirection SdlGamepadKeyNavigation::getStickDirection()
 {
-    for (auto gc : std::as_const(m_Gamepads)) {
+    for (const UiGamepad& gamepad : std::as_const(m_Gamepads)) {
+        SDL_GameController* gc = gamepad.controller;
         int leftX = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTX);
         int leftY = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTY);
 
@@ -344,8 +370,8 @@ bool SdlGamepadKeyNavigation::isDpadDirectionHeld(NavDirection direction)
         return false;
     }
 
-    for (auto gc : std::as_const(m_Gamepads)) {
-        if (SDL_GameControllerGetButton(gc, button)) {
+    for (const UiGamepad& gamepad : std::as_const(m_Gamepads)) {
+        if (SDL_GameControllerGetButton(gamepad.controller, button)) {
             return true;
         }
     }
@@ -437,4 +463,106 @@ int SdlGamepadKeyNavigation::getConnectedGamepads()
     }
 
     return count;
+}
+
+void SdlGamepadKeyNavigation::addGamepad(SDL_GameController* controller)
+{
+    UiGamepad gamepad;
+    gamepad.controller = controller;
+    gamepad.id = ControllerIdentity::fromController(controller);
+    gamepad.name = ControllerIdentity::displayName(controller);
+    gamepad.metadata = ControllerIdentity::displayMetadata(controller);
+    m_Gamepads.append(gamepad);
+
+    if (!m_Prefs->controllerOrder.contains(gamepad.id)) {
+        m_Prefs->controllerOrder.append(gamepad.id);
+        m_Prefs->save();
+    }
+
+    emit controllersChanged();
+}
+
+QStringList SdlGamepadKeyNavigation::connectedControllerIdsInOrder() const
+{
+    QStringList ids;
+    for (const UiGamepad& gamepad : m_Gamepads) {
+        if (!ids.contains(gamepad.id)) {
+            ids.append(gamepad.id);
+        }
+    }
+
+    std::stable_sort(ids.begin(), ids.end(), [this](const QString& left, const QString& right) {
+        int leftIndex = m_Prefs->controllerOrder.indexOf(left);
+        int rightIndex = m_Prefs->controllerOrder.indexOf(right);
+        if (leftIndex < 0) leftIndex = INT_MAX;
+        if (rightIndex < 0) rightIndex = INT_MAX;
+        return leftIndex < rightIndex;
+    });
+    return ids;
+}
+
+QVariantList SdlGamepadKeyNavigation::controllers() const
+{
+    QVariantList result;
+    const QStringList orderedIds = connectedControllerIdsInOrder();
+    int playerNumber = 0;
+
+    for (int i = 0; i < orderedIds.size(); i++) {
+        const QString& id = orderedIds[i];
+        const auto gamepad = std::find_if(m_Gamepads.cbegin(), m_Gamepads.cend(), [&id](const UiGamepad& candidate) {
+            return candidate.id == id;
+        });
+        if (gamepad == m_Gamepads.cend()) {
+            continue;
+        }
+
+        const bool enabled = !m_Prefs->disabledControllers.contains(id);
+        if (enabled) {
+            playerNumber++;
+        }
+
+        QVariantMap item;
+        item.insert(QStringLiteral("id"), id);
+        item.insert(QStringLiteral("name"), gamepad->name);
+        item.insert(QStringLiteral("metadata"), gamepad->metadata);
+        item.insert(QStringLiteral("enabled"), enabled);
+        item.insert(QStringLiteral("playerNumber"), enabled ? (m_Prefs->multiController ? playerNumber : 1) : 0);
+        item.insert(QStringLiteral("canMoveUp"), i > 0);
+        item.insert(QStringLiteral("canMoveDown"), i + 1 < orderedIds.size());
+        result.append(item);
+    }
+
+    return result;
+}
+
+void SdlGamepadKeyNavigation::setControllerEnabled(const QString& id, bool enabled)
+{
+    if (enabled) {
+        m_Prefs->disabledControllers.removeAll(id);
+    }
+    else if (!m_Prefs->disabledControllers.contains(id)) {
+        m_Prefs->disabledControllers.append(id);
+    }
+    m_Prefs->save();
+    emit controllersChanged();
+}
+
+void SdlGamepadKeyNavigation::moveController(const QString& id, int direction)
+{
+    const QStringList connectedIds = connectedControllerIdsInOrder();
+    const int connectedIndex = connectedIds.indexOf(id);
+    const int otherConnectedIndex = connectedIndex + direction;
+    if (connectedIndex < 0 || otherConnectedIndex < 0 || otherConnectedIndex >= connectedIds.size()) {
+        return;
+    }
+
+    const int index = m_Prefs->controllerOrder.indexOf(id);
+    const int otherIndex = m_Prefs->controllerOrder.indexOf(connectedIds[otherConnectedIndex]);
+    if (index < 0 || otherIndex < 0) {
+        return;
+    }
+
+    m_Prefs->controllerOrder.swapItemsAt(index, otherIndex);
+    m_Prefs->save();
+    emit controllersChanged();
 }

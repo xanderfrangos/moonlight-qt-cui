@@ -810,6 +810,14 @@ int main(int argc, char *argv[])
     // releases of Moonlight.
     SDL_SetHint(SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS, "0");
 
+#ifdef Q_OS_WIN
+    // Preserve the hardware identity of XInput-capable controllers so SDL can
+    // expose model-specific mappings, VID/PID, paths, and serial numbers. Keep
+    // XInput correlation enabled for trigger, Guide button, and rumble support.
+    SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT_CORRELATE_XINPUT, "1");
+#endif
+
     // Disable relative mouse scaling to renderer size or logical DPI. We want to send
     // the mouse motion exactly how it was given to us.
     SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_SCALING, "0");

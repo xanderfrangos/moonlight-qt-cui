@@ -190,6 +190,7 @@ SOURCES += \
     cli/startstream.cpp \
     settings/compatfetcher.cpp \
     settings/mappingfetcher.cpp \
+    settings/controlleridentity.cpp \
     settings/streamingpreferences.cpp \
     diagnostics/diagnosticcapture.cpp \
     diagnostics/diagnosticzip.cpp \
@@ -234,6 +235,7 @@ HEADERS += \
     cli/pair.h \
     settings/compatfetcher.h \
     settings/mappingfetcher.h \
+    settings/controlleridentity.h \
     utils.h \
     backend/computerseeker.h \
     backend/identitymanager.h \
