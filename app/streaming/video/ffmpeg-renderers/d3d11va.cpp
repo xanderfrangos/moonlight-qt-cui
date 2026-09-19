@@ -3383,8 +3383,19 @@ bool D3D11VARenderer::setupRenderingResources()
     // is on and the stream carries more bits per component than an ordinary
     // display can show. Whether they actually get bound depends on the display
     // we end up on, which can change while we're streaming.
-    if (m_DecoderParams.enableDithering && (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_10BIT))
+    //
+    // This renderer has one ordered kernel, so every enabled mode maps onto it.
+    // Only libplacebo can honor the higher-quality kernels.
+    if (m_DecoderParams.ditheringMode != StreamingPreferences::DM_OFF &&
+            (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_10BIT))
     {
+        if (m_DecoderParams.ditheringMode != StreamingPreferences::DM_ORDERED) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "D3D11 has a single ordered dithering kernel; using it "
+                        "instead of the selected mode %d",
+                        m_DecoderParams.ditheringMode);
+        }
+
         for (int i = 0; i < PixelShaders::_COUNT; i++)
         {
             QByteArray ditherPixelShaderBytecode = Path::readDataFile(k_VideoDitherShaderNames[i]);

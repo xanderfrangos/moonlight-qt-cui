@@ -593,12 +593,43 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
     // query here and no need to exclude HDR: dithering runs last, after tone
     // mapping, against whatever the swapchain actually is.
     m_RenderParams = pl_render_fast_params;
-    if (params->enableDithering && (params->videoFormat & VIDEO_FORMAT_MASK_10BIT)) {
+    if (params->ditheringMode != StreamingPreferences::DM_OFF &&
+            (params->videoFormat & VIDEO_FORMAT_MASK_10BIT)) {
+        const char* kernelName;
+
         m_DitherParams = pl_dither_default_params;
+
+        switch (params->ditheringMode) {
+        case StreamingPreferences::DM_ORDERED:
+            // Fixed-function ordered matrix. No LUT to build and the cheapest
+            // of the kernels, at the cost of a visible repeating pattern.
+            m_DitherParams.method = PL_DITHER_ORDERED_FIXED;
+            kernelName = "ordered (fixed function)";
+            break;
+        default:
+        case StreamingPreferences::DM_BLUE_NOISE:
+            m_DitherParams.method = PL_DITHER_BLUE_NOISE;
+            kernelName = "blue noise";
+            break;
+        case StreamingPreferences::DM_ERROR_DIFFUSION:
+            m_RenderParams.error_diffusion = &pl_error_diffusion_sierra_lite;
+            kernelName = "error diffusion (Sierra Lite)";
+            break;
+        case StreamingPreferences::DM_ERROR_DIFFUSION_HQ:
+            m_RenderParams.error_diffusion = &pl_error_diffusion_stucki;
+            kernelName = "error diffusion (Stucki)";
+            break;
+        }
+
+        // Error diffusion needs compute shaders and storable textures, and
+        // libplacebo silently falls back to dither_params when it cannot run.
+        // Keep blue noise attached underneath it so that fallback is a good one
+        // rather than no dithering at all.
         m_RenderParams.dither_params = &m_DitherParams;
 
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Output dithering enabled (libplacebo blue noise)");
+                    "Output dithering enabled: %s",
+                    kernelName);
     }
 
     unsigned int instanceExtensionCount = 0;

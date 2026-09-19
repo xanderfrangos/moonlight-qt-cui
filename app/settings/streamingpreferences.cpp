@@ -34,7 +34,8 @@
 #define SER_VIDEOCFG "videocfg"
 #define SER_HDR "hdr"
 #define SER_YUV444 "yuv444"
-#define SER_DITHERING "dithering"
+#define SER_DITHERING "dithering"   // Retired bool, migrated to SER_DITHERINGMODE
+#define SER_DITHERINGMODE "ditheringmode"
 #define SER_VIDEODEC "videodec"
 #define SER_WINDOWMODE "windowmode"
 #define SER_MDNS "mdns"
@@ -138,7 +139,18 @@ void StreamingPreferences::reload()
     height = settings.value(SER_HEIGHT, 720).toInt();
     fps = settings.value(SER_FPS, 60).toInt();
     enableYUV444 = settings.value(SER_YUV444, false).toBool();
-    enableDithering = settings.value(SER_DITHERING, false).toBool();
+    ditheringMode = DM_OFF;
+    if (settings.contains(SER_DITHERINGMODE)) {
+        bool validMode = false;
+        const int savedMode = settings.value(SER_DITHERINGMODE).toInt(&validMode);
+        if (validMode && savedMode >= DM_OFF && savedMode <= DM_ERROR_DIFFUSION_HQ) {
+            ditheringMode = savedMode;
+        }
+    }
+    else if (settings.contains(SER_DITHERING)) {
+        // Carry over the old on/off checkbox to the balanced kernel.
+        ditheringMode = settings.value(SER_DITHERING).toBool() ? DM_BLUE_NOISE : DM_OFF;
+    }
     bitrateKbps = settings.value(SER_BITRATE, getDefaultBitrate(width, height, fps, enableYUV444)).toInt();
     unlockBitrate = settings.value(SER_UNLOCK_BITRATE, false).toBool();
     autoAdjustBitrate = settings.value(SER_AUTOADJUSTBITRATE, true).toBool();
@@ -417,7 +429,8 @@ void StreamingPreferences::save()
     settings.setValue(SER_AUDIOCFG, static_cast<int>(audioConfig));
     settings.setValue(SER_HDR, enableHdr);
     settings.setValue(SER_YUV444, enableYUV444);
-    settings.setValue(SER_DITHERING, enableDithering);
+    settings.setValue(SER_DITHERINGMODE, ditheringMode);
+    settings.remove(SER_DITHERING); // Superseded by the kernel selection
     settings.setValue(SER_VIDEOCFG, static_cast<int>(videoCodecConfig));
     settings.setValue(SER_VIDEODEC, static_cast<int>(videoDecoderSelection));
     settings.setValue(SER_RENDERER, static_cast<int>(rendererSelection));

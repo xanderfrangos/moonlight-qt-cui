@@ -133,6 +133,18 @@ public:
     };
     Q_ENUM(Language);
 
+    // Dithering kernel, ordered from cheapest to highest quality. Persisted
+    // IDs must stay stable when changing the user-facing names.
+    enum DitheringMode
+    {
+        DM_OFF = 0,
+        DM_ORDERED = 1,
+        DM_BLUE_NOISE = 2,
+        DM_ERROR_DIFFUSION = 3,
+        DM_ERROR_DIFFUSION_HQ = 4,
+    };
+    Q_ENUM(DitheringMode)
+
     enum CaptureSysKeysMode
     {
         CSK_OFF,
@@ -169,7 +181,7 @@ public:
     Q_PROPERTY(VideoCodecConfig videoCodecConfig MEMBER videoCodecConfig NOTIFY videoCodecConfigChanged)
     Q_PROPERTY(bool enableHdr MEMBER enableHdr NOTIFY enableHdrChanged)
     Q_PROPERTY(bool enableYUV444 MEMBER enableYUV444 NOTIFY enableYUV444Changed)
-    Q_PROPERTY(bool enableDithering MEMBER enableDithering NOTIFY enableDitheringChanged)
+    Q_PROPERTY(int ditheringMode MEMBER ditheringMode NOTIFY ditheringModeChanged)
     Q_PROPERTY(VideoDecoderSelection videoDecoderSelection MEMBER videoDecoderSelection NOTIFY videoDecoderSelectionChanged)
     Q_PROPERTY(RendererSelection rendererSelection MEMBER rendererSelection NOTIFY rendererSelectionChanged)
     Q_PROPERTY(WindowMode windowMode MEMBER windowMode NOTIFY windowModeChanged)
@@ -232,9 +244,10 @@ public:
     VideoCodecConfig videoCodecConfig;
     bool enableHdr;
     bool enableYUV444;
-    // Dither 10-bit video down to the output bit depth in the renderer
-    // instead of letting it be quantized without dithering.
-    bool enableDithering;
+    // Dithering kernel used to reduce 10-bit video to the output bit depth in
+    // the renderer instead of letting it be quantized without dithering.
+    // Renderers that cannot honor the exact kernel approximate it.
+    int ditheringMode;
     VideoDecoderSelection videoDecoderSelection;
     WindowMode windowMode;
     WindowMode recommendedFullScreenMode;
@@ -271,7 +284,7 @@ signals:
     void videoCodecConfigChanged();
     void enableHdrChanged();
     void enableYUV444Changed();
-    void enableDitheringChanged();
+    void ditheringModeChanged();
     void videoDecoderSelectionChanged();
     void uiDisplayModeChanged();
     void uiScaleChanged();

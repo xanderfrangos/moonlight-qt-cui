@@ -326,6 +326,13 @@ StreamCommandLineParser::StreamCommandLineParser()
         {"fullscreen", StreamingPreferences::CSK_FULLSCREEN},
         {"always",     StreamingPreferences::CSK_ALWAYS},
     };
+    m_DitheringModeMap = {
+        {"off",      StreamingPreferences::DM_OFF},
+        {"fast",     StreamingPreferences::DM_ORDERED},
+        {"balanced", StreamingPreferences::DM_BLUE_NOISE},
+        {"high",     StreamingPreferences::DM_ERROR_DIFFUSION},
+        {"highest",  StreamingPreferences::DM_ERROR_DIFFUSION_HQ},
+    };
 }
 
 StreamCommandLineParser::~StreamCommandLineParser()
@@ -375,7 +382,7 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     parser.addToggleOption("performance-overlay", "show performance overlay");
     parser.addToggleOption("hdr", "HDR streaming");
     parser.addToggleOption("yuv444", "YUV 4:4:4 sampling, if supported");
-    parser.addToggleOption("dithering", "dithering when 10-bit video must be reduced for output");
+    parser.addChoiceOption("dithering", "dithering kernel used when 10-bit video must be reduced for output", m_DitheringModeMap.keys());
     parser.addChoiceOption("capture-system-keys", "capture system key combos", m_CaptureSysKeysModeMap.keys());
     parser.addChoiceOption("video-codec", "video codec", m_VideoCodecMap.keys());
     parser.addChoiceOption("video-decoder", "video decoder", m_VideoDecoderMap.keys());
@@ -506,8 +513,10 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     // Resolve --yuv444 and --no-yuv444 options
     preferences->enableYUV444 = parser.getToggleOptionValue("yuv444", preferences->enableYUV444);
 
-    // Resolve --dithering and --no-dithering options
-    preferences->enableDithering = parser.getToggleOptionValue("dithering", preferences->enableDithering);
+    // Resolve --dithering option
+    if (parser.isSet("dithering")) {
+        preferences->ditheringMode = mapValue(m_DitheringModeMap, parser.getChoiceOptionValue("dithering"));
+    }
     
     // Resolve --capture-system-keys option
     if (parser.isSet("capture-system-keys")) {

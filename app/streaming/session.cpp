@@ -286,7 +286,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             bool enableVrr, bool preferVrrRenderer, int vrrDisplayRefreshHz,
                             [[maybe_unused]] bool* effectiveVrr, bool smoothVrrFrameTiming,
                             bool gamescopeMailbox, int vrrLatencyMode, bool gamescopeRepaint,
-                            bool enableDithering)
+                            int ditheringMode)
 {
     DECODER_PARAMETERS params = {};
 
@@ -311,7 +311,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.gamescopeMailbox = gamescopeMailbox;
     params.gamescopeRepaint = gamescopeRepaint;
     params.smoothVrrFrameTiming = smoothVrrFrameTiming;
-    params.enableDithering = enableDithering;
+    params.ditheringMode = ditheringMode;
     params.vrrDisplayRefreshHz = vrrDisplayRefreshHz;
     params.testOnly = testOnly;
     params.vds = vds;
@@ -680,7 +680,7 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     m_PresentationSettings.gamescopeRepaint = false; // Retired repaint experiment.
     m_PresentationSettings.gamescopeMailbox = false; // Retired Mailbox experiment.
     m_PresentationSettings.smoothVrrFrameTiming = m_Preferences->smoothVrrFrameTiming;
-    m_PresentationSettings.enableDithering = m_Preferences->enableDithering;
+    m_PresentationSettings.ditheringMode = m_Preferences->ditheringMode;
 
     if (requestedVrr) {
         const bool hasAdaptiveHeadroom = hasStrictRefreshRate &&
@@ -2428,7 +2428,7 @@ void Session::exec()
                                m_PresentationSettings.gamescopeMailbox,
                                m_PresentationSettings.vrrLatencyMode,
                                m_PresentationSettings.gamescopeRepaint,
-                               m_PresentationSettings.enableDithering)) {
+                               m_PresentationSettings.ditheringMode)) {
                 SDL_UnlockMutex(m_DecoderLock);
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                              "Failed to recreate decoder after reset");
