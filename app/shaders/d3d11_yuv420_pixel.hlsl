@@ -14,9 +14,12 @@ cbuffer CSC_CONST_BUF : register(b0)
     min16float3 offsets;
     min16float2 chromaOffset;
     min16float2 chromaTexMax;
+    float ditherLevels;
 };
 
-min16float4 main(ShaderInput input) : SV_TARGET
+#include "d3d11_dither.hlsli"
+
+VIDEO_SHADER_OUTPUT main(ShaderInput input) : SV_TARGET
 {
     // Clamp the chrominance texcoords to avoid sampling the row of texels adjacent to the alignment padding
     min16float3 yuv = min16float3(luminancePlane.Sample(theSampler, input.tex),
@@ -28,5 +31,5 @@ min16float4 main(ShaderInput input) : SV_TARGET
     // Multiply by the conversion matrix for this colorspace
     yuv = mul(yuv, cscMatrix);
 
-    return min16float4(yuv, 1.0);
+    return FINISH_VIDEO_SHADER(yuv, input.pos.xy);
 }

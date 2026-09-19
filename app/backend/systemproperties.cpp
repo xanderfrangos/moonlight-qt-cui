@@ -90,6 +90,15 @@ SystemProperties::SystemProperties()
     isDarwin = false;
 #endif
 
+    // Dithering is implemented by the D3D11VA renderer (its own shaders) and by
+    // the libplacebo renderer (libplacebo's built-in dithering). Other
+    // renderers ignore the preference, so hide it where neither can run.
+#if defined(Q_OS_WIN32) || defined(HAVE_LIBPLACEBO_VULKAN)
+    supportsVideoDithering = true;
+#else
+    supportsVideoDithering = false;
+#endif
+
     QString nativeArch = QSysInfo::currentCpuArchitecture();
 
 #ifdef Q_OS_WIN32

@@ -169,6 +169,7 @@ public:
     Q_PROPERTY(VideoCodecConfig videoCodecConfig MEMBER videoCodecConfig NOTIFY videoCodecConfigChanged)
     Q_PROPERTY(bool enableHdr MEMBER enableHdr NOTIFY enableHdrChanged)
     Q_PROPERTY(bool enableYUV444 MEMBER enableYUV444 NOTIFY enableYUV444Changed)
+    Q_PROPERTY(bool enableDithering MEMBER enableDithering NOTIFY enableDitheringChanged)
     Q_PROPERTY(VideoDecoderSelection videoDecoderSelection MEMBER videoDecoderSelection NOTIFY videoDecoderSelectionChanged)
     Q_PROPERTY(RendererSelection rendererSelection MEMBER rendererSelection NOTIFY rendererSelectionChanged)
     Q_PROPERTY(WindowMode windowMode MEMBER windowMode NOTIFY windowModeChanged)
@@ -231,6 +232,9 @@ public:
     VideoCodecConfig videoCodecConfig;
     bool enableHdr;
     bool enableYUV444;
+    // Dither 10-bit video down to the output bit depth in the renderer
+    // instead of letting it be quantized without dithering.
+    bool enableDithering;
     VideoDecoderSelection videoDecoderSelection;
     WindowMode windowMode;
     WindowMode recommendedFullScreenMode;
@@ -267,6 +271,7 @@ signals:
     void videoCodecConfigChanged();
     void enableHdrChanged();
     void enableYUV444Changed();
+    void enableDitheringChanged();
     void videoDecoderSelectionChanged();
     void uiDisplayModeChanged();
     void uiScaleChanged();

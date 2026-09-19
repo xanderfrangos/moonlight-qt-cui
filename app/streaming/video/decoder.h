@@ -97,6 +97,10 @@ typedef struct _DECODER_PARAMETERS {
     bool gamescopeMailbox = false;
     bool gamescopeRepaint = false;
     bool smoothVrrFrameTiming;
+    // Dither 10-bit video down to the output bit depth in the renderer rather
+    // than letting it be quantized without dithering. Honored by D3D11VA and
+    // libplacebo; other renderers ignore it.
+    bool enableDithering = false;
     // Strictly obtained during Session initialization. A value of zero means
     // the session was not qualified for VRR; Pacer must not substitute a
     // legacy 60 Hz fallback when this path is requested.

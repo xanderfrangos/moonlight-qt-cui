@@ -584,6 +584,23 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
     m_Window = params->window;
     m_MaxVideoFps = params->frameRate;
 
+    // Attach libplacebo's own dithering when the user asked for it and the
+    // stream carries more bits per component than a common display accepts.
+    // pl_render_fast_params leaves dither_params NULL, which disables dithering
+    // entirely; combined with disable_10bit_sdr below that means 10-bit SDR is
+    // otherwise quantized to an 8-bit backbuffer with nothing to break up the
+    // banding. libplacebo knows the target's bit depth, so there is no display
+    // query here and no need to exclude HDR: dithering runs last, after tone
+    // mapping, against whatever the swapchain actually is.
+    m_RenderParams = pl_render_fast_params;
+    if (params->enableDithering && (params->videoFormat & VIDEO_FORMAT_MASK_10BIT)) {
+        m_DitherParams = pl_dither_default_params;
+        m_RenderParams.dither_params = &m_DitherParams;
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Output dithering enabled (libplacebo blue noise)");
+    }
+
     unsigned int instanceExtensionCount = 0;
     if (!SDL_Vulkan_GetInstanceExtensions(params->window, &instanceExtensionCount, nullptr)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -1332,7 +1349,7 @@ bool PlVkRenderer::acquirePendingSwapchainFrame(
     targetFrame.overlays = &m_EmptyOverlay;
 
     beginRenderTiming();
-    if (!pl_render_image(m_Renderer, nullptr, &targetFrame, &pl_render_fast_params)) {
+    if (!pl_render_image(m_Renderer, nullptr, &targetFrame, &m_RenderParams)) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "%s",
                     earlyRenderFailureMessage);
     }
@@ -1921,7 +1938,7 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
     targetFrame.overlays = overlays.data();
     const bool renderSucceeded = pl_render_image(m_Renderer, &mappedFrame,
                                                   &targetFrame,
-                                                  &pl_render_fast_params);
+                                                  &m_RenderParams);
     if (!renderSucceeded) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "pl_render_image() failed");

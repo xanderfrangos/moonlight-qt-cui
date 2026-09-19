@@ -1099,6 +1099,25 @@ Flickable {
                                     :
                                       qsTr("HDR streaming is not supported on this PC.")
                 }
+
+                CheckBox {
+                    id: enableDithering
+                    width: parent.width
+                    text: qsTr("Dither 10-bit video")
+                    font.pointSize: 12
+
+                    visible: SystemProperties.supportsVideoDithering
+                    checked: StreamingPreferences.enableDithering
+                    onCheckedChanged: {
+                        StreamingPreferences.enableDithering = checked
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 10000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Smooths the banding that appears when a 10-bit stream has to be reduced to 8 bits for output. Has no effect on 8-bit streams.") + "\n\n" +
+                                  qsTr("Reconnect the stream after changing this setting.")
+                }
             }
         }
 
