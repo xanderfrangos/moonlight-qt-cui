@@ -301,6 +301,10 @@ IFFmpegRenderer* FFmpegVideoDecoder::getBackendRenderer()
 
 void FFmpegVideoDecoder::reset()
 {
+    // Join the stats graph sampling thread before anything it reads (Pacer,
+    // the overlay manager, our own counters) can be torn down.
+    m_StatsGraphs.stop();
+
     // Terminate the decoder thread before doing anything else.
     // It might be touching things we're about to free.
     if (m_DecoderThread != nullptr) {
@@ -817,6 +821,13 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
         // Tell overlay manager to use this frontend renderer
         Session::get()->getOverlayManager().setOverlayRenderer(m_FrontendRenderer);
 
+        // Sampling runs whether or not the graphs are visible, so they already
+        // cover a full window by the time the user brings them up.
+        m_StatsGraphs.start(&Session::get()->getOverlayManager(),
+                            [this](Overlay::StatsGraphCounters& counters) {
+                                sampleStatsGraphCounters(counters);
+                            });
+
         // Allow the renderer to perform final preparations for rendering
         m_FrontendRenderer->prepareToRender();
 
@@ -948,6 +959,46 @@ void FFmpegVideoDecoder::addVideoStats(VIDEO_STATS& src, VIDEO_STATS& dst)
     dst.receivedFps     = (double)dst.receivedFrames / timeDiffSecs;
     dst.decodedFps      = (double)dst.decodedFrames / timeDiffSecs;
     dst.renderedFps     = (double)dst.renderedFrames / timeDiffSecs;
+}
+
+void FFmpegVideoDecoder::publishStatsGraphCounters()
+{
+    // Cumulative totals, since the graphs plot the difference between
+    // consecutive samples. The active window is merged into the global one
+    // when it rolls over, so their sum is continuous across that boundary.
+    std::lock_guard<std::mutex> lock(m_StatsGraphCountersLock);
+    m_StatsGraphCounters.networkDroppedFrames =
+            (uint64_t)m_GlobalVideoStats.networkDroppedFrames +
+            m_ActiveWndVideoStats.networkDroppedFrames;
+    m_StatsGraphCounters.totalHostProcessingLatency =
+            (uint64_t)m_GlobalVideoStats.totalHostProcessingLatency +
+            m_ActiveWndVideoStats.totalHostProcessingLatency;
+    m_StatsGraphCounters.framesWithHostProcessingLatency =
+            (uint64_t)m_GlobalVideoStats.framesWithHostProcessingLatency +
+            m_ActiveWndVideoStats.framesWithHostProcessingLatency;
+}
+
+void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& counters)
+{
+    // Called on the stats graph sampling thread, which reset() joins before
+    // tearing down anything read here.
+    {
+        std::lock_guard<std::mutex> lock(m_StatsGraphCountersLock);
+        counters = m_StatsGraphCounters;
+    }
+
+    // Rendered and pacer-dropped frames are counted on the render threads, so
+    // they come from Pacer's own cumulative snapshot rather than from the
+    // decoder windows, which only pick them up once a second.
+    if (m_Pacer != nullptr) {
+        const PacerTelemetrySnapshot snapshot = m_Pacer->telemetrySnapshot();
+        counters.renderedFrames = snapshot.renderedFrames;
+        counters.jitterDroppedFrames = snapshot.pacerDroppedFrames;
+    }
+
+    uint32_t rtt, rttVariance;
+    counters.networkLatencyValid = LiGetEstimatedRttInfo(&rtt, &rttVariance);
+    counters.networkLatencyMs = counters.networkLatencyValid ? rtt : 0;
 }
 
 void FFmpegVideoDecoder::syncPacerTelemetry()
@@ -2482,6 +2533,8 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
 
     m_ActiveWndVideoStats.receivedFrames++;
     m_ActiveWndVideoStats.totalFrames++;
+
+    publishStatsGraphCounters();
 
     int requiredBufferSize = du->fullLength;
     if (du->frameType == FRAME_TYPE_IDR) {

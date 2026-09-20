@@ -1748,6 +1748,28 @@ static void getWindowPixelSize(SDL_Window* window, int& width, int& height)
     }
 }
 
+void Session::cycleStatsOverlay()
+{
+    bool text = m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug);
+    bool graphs = m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebugGraphs);
+
+    if (!text) {
+        // The graphs can only have been left on by a preference change while
+        // the text was off, but don't skip a step if that happens.
+        text = true;
+        graphs = false;
+    }
+    else if (!graphs) {
+        graphs = true;
+    }
+    else {
+        text = graphs = false;
+    }
+
+    m_OverlayManager.setOverlayState(Overlay::OverlayDebug, text);
+    m_OverlayManager.setOverlayState(Overlay::OverlayDebugGraphs, graphs);
+}
+
 void Session::refreshStatusOverlay()
 {
     static_assert(SDL_arraysize(k_GamepadMenuItems) == GamepadMenuItemMax,
@@ -1859,8 +1881,7 @@ void Session::activateGamepadMenuSelection()
         return;
 
     case GamepadMenuToggleStats:
-        m_OverlayManager.setOverlayState(Overlay::OverlayDebug,
-                                         !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
+        cycleStatsOverlay();
         return;
 
     case GamepadMenuEndSession:

@@ -122,6 +122,9 @@ public:
         return m_OverlayManager;
     }
 
+    // Advances the stats overlay through off -> text -> text and graphs -> off
+    void cycleStatsOverlay();
+
     int streamColorRange() const
     {
         return m_StreamConfig.colorRange;

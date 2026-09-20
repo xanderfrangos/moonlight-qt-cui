@@ -11,6 +11,9 @@ OverlayManager::OverlayManager() :
     m_Overlays[OverlayType::OverlayDebug].color = {0xD0, 0xD0, 0x00, 0xFF};
     m_Overlays[OverlayType::OverlayDebug].fontSize = 20;
 
+    m_Overlays[OverlayType::OverlayDebugGraphs].color = {0xD0, 0xD0, 0x00, 0xFF};
+    m_Overlays[OverlayType::OverlayDebugGraphs].fontSize = 20;
+
     m_Overlays[OverlayType::OverlayStatusUpdate].color = {0xCC, 0x00, 0x00, 0xFF};
     m_Overlays[OverlayType::OverlayStatusUpdate].fontSize = 36;
 
@@ -18,6 +21,7 @@ OverlayManager::OverlayManager() :
     m_Overlays[OverlayType::OverlayMenuBackground].fontSize = 20;
 
     SDL_AtomicSet(&m_Overlays[OverlayType::OverlayDebug].anchor, OverlayAnchorTopLeft);
+    SDL_AtomicSet(&m_Overlays[OverlayType::OverlayDebugGraphs].anchor, OverlayAnchorTopRight);
     SDL_AtomicSet(&m_Overlays[OverlayType::OverlayMenuBackground].anchor, OverlayAnchorFill);
     SDL_AtomicSet(&m_Overlays[OverlayType::OverlayStatusUpdate].anchor, OverlayAnchorBottomLeft);
 
@@ -165,6 +169,10 @@ void OverlayManager::getOverlayRect(OverlayAnchor anchor,
     case OverlayAnchorCenter:
         x = (viewportWidth - overlayWidth) / 2;
         y = (viewportHeight - overlayHeight) / 2;
+        break;
+    case OverlayAnchorTopRight:
+        x = viewportWidth - overlayWidth;
+        y = originAtBottom ? viewportHeight - overlayHeight : 0;
         break;
     case OverlayAnchorBottomLeft:
         x = 0;

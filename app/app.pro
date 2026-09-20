@@ -214,6 +214,7 @@ SOURCES += \
     gui/blurredimageprovider.cpp \
     streaming/video/overlaymanager.cpp \
     streaming/video/overlaypainter.cpp \
+    streaming/video/statsgraphs.cpp \
     streaming/vrrratepolicy.cpp \
     backend/systemproperties.cpp \
     wm.cpp
@@ -261,6 +262,7 @@ HEADERS += \
     gui/blurredimageprovider.h \
     streaming/video/overlaymanager.h \
     streaming/video/overlaypainter.h \
+    streaming/video/statsgraphs.h \
     backend/systemproperties.h \
     windowsvblankvirtualization.h
 

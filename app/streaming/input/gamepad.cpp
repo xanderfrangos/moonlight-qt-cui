@@ -485,8 +485,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
                     "Detected stats toggle gamepad combo");
 
         // Toggle the stats overlay
-        Session::get()->getOverlayManager().setOverlayState(Overlay::OverlayDebug,
-                                                            !Session::get()->getOverlayManager().isOverlayEnabled(Overlay::OverlayDebug));
+        Session::get()->cycleStatsOverlay();
 
         // Clear buttons down on this gamepad
         LiSendMultiControllerEvent(state->index, m_GamepadMask,

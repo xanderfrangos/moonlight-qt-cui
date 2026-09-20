@@ -14,6 +14,9 @@ namespace Overlay {
 
 enum OverlayType {
     OverlayDebug,
+    // Plotted history of the metrics the debug overlay reports as running
+    // averages. Drawn before the menu background so the menu dims it too.
+    OverlayDebugGraphs,
     // Dims everything behind it, so it must be drawn after the overlays it
     // covers and before the menu it sits behind.
     OverlayMenuBackground,
@@ -23,6 +26,7 @@ enum OverlayType {
 
 enum OverlayAnchor {
     OverlayAnchorTopLeft,
+    OverlayAnchorTopRight,
     OverlayAnchorBottomLeft,
     OverlayAnchorCenter,
     // Stretches the overlay over the whole viewport, so a solid fill can be
