@@ -201,18 +201,18 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
         }
 
         SDL_FRect overlayRect;
-        int x, y;
+        int x, y, w, h;
 
         // OpenGL places the origin in the lower-left corner instead of the upper-left
-        Overlay::OverlayManager::getOverlayPosition(Session::get()->getOverlayManager().getOverlayAnchor(type),
-                                                    newSurface->w, newSurface->h,
-                                                    viewportWidth, viewportHeight,
-                                                    true, x, y);
+        Overlay::OverlayManager::getOverlayRect(Session::get()->getOverlayManager().getOverlayAnchor(type),
+                                                newSurface->w, newSurface->h,
+                                                viewportWidth, viewportHeight,
+                                                true, x, y, w, h);
 
         overlayRect.x = x;
         overlayRect.y = y;
-        overlayRect.w = newSurface->w;
-        overlayRect.h = newSurface->h;
+        overlayRect.w = w;
+        overlayRect.h = h;
 
         SDL_FreeSurface(newSurface);
 

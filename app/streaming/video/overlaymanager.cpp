@@ -14,7 +14,11 @@ OverlayManager::OverlayManager() :
     m_Overlays[OverlayType::OverlayStatusUpdate].color = {0xCC, 0x00, 0x00, 0xFF};
     m_Overlays[OverlayType::OverlayStatusUpdate].fontSize = 36;
 
+    m_Overlays[OverlayType::OverlayMenuBackground].color = {0xFF, 0xFF, 0xFF, 0xFF};
+    m_Overlays[OverlayType::OverlayMenuBackground].fontSize = 20;
+
     SDL_AtomicSet(&m_Overlays[OverlayType::OverlayDebug].anchor, OverlayAnchorTopLeft);
+    SDL_AtomicSet(&m_Overlays[OverlayType::OverlayMenuBackground].anchor, OverlayAnchorFill);
     SDL_AtomicSet(&m_Overlays[OverlayType::OverlayStatusUpdate].anchor, OverlayAnchorBottomLeft);
 
     // While TTF will usually not be initialized here, it is valid for that not to
@@ -47,6 +51,9 @@ OverlayManager::~OverlayManager()
         if (m_Overlays[i].surface != nullptr) {
             SDL_FreeSurface(m_Overlays[i].surface);
         }
+        if (m_Overlays[i].paintedSurface != nullptr) {
+            SDL_FreeSurface(m_Overlays[i].paintedSurface);
+        }
         if (m_Overlays[i].font != nullptr) {
             TTF_CloseFont(m_Overlays[i].font);
         }
@@ -78,6 +85,8 @@ void OverlayManager::updateOverlayText(OverlayType type, const char* text)
     {
         std::lock_guard<std::mutex> lock(m_StateLock);
         auto& overlay = m_Overlays[type];
+        SDL_FreeSurface(overlay.paintedSurface);
+        overlay.paintedSurface = nullptr;
         SDL_utf8strlcpy(overlay.text, text, sizeof(overlay.text));
         ++overlay.revision;
         overlay.dirty = overlay.dirty || overlay.enabled;
@@ -99,6 +108,20 @@ int OverlayManager::getOverlayFontSize(OverlayType type)
 SDL_Surface* OverlayManager::getUpdatedOverlaySurface(OverlayType type)
 {
     return (SDL_Surface*)SDL_AtomicSetPtr((void**)&m_Overlays[type].surface, nullptr);
+}
+
+void OverlayManager::setOverlaySurface(OverlayType type, SDL_Surface* surface)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_StateLock);
+        auto& overlay = m_Overlays[type];
+        SDL_FreeSurface(overlay.paintedSurface);
+        overlay.paintedSurface = surface;
+        ++overlay.revision;
+        overlay.dirty = overlay.dirty || overlay.enabled;
+        overlay.queued = std::chrono::steady_clock::now();
+    }
+    m_WorkReady.notify_one();
 }
 
 void OverlayManager::setOverlayStyle(OverlayType type, OverlayAnchor anchor, SDL_Color color, SDL_Color background)
@@ -124,12 +147,21 @@ OverlayAnchor OverlayManager::getOverlayAnchor(OverlayType type)
     return (OverlayAnchor)SDL_AtomicGet(&m_Overlays[type].anchor);
 }
 
-void OverlayManager::getOverlayPosition(OverlayAnchor anchor,
-                                        int overlayWidth, int overlayHeight,
-                                        int viewportWidth, int viewportHeight,
-                                        bool originAtBottom, int& x, int& y)
+void OverlayManager::getOverlayRect(OverlayAnchor anchor,
+                                    int overlayWidth, int overlayHeight,
+                                    int viewportWidth, int viewportHeight,
+                                    bool originAtBottom, int& x, int& y, int& w, int& h)
 {
+    w = overlayWidth;
+    h = overlayHeight;
+
     switch (anchor) {
+    case OverlayAnchorFill:
+        x = 0;
+        y = 0;
+        w = viewportWidth;
+        h = viewportHeight;
+        return;
     case OverlayAnchorCenter:
         x = (viewportWidth - overlayWidth) / 2;
         y = (viewportHeight - overlayHeight) / 2;
@@ -157,6 +189,8 @@ void OverlayManager::setOverlayState(OverlayType type, bool enabled)
         auto& overlay = m_Overlays[type];
         if (overlay.enabled == enabled) return;
         overlay.enabled = enabled;
+        // The pre-rendered surface is kept so re-enabling doesn't require the
+        // producer to paint it again.
         if (!enabled) overlay.text[0] = 0;
         ++overlay.revision;
         overlay.dirty = true;
@@ -198,6 +232,7 @@ void OverlayManager::run()
         OverlayType type;
         char text[1024];
         SDL_Color color, background;
+        SDL_Surface* painted;
         bool enabled;
         uint64_t revision;
         Clock::time_point queued;
@@ -222,12 +257,14 @@ void OverlayManager::run()
             queued = overlay.queued;
             color = overlay.color;
             background = overlay.background;
+            // Copied under the lock because the producer can replace it at any time
+            painted = (enabled && overlay.paintedSurface) ? SDL_DuplicateSurface(overlay.paintedSurface) : nullptr;
             SDL_memcpy(text, overlay.text, sizeof(text));
         }
         const auto started = Clock::now();
         auto& overlay = m_Overlays[type];
-        SDL_Surface* surface = nullptr;
-        if (enabled && text[0]) {
+        SDL_Surface* surface = painted;
+        if (surface == nullptr && enabled && text[0]) {
             if (!overlay.font && !m_FontData.isEmpty()) {
                 overlay.font = TTF_OpenFontRW(SDL_RWFromConstMem(m_FontData.constData(), m_FontData.size()),
                                               1, overlay.fontSize);

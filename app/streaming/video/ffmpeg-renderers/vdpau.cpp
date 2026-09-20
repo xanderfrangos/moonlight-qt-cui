@@ -442,17 +442,17 @@ void VDPAURenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         }
 
         VdpRect overlayRect;
-        int x, y;
+        int x, y, w, h;
 
-        Overlay::OverlayManager::getOverlayPosition(Session::get()->getOverlayManager().getOverlayAnchor(type),
-                                                    newSurface->w, newSurface->h,
-                                                    m_DisplayWidth, m_DisplayHeight,
-                                                    false, x, y);
+        Overlay::OverlayManager::getOverlayRect(Session::get()->getOverlayManager().getOverlayAnchor(type),
+                                                newSurface->w, newSurface->h,
+                                                m_DisplayWidth, m_DisplayHeight,
+                                                false, x, y, w, h);
 
         overlayRect.x0 = x;
         overlayRect.y0 = y;
-        overlayRect.x1 = overlayRect.x0 + newSurface->w;
-        overlayRect.y1 = overlayRect.y0 + newSurface->h;
+        overlayRect.x1 = overlayRect.x0 + w;
+        overlayRect.y1 = overlayRect.y0 + h;
 
         // Surface data is no longer needed
         SDL_FreeSurface(newSurface);

@@ -610,13 +610,17 @@ void DXVA2Renderer::notifyOverlayUpdated(Overlay::OverlayType type)
         return;
     }
 
-    SDL_AtomicLock(&m_OverlayLock);
-    ComPtr<IDirect3DTexture9> oldTexture = std::move(m_OverlayTextures[type]);
-    ComPtr<IDirect3DVertexBuffer9> oldVertexBuffer = std::move(m_OverlayVertexBuffers[type]);
-    SDL_AtomicUnlock(&m_OverlayLock);
+    // Released once we drop the lock at the end of this function
+    ComPtr<IDirect3DTexture9> oldTexture;
+    ComPtr<IDirect3DVertexBuffer9> oldVertexBuffer;
 
     // If the overlay is disabled, we're done
     if (!overlayEnabled) {
+        SDL_AtomicLock(&m_OverlayLock);
+        oldTexture = std::move(m_OverlayTextures[type]);
+        oldVertexBuffer = std::move(m_OverlayVertexBuffers[type]);
+        SDL_AtomicUnlock(&m_OverlayLock);
+
         SDL_FreeSurface(newSurface);
         return;
     }
@@ -657,17 +661,17 @@ void DXVA2Renderer::notifyOverlayUpdated(Overlay::OverlayType type)
     newTexture->UnlockRect(0);
 
     SDL_FRect renderRect = {};
-    int x, y;
+    int x, y, w, h;
 
-    Overlay::OverlayManager::getOverlayPosition(Session::get()->getOverlayManager().getOverlayAnchor(type),
-                                                newSurface->w, newSurface->h,
-                                                m_DisplayWidth, m_DisplayHeight,
-                                                false, x, y);
+    Overlay::OverlayManager::getOverlayRect(Session::get()->getOverlayManager().getOverlayAnchor(type),
+                                            newSurface->w, newSurface->h,
+                                            m_DisplayWidth, m_DisplayHeight,
+                                            false, x, y, w, h);
 
     renderRect.x = x;
     renderRect.y = y;
-    renderRect.w = newSurface->w;
-    renderRect.h = newSurface->h;
+    renderRect.w = w;
+    renderRect.h = h;
 
     // The surface is no longer required
     SDL_FreeSurface(newSurface);
@@ -709,7 +713,13 @@ void DXVA2Renderer::notifyOverlayUpdated(Overlay::OverlayType type)
 
     newVertexBuffer->Unlock();
 
+    // Swap the whole overlay in at once. The previous one stays on screen until
+    // this point, so the render thread never finds the overlay missing between
+    // two frames, and a failure above leaves the old overlay up rather than
+    // blanking it.
     SDL_AtomicLock(&m_OverlayLock);
+    oldVertexBuffer = std::move(m_OverlayVertexBuffers[type]);
+    oldTexture = std::move(m_OverlayTextures[type]);
     m_OverlayVertexBuffers[type] = std::move(newVertexBuffer);
     m_OverlayTextures[type] = std::move(newTexture);
     SDL_AtomicUnlock(&m_OverlayLock);
@@ -723,13 +733,10 @@ void DXVA2Renderer::renderOverlay(Overlay::OverlayType type)
         return;
     }
 
-    // If the overlay is being updated, just skip rendering it this frame
-    if (!SDL_AtomicTryLock(&m_OverlayLock)) {
-        return;
-    }
-
     // Reference these objects so they don't immediately go away if the
-    // overlay update thread tries to release them.
+    // overlay update thread tries to release them. The update thread only holds
+    // this lock to swap pointers, so waiting is cheaper than skipping a frame.
+    SDL_AtomicLock(&m_OverlayLock);
     ComPtr<IDirect3DTexture9> overlayTexture = m_OverlayTextures[type];
     ComPtr<IDirect3DVertexBuffer9> overlayVertexBuffer = m_OverlayVertexBuffers[type];
     SDL_AtomicUnlock(&m_OverlayLock);

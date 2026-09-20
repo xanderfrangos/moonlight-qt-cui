@@ -213,6 +213,7 @@ SOURCES += \
     gui/inputmodetracker.cpp \
     gui/blurredimageprovider.cpp \
     streaming/video/overlaymanager.cpp \
+    streaming/video/overlaypainter.cpp \
     streaming/vrrratepolicy.cpp \
     backend/systemproperties.cpp \
     wm.cpp
@@ -259,6 +260,7 @@ HEADERS += \
     gui/inputmodetracker.h \
     gui/blurredimageprovider.h \
     streaming/video/overlaymanager.h \
+    streaming/video/overlaypainter.h \
     backend/systemproperties.h \
     windowsvblankvirtualization.h
 

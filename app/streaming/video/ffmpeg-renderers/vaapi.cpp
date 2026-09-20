@@ -839,10 +839,11 @@ VAAPIRenderer::renderFrame(AVFrame* frame)
 
             SDL_Rect overlayRect = m_OverlayRect[type];
 
-            Overlay::OverlayManager::getOverlayPosition(Session::get()->getOverlayManager().getOverlayAnchor((Overlay::OverlayType)type),
-                                                        overlayRect.w, overlayRect.h,
-                                                        windowWidth, windowHeight,
-                                                        false, overlayRect.x, overlayRect.y);
+            Overlay::OverlayManager::getOverlayRect(Session::get()->getOverlayManager().getOverlayAnchor((Overlay::OverlayType)type),
+                                                    m_OverlayRect[type].w, m_OverlayRect[type].h,
+                                                    windowWidth, windowHeight,
+                                                    false, overlayRect.x, overlayRect.y,
+                                                    overlayRect.w, overlayRect.h);
 
             status = vaAssociateSubpicture(vaDeviceContext->display,
                                            m_OverlaySubpicture[type],
