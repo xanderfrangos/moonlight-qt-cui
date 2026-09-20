@@ -2170,6 +2170,47 @@ decode service, GPU dependency wait, preparation/acquisition, scheduler lateness
 intentional queue protection, submission behavior, and native/display evidence.
 An average FPS counter alone can conceal all of these.
 
+### Stats history graphs (2026-09-20)
+
+The stats hotkey (keyboard, gamepad combo, and the gamepad menu item) now
+cycles off -> text -> text plus graphs -> off through `Session::cycleStatsOverlay()`.
+The graphs are a second overlay type, `OverlayDebugGraphs`, anchored top right
+opposite the existing text, and are painted with QPainter by
+`Overlay::Painter::paintStatsGraphs()` at a fixed pixel size, matching the fixed
+font size of the text overlay rather than scaling with the viewport.
+
+`Overlay::StatsGraphs` owns a sampling thread that reads cumulative counters
+every 100 ms and keeps the last 10 seconds, plotting the difference between
+consecutive reads. It plots, in order, incoming frame rate, rendering frame
+rate, average host processing latency, frames dropped by the network
+connection, frames dropped by network jitter, average network latency, and
+video bandwidth. Sampling runs whether or not the graphs are visible, so a full
+window is already present when they are brought up; painting and surface
+publication happen only while they are on screen.
+
+The sample interval is independent of the roughly one-second decoder stat
+windows behind the text overlay, which are unchanged. Rendered and pacer-dropped
+frames come from `Pacer::telemetrySnapshot()` directly, because the decoder
+windows only merge that cumulative snapshot once a second. Incoming frames,
+network drops and host processing latency are decoder-thread state, so
+`submitDecodeUnit()` republishes those totals under a lock for the sampling
+thread to read; the sum of the global and active windows is continuous across a
+window rollover. RTT comes from `LiGetEstimatedRttInfo()` and is a gauge, not a
+counter. Bandwidth differences a running total of the same `du->fullLength`
+bytes that feed `BandwidthTracker`, because that tracker deliberately smooths
+over 2.5 seconds of 250 ms buckets and would flatten a 100 ms graph; like the
+`DISPLAY_BITRATE` text line, it is video payload without FEC overhead.
+
+An interval with no decoded frames in it carries no new latency measurement, so
+both latency graphs hold their previous value rather than plotting a zero that
+would read as an improvement. Rates and drop counts do fall to zero, which is
+how a stall appears. A counter that decreases, which happens when the decoder is
+reinitialized mid-session, is treated as a new baseline rather than a delta.
+Each graph auto-scales to the window's maximum, rounded up to the next
+1/2/5 x 10^n and floored at a per-metric minimum so an idle graph does not
+amplify noise. These are the same measurements the text overlay reports as
+running averages; the graphs add time resolution, not new instrumentation.
+
 ## 15. Tests, deployment boundaries, and maintenance
 
 The deterministic suites are

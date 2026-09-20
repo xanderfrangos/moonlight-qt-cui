@@ -38,6 +38,10 @@ public:
 
     void submit(PacedFrame&& frame);
 
+    // Frames buffered ahead of display. Already maintained as a gauge at every
+    // queue mutation, so reading it costs nothing.
+    size_t queueDepth() const { return m_FrameQueueDepth.load(std::memory_order_relaxed); }
+
     // Calls from the UI/main thread only manipulate worker-owned state. All
     // backend notifications are delivered by the worker itself.
     void notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info);

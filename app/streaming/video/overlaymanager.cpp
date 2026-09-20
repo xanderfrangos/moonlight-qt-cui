@@ -11,6 +11,9 @@ OverlayManager::OverlayManager() :
     m_Overlays[OverlayType::OverlayDebug].color = {0xD0, 0xD0, 0x00, 0xFF};
     m_Overlays[OverlayType::OverlayDebug].fontSize = 20;
 
+    m_Overlays[OverlayType::OverlayDebugGraphs].color = {0xD0, 0xD0, 0x00, 0xFF};
+    m_Overlays[OverlayType::OverlayDebugGraphs].fontSize = 20;
+
     m_Overlays[OverlayType::OverlayStatusUpdate].color = {0xCC, 0x00, 0x00, 0xFF};
     m_Overlays[OverlayType::OverlayStatusUpdate].fontSize = 36;
 
@@ -18,6 +21,7 @@ OverlayManager::OverlayManager() :
     m_Overlays[OverlayType::OverlayMenuBackground].fontSize = 20;
 
     SDL_AtomicSet(&m_Overlays[OverlayType::OverlayDebug].anchor, OverlayAnchorTopLeft);
+    SDL_AtomicSet(&m_Overlays[OverlayType::OverlayDebugGraphs].anchor, OverlayAnchorTopRight);
     SDL_AtomicSet(&m_Overlays[OverlayType::OverlayMenuBackground].anchor, OverlayAnchorFill);
     SDL_AtomicSet(&m_Overlays[OverlayType::OverlayStatusUpdate].anchor, OverlayAnchorBottomLeft);
 
@@ -70,8 +74,8 @@ OverlayManager::~OverlayManager()
 
 bool OverlayManager::isOverlayEnabled(OverlayType type)
 {
-    std::lock_guard<std::mutex> lock(m_StateLock);
-    return m_Overlays[type].enabled;
+    // Deliberately lock-free. See enabledForReaders.
+    return SDL_AtomicGet(&m_Overlays[type].enabledForReaders) != 0;
 }
 
 std::string OverlayManager::getOverlayText(OverlayType type)
@@ -166,6 +170,10 @@ void OverlayManager::getOverlayRect(OverlayAnchor anchor,
         x = (viewportWidth - overlayWidth) / 2;
         y = (viewportHeight - overlayHeight) / 2;
         break;
+    case OverlayAnchorTopRight:
+        x = viewportWidth - overlayWidth;
+        y = originAtBottom ? viewportHeight - overlayHeight : 0;
+        break;
     case OverlayAnchorBottomLeft:
         x = 0;
         y = originAtBottom ? 0 : viewportHeight - overlayHeight;
@@ -189,6 +197,7 @@ void OverlayManager::setOverlayState(OverlayType type, bool enabled)
         auto& overlay = m_Overlays[type];
         if (overlay.enabled == enabled) return;
         overlay.enabled = enabled;
+        SDL_AtomicSet(&overlay.enabledForReaders, enabled);
         // The pre-rendered surface is kept so re-enabling doesn't require the
         // producer to paint it again.
         if (!enabled) overlay.text[0] = 0;

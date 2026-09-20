@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <mutex>
 #include <QQueue>
 #include <set>
 
@@ -9,6 +10,7 @@
 #include "incomingframetiming.h"
 #include "ffmpeg-renderers/renderer.h"
 #include "ffmpeg-renderers/pacer/pacer.h"
+#include "statsgraphs.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -58,6 +60,10 @@ private:
     void addVideoStats(VIDEO_STATS& src, VIDEO_STATS& dst);
 
     void syncPacerTelemetry();
+
+    void publishStatsGraphSample(PDECODE_UNIT du);
+
+    void sampleStatsGraphCounters(Overlay::StatsGraphCounters& counters);
 
     void finalizeActiveVideoStats();
 
@@ -123,6 +129,19 @@ private:
     VIDEO_STATS m_LastWndVideoStats;
     VIDEO_STATS m_GlobalVideoStats;
     PacerTelemetrySnapshot m_LastPacerTelemetry;
+
+    // The stats graphs sample ten times a second, which is far more often than
+    // the one-second windows above roll over. The decoder-owned totals are
+    // republished here on every decode unit so the sampling thread can read
+    // them without touching decoder state.
+    Overlay::StatsGraphs m_StatsGraphs;
+    std::mutex m_StatsGraphCountersLock;
+    Overlay::StatsGraphCounters m_StatsGraphCounters;
+    // BandwidthTracker smooths over 2.5 seconds of 250 ms buckets, which is
+    // too coarse and too lagged for a 100 ms graph, so keep a running total
+    // of the same bytes to difference per interval instead.
+    uint64_t m_StatsGraphVideoBytes;
+    uint64_t m_StatsGraphLastFrameUs;
     std::set<IFFmpegRenderer::RendererType> m_FailedRenderers;
 
     int m_FramesIn;

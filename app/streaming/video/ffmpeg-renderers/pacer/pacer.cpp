@@ -110,6 +110,28 @@ PacerTelemetrySnapshot Pacer::telemetrySnapshot() const
     return m_Telemetry.snapshot();
 }
 
+PacerTelemetryCounters Pacer::telemetryCounters() const
+{
+    return m_Telemetry.counters();
+}
+
+PacerFrametimeStats Pacer::takeFrametimeStats()
+{
+    return m_Telemetry.takeFrametimeStats();
+}
+
+uint32_t Pacer::queueDepth()
+{
+    if (m_VrrWorker != nullptr) {
+        return (uint32_t)m_VrrWorker->queueDepth();
+    }
+
+    // This lock is only ever held across an individual enqueue or dequeue, so
+    // sampling it ten times a second costs nothing measurable.
+    QMutexLocker lock(&m_FrameQueueLock);
+    return (uint32_t)(m_PacingQueue.count() + m_RenderQueue.count());
+}
+
 void Pacer::renderOnMainThread()
 {
     if (m_VrrWorker != nullptr) {
@@ -496,7 +518,8 @@ void Pacer::renderFrame(AVFrame* frame)
     m_Telemetry.recordLegacyFrame(
         afterRender >= decoderOutputUs ?
             afterRender - decoderOutputUs : 0,
-        afterRender >= beforeRender ? afterRender - beforeRender : 0);
+        afterRender >= beforeRender ? afterRender - beforeRender : 0,
+        afterRender);
 
     // Wait until after next frame to free this one to ensure the GPU
     // doesn't stall or read garbage if the backing buffer gets returned

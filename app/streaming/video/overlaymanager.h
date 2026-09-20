@@ -14,6 +14,9 @@ namespace Overlay {
 
 enum OverlayType {
     OverlayDebug,
+    // Plotted history of the metrics the debug overlay reports as running
+    // averages. Drawn before the menu background so the menu dims it too.
+    OverlayDebugGraphs,
     // Dims everything behind it, so it must be drawn after the overlays it
     // covers and before the menu it sits behind.
     OverlayMenuBackground,
@@ -23,6 +26,7 @@ enum OverlayType {
 
 enum OverlayAnchor {
     OverlayAnchorTopLeft,
+    OverlayAnchorTopRight,
     OverlayAnchorBottomLeft,
     OverlayAnchorCenter,
     // Stretches the overlay over the whole viewport, so a solid fill can be
@@ -118,6 +122,12 @@ private:
 
         // Read by renderers without m_StateLock held
         SDL_atomic_t anchor = {};
+
+        // Mirrors 'enabled' for the same reason. Renderers test this once per
+        // overlay per frame, and libplacebo does so while holding its own
+        // spinlock, so blocking here would spin a core against whatever the
+        // overlay worker is doing under m_StateLock.
+        SDL_atomic_t enabledForReaders = {};
 
         // Pre-rendered overlay from setOverlaySurface(), retained so it can be
         // republished when the renderer changes. Guarded by m_StateLock.

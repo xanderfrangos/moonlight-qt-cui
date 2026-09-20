@@ -4,7 +4,10 @@
 #include <QString>
 #include <QStringList>
 
+#include <vector>
+
 #include "SDL_compat.h"
+#include "statsgraphs.h"
 
 namespace Overlay {
 
@@ -21,6 +24,15 @@ SDL_Surface* paintGamepadMenu(const QString& title,
                               int selectedIndex,
                               const QString& hint,
                               int viewportHeight);
+
+// Draws the stats history graphs as a Material card. Points run oldest to
+// newest and are plotted against the right edge, so a history that hasn't
+// filled the window yet still shows the newest sample in the same place.
+// maxPoints is the number of samples a full window holds. Returns an ARGB8888
+// surface owned by the caller, or nullptr on failure.
+SDL_Surface* paintStatsGraphs(const std::vector<StatsGraphPoint>& points,
+                              int maxPoints,
+                              int windowSeconds);
 
 // Draws a solid color for overlays anchored with OverlayAnchorFill. The surface
 // is deliberately tiny, since renderers stretch it over the whole viewport.

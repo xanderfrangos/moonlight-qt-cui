@@ -123,6 +123,9 @@ public:
         return m_OverlayManager;
     }
 
+    // Shows or hides the stats text and its graphs together
+    void toggleStatsOverlay();
+
     int streamColorRange() const
     {
         return m_StreamConfig.colorRange;

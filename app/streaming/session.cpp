@@ -1757,6 +1757,16 @@ static void getWindowPixelSize(SDL_Window* window, int& width, int& height)
     }
 }
 
+void Session::toggleStatsOverlay()
+{
+    // The text stats and the graphs are one overlay as far as the user is
+    // concerned, so they come up and go away together.
+    const bool enabled = !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug);
+
+    m_OverlayManager.setOverlayState(Overlay::OverlayDebug, enabled);
+    m_OverlayManager.setOverlayState(Overlay::OverlayDebugGraphs, enabled);
+}
+
 void Session::refreshStatusOverlay()
 {
     static_assert(SDL_arraysize(k_GamepadMenuItems) == GamepadMenuItemMax,
@@ -1868,8 +1878,7 @@ void Session::activateGamepadMenuSelection()
         return;
 
     case GamepadMenuToggleStats:
-        m_OverlayManager.setOverlayState(Overlay::OverlayDebug,
-                                         !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
+        toggleStatsOverlay();
         return;
 
     case GamepadMenuEndSession:
@@ -2316,6 +2325,7 @@ void Session::exec()
 
     // Toggle the stats overlay if requested by the user
     m_OverlayManager.setOverlayState(Overlay::OverlayDebug, m_Preferences->showPerformanceOverlay);
+    m_OverlayManager.setOverlayState(Overlay::OverlayDebugGraphs, m_Preferences->showPerformanceOverlay);
 
     // Switch to async logging mode when we enter the SDL loop
     StreamUtils::enterAsyncLoggingMode();
