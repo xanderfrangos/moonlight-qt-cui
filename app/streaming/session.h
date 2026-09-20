@@ -185,6 +185,7 @@ private:
         GamepadMenuDisconnect,
         GamepadMenuEndSession,
         GamepadMenuToggleStats,
+        GamepadMenuPressGuide,
         GamepadMenuItemMax
     };
 
@@ -193,7 +194,7 @@ private:
         return m_GamepadMenuOpen;
     }
 
-    void openGamepadMenu();
+    void openGamepadMenu(short gamepadIndex);
 
     void closeGamepadMenu();
 
@@ -318,6 +319,7 @@ private:
     int m_MouseEmulationRefCount;
     bool m_GamepadMenuOpen;
     int m_GamepadMenuIndex;
+    short m_GamepadMenuGamepadIndex;
     int m_FlushingWindowEventsRef;
     QStringList m_LaunchWarnings;
     bool m_ShouldExit;

@@ -24,6 +24,11 @@
 // How far a stick must be pushed to move the selection in the gamepad menu
 #define GAMEPAD_MENU_STICK_DEADZONE 16384
 
+// How long the Guide button is held when the gamepad menu sends it. A momentary
+// press tends to be swallowed somewhere between the host's virtual pad and
+// whatever is listening for it.
+#define GUIDE_BUTTON_HOLD_DURATION 100
+
 // Haptic capabilities (in addition to those from SDL_HapticQuery())
 #define ML_HAPTIC_GC_RUMBLE         (1U << 16)
 #define ML_HAPTIC_SIMPLE_RUMBLE     (1U << 17)
@@ -292,6 +297,35 @@ void SdlInputHandler::sendAllGamepadStates()
     }
 }
 
+Uint32 SdlInputHandler::releaseGuideButtonTimerCallback(Uint32, void* param)
+{
+    auto me = reinterpret_cast<SdlInputHandler*>(param);
+
+    // Release the Guide button, then hand the host back whatever is actually
+    // held down now that our synthetic press is over.
+    LiSendMultiControllerEvent(me->m_GuideButtonGamepadIndex, me->m_GamepadMask,
+                               0, 0, 0, 0, 0, 0, 0);
+    me->sendAllGamepadStates();
+
+    return 0;
+}
+
+void SdlInputHandler::sendGuideButtonPress(short gamepadIndex)
+{
+    m_GuideButtonGamepadIndex = gamepadIndex;
+
+    // Send the Guide button by itself. Anything the user is still holding from
+    // working the menu is masked out, so the host sees a clean press rather than
+    // a chord that means something else to Steam or the Game Bar.
+    LiSendMultiControllerEvent(gamepadIndex, m_GamepadMask,
+                               SPECIAL_FLAG, 0, 0, 0, 0, 0, 0);
+
+    SDL_RemoveTimer(m_GuideButtonTimer);
+    m_GuideButtonTimer = SDL_AddTimer(GUIDE_BUTTON_HOLD_DURATION,
+                                      releaseGuideButtonTimerCallback,
+                                      this);
+}
+
 void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* event)
 {
     if (event->button >= SDL_arraysize(k_ButtonMap)) {
@@ -437,7 +471,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
                     "Detected menu gamepad button combo");
 
         // Bring up the menu rather than disconnecting outright
-        Session::get()->openGamepadMenu();
+        Session::get()->openGamepadMenu(state->index);
 
         // Clear buttons down on this gamepad
         LiSendMultiControllerEvent(state->index, m_GamepadMask,

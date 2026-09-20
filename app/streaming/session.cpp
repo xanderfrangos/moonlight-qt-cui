@@ -633,6 +633,7 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_MouseEmulationRefCount(0),
       m_GamepadMenuOpen(false),
       m_GamepadMenuIndex(0),
+      m_GamepadMenuGamepadIndex(0),
       m_FlushingWindowEventsRef(0),
       m_ShouldExit(false),
       m_AsyncConnectionSuccess(false),
@@ -1713,6 +1714,7 @@ static const char* k_GamepadMenuItems[] = {
     "Disconnect",
     "End Session",
     "Toggle Stream Statistics",
+    "Press Guide Button",
 };
 
 // Prompts for the buttons that gamepad.cpp handles while the menu is up
@@ -1802,12 +1804,14 @@ void Session::refreshStatusOverlay()
     }
 }
 
-void Session::openGamepadMenu()
+void Session::openGamepadMenu(short gamepadIndex)
 {
     if (m_GamepadMenuOpen) {
         return;
     }
 
+    // Actions that talk back to the host go to the gamepad that opened the menu
+    m_GamepadMenuGamepadIndex = gamepadIndex;
     m_GamepadMenuOpen = true;
     m_GamepadMenuIndex = 0;
     refreshStatusOverlay();
@@ -1845,6 +1849,15 @@ void Session::activateGamepadMenuSelection()
     closeGamepadMenu();
 
     switch (selection) {
+    case GamepadMenuPressGuide:
+        // closeGamepadMenu() has already resynced whatever is physically held
+        // down, which is at least the A button that got us here. The press is
+        // sent on its own so the host doesn't read it as a chord.
+        if (m_InputHandler != nullptr) {
+            m_InputHandler->sendGuideButtonPress(m_GamepadMenuGamepadIndex);
+        }
+        return;
+
     case GamepadMenuToggleStats:
         m_OverlayManager.setOverlayState(Overlay::OverlayDebug,
                                          !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));

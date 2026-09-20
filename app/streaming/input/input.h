@@ -137,6 +137,8 @@ public:
 
     void sendAllGamepadStates();
 
+    void sendGuideButtonPress(short gamepadIndex);
+
     void raiseAllKeys();
 
     void notifyMouseLeave();
@@ -204,6 +206,9 @@ private:
     Uint32 mouseEmulationTimerCallback(Uint32 interval, void* param);
 
     static
+    Uint32 releaseGuideButtonTimerCallback(Uint32 interval, void* param);
+
+    static
     Uint32 releaseLeftButtonTimerCallback(Uint32 interval, void* param);
 
     static
@@ -252,6 +257,9 @@ private:
     bool m_AbsoluteMouseMode;
     bool m_AbsoluteTouchMode;
     bool m_DisabledTouchFeedback;
+
+    SDL_TimerID m_GuideButtonTimer;
+    short m_GuideButtonGamepadIndex;
 
     SDL_TouchFingerEvent m_TouchDownEvent[MAX_FINGERS];
     SDL_TimerID m_LeftButtonReleaseTimer;
