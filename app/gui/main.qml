@@ -122,6 +122,18 @@ ApplicationWindow {
         }
     }
 
+    // Escape or Back: leave the current page, or ask whether to quit if this
+    // is the first one. The toolbar calls this too, since it lives outside
+    // the StackView and never sees the StackView's own key handlers.
+    function goBackOrQuit() {
+        if (stackView.depth > 1) {
+            goBack()
+        }
+        else {
+            quitConfirmationDialog.open()
+        }
+    }
+
     // The TV mode title: the names of the pages in the stack, with the
     // current page last. The arguments make bindings update on navigation.
     function breadcrumbText(depth, currentItem) {
@@ -280,23 +292,9 @@ ApplicationWindow {
             }
         }
 
-        Keys.onEscapePressed: {
-            if (depth > 1) {
-                goBack()
-            }
-            else {
-                quitConfirmationDialog.open()
-            }
-        }
+        Keys.onEscapePressed: goBackOrQuit()
 
-        Keys.onBackPressed: {
-            if (depth > 1) {
-                goBack()
-            }
-            else {
-                quitConfirmationDialog.open()
-            }
-        }
+        Keys.onBackPressed: goBackOrQuit()
 
         Keys.onMenuPressed: {
             settingsButton.clicked()
@@ -405,6 +403,12 @@ ApplicationWindow {
             value: 0
             when: SystemProperties.tvMode
         }
+
+        // Key presses that a focused toolbar button doesn't handle arrive
+        // here, rather than at the StackView with the page below
+        Keys.onEscapePressed: goBackOrQuit()
+
+        Keys.onBackPressed: goBackOrQuit()
 
         Label {
             id: titleLabel
