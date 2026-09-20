@@ -222,11 +222,6 @@ void PlVkRenderer::unlockQueue(struct AVHWDeviceContext *dev_ctx, uint32_t queue
     me->m_Vulkan->unlock_queue(me->m_Vulkan, queue_family, index);
 }
 
-void PlVkRenderer::overlayUploadComplete(void* opaque)
-{
-    SDL_FreeSurface((SDL_Surface*)opaque);
-}
-
 PlVkRenderer::PlVkRenderer(AVHWDeviceType hwDeviceType, IFFmpegRenderer *backendRenderer) :
     IFFmpegRenderer(RendererType::Vulkan),
     m_Backend(backendRenderer),
@@ -288,6 +283,12 @@ PlVkRenderer::~PlVkRenderer()
     // The render context must have been cleaned up by now.
     SDL_assert(!m_HasPendingSwapchainFrame);
 
+    for (int i = 0; i < (int)SDL_arraysize(m_Overlays); i++) {
+        SDL_FreeSurface(m_Overlays[i].pendingSurface);
+        m_Overlays[i].pendingSurface = nullptr;
+        m_Overlays[i].hasPendingUpdate = false;
+    }
+
     if (m_Vulkan != nullptr) {
 #ifdef PLVK_USE_EARLY_RENDER_TO_WAIT
         pl_tex_destroy(m_Vulkan->gpu, &m_EmptyOverlay.tex);
@@ -295,7 +296,6 @@ PlVkRenderer::~PlVkRenderer()
 
         for (int i = 0; i < (int)SDL_arraysize(m_Overlays); i++) {
             pl_tex_destroy(m_Vulkan->gpu, &m_Overlays[i].overlay.tex);
-            pl_tex_destroy(m_Vulkan->gpu, &m_Overlays[i].stagingOverlay.tex);
         }
 
         for (int i = 0; i < (int)SDL_arraysize(m_Textures); i++) {
@@ -312,7 +312,6 @@ PlVkRenderer::~PlVkRenderer()
 #ifdef Q_OS_DARWIN
         m_MetalTextureFactory.reset();
 #endif
-        m_OverlayCompletion.reset();
         pl_vulkan_destroy(&m_Vulkan);
 
         // This surface was created by SDL, so there's no libplacebo API to destroy it
@@ -834,8 +833,10 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
         return false;
     }
 
-    // emptySurface is owned now by the overlay upload code (even on failure)
-    if (!createOverlay(&m_EmptyOverlay, emptySurface)) {
+    // createOverlay() uploads synchronously and does not take ownership
+    const bool emptyOverlayCreated = createOverlay(&m_EmptyOverlay, emptySurface);
+    SDL_FreeSurface(emptySurface);
+    if (!emptyOverlayCreated) {
         return false;
     }
 
@@ -1959,18 +1960,13 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
 
     pl_frame_from_swapchain(&targetFrame, &m_SwapchainFrame);
 
-    // We perform minimal processing under the overlay lock to avoid blocking threads updating the overlay
-    SDL_AtomicLock(&m_OverlayLock);
-    for (int i = 0; i < Overlay::OverlayMax; i++) {
-        // If we have a staging overlay, we need to transfer ownership to us
-        if (m_Overlays[i].hasStagingOverlay) {
-            // The background upload has completed. Reuse the previous texture
-            // as the next staging image instead of allocating on every refresh.
-            std::swap(m_Overlays[i].overlay, m_Overlays[i].stagingOverlay);
-            m_Overlays[i].hasStagingOverlay = false;
-            m_Overlays[i].hasOverlay = true;
-        }
+    // Take ownership of anything the overlay worker handed us and upload it
+    // here, where we own pl_gpu exclusively.
+    uploadPendingOverlays();
 
+    // m_Overlays[].overlay and hasOverlay belong to this thread alone, so
+    // collecting them needs no lock.
+    for (int i = 0; i < Overlay::OverlayMax; i++) {
         if (m_Overlays[i].hasOverlay &&
             Session::get()->getOverlayManager().isOverlayEnabled((Overlay::OverlayType)i)) {
             // Position the overlay
@@ -1993,7 +1989,6 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
             overlays.push_back(m_Overlays[i].overlay);
         }
     }
-    SDL_AtomicUnlock(&m_OverlayLock);
 
     SDL_Rect src;
     src.x = mappedFrame.crop.x0;
@@ -2137,7 +2132,7 @@ bool PlVkRenderer::testRenderFrame(AVFrame *frame)
     return true;
 }
 
-// Takes ownership of surface in all cases!
+// Runs on the render thread only. Does not take ownership of surface.
 bool PlVkRenderer::createOverlay(pl_overlay* overlay, SDL_Surface* surface)
 {
     // Find a compatible texture format
@@ -2146,13 +2141,11 @@ bool PlVkRenderer::createOverlay(pl_overlay* overlay, SDL_Surface* surface)
     if (!texFormat) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "pl_find_named_fmt(bgra8) failed");
-        SDL_FreeSurface(surface);
         return false;
     }
 
-    // Create a new texture for this overlay if necessary, otherwise reuse the existing texture.
-    // NB: We're guaranteed that the render thread won't be reading this concurrently because
-    // we set hasStagingOverlay to false above.
+    // Reuse the existing texture when the parameters still match. The render
+    // thread is the only reader, so nothing can be sampling it right now.
     pl_tex_params texParams = {};
     texParams.w = surface->w;
     texParams.h = surface->h;
@@ -2164,30 +2157,26 @@ bool PlVkRenderer::createOverlay(pl_overlay* overlay, SDL_Surface* surface)
     if (!pl_tex_recreate(m_Vulkan->gpu, &overlay->tex, &texParams)) {
         pl_tex_destroy(m_Vulkan->gpu, &overlay->tex);
         SDL_zerop(overlay);
-        SDL_FreeSurface(surface);
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "pl_tex_recreate() failed");
         return false;
     }
 
-    // Upload the surface data to the new texture
+    // Upload the surface data to the texture. Leaving callback unset makes this
+    // synchronous, so libplacebo is done with the pixels once it returns and
+    // the caller keeps ownership of the surface.
     SDL_assert(!SDL_MUSTLOCK(surface));
     pl_tex_transfer_params xferParams = {};
     xferParams.tex = overlay->tex;
     xferParams.row_pitch = (size_t)surface->pitch;
     xferParams.ptr = surface->pixels;
-    xferParams.callback = overlayUploadComplete;
-    xferParams.priv = surface;
     if (!pl_tex_upload(m_Vulkan->gpu, &xferParams)) {
         pl_tex_destroy(m_Vulkan->gpu, &overlay->tex);
         SDL_zerop(overlay);
-        SDL_FreeSurface(surface);
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "pl_tex_upload() failed");
         return false;
     }
-
-    // surface is now owned by the texture upload process. It will be freed in overlayUploadComplete()
 
     // Initialize the rest of the overlay params
     overlay->mode = PL_OVERLAY_NORMAL;
@@ -2199,6 +2188,10 @@ bool PlVkRenderer::createOverlay(pl_overlay* overlay, SDL_Surface* surface)
     return true;
 }
 
+// Called on the overlay worker thread. This must not touch pl_gpu at all:
+// libplacebo is not thread-safe, and racing the render thread's command pool
+// trips its vk_cmd_submit() timeline assertion. Hand the pixels to the render
+// thread and let uploadPendingOverlays() do the GPU work.
 void PlVkRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 {
     SDL_Surface* newSurface = Session::get()->getOverlayManager().getUpdatedOverlaySurface(type);
@@ -2207,35 +2200,47 @@ void PlVkRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         return;
     }
 
+    // A null surface here means the overlay was disabled, which is a pending
+    // update in its own right: the render thread has to drop the texture.
     SDL_AtomicLock(&m_OverlayLock);
-    // We want to clear the staging overlay flag even if a staging overlay is still present,
-    // since this ensures the render thread will not read from a partially initialized pl_tex
-    // as we modify or recreate the staging overlay texture outside the overlay lock.
-    m_Overlays[type].hasStagingOverlay = false;
+    SDL_Surface* superseded = m_Overlays[type].pendingSurface;
+    m_Overlays[type].pendingSurface = newSurface;
+    m_Overlays[type].hasPendingUpdate = true;
     SDL_AtomicUnlock(&m_OverlayLock);
 
-    // If there's no new staging overlay, free the old staging overlay texture.
-    // NB: This is safe to do outside the overlay lock because we're guaranteed
-    // to not have racing readers/writers if hasStagingOverlay is false.
-    if (newSurface == nullptr) {
-        pl_tex_destroy(m_Vulkan->gpu, &m_Overlays[type].stagingOverlay.tex);
-        SDL_zero(m_Overlays[type].stagingOverlay);
-        return;
+    // An update the render thread never got to. Dropping it is correct; only
+    // the newest overlay image is ever displayed.
+    SDL_FreeSurface(superseded);
+}
+
+// Render thread only.
+void PlVkRenderer::uploadPendingOverlays()
+{
+    for (int i = 0; i < Overlay::OverlayMax; i++) {
+        SDL_AtomicLock(&m_OverlayLock);
+        const bool hasPendingUpdate = m_Overlays[i].hasPendingUpdate;
+        SDL_Surface* surface = m_Overlays[i].pendingSurface;
+        m_Overlays[i].pendingSurface = nullptr;
+        m_Overlays[i].hasPendingUpdate = false;
+        SDL_AtomicUnlock(&m_OverlayLock);
+
+        if (!hasPendingUpdate) {
+            continue;
+        }
+
+        if (surface == nullptr) {
+            // The overlay was disabled, so release its texture.
+            pl_tex_destroy(m_Vulkan->gpu, &m_Overlays[i].overlay.tex);
+            SDL_zero(m_Overlays[i].overlay);
+            m_Overlays[i].hasOverlay = false;
+            continue;
+        }
+
+        // On failure createOverlay() has already released the texture, so the
+        // overlay is dropped rather than left pointing at a stale one.
+        m_Overlays[i].hasOverlay = createOverlay(&m_Overlays[i].overlay, surface);
+        SDL_FreeSurface(surface);
     }
-
-    // newSurface is now owned by the texture upload process
-    if (!createOverlay(&m_Overlays[type].stagingOverlay, newSurface)) {
-        return;
-    }
-
-    if (!m_OverlayCompletion) m_OverlayCompletion = std::make_unique<OverlayCompletion>(m_Vulkan);
-    if (!m_OverlayCompletion->wait(m_Overlays[type].stagingOverlay.tex)) return;
-
-    // Make this staging overlay visible to the render thread
-    SDL_AtomicLock(&m_OverlayLock);
-    SDL_assert(!m_Overlays[type].hasStagingOverlay);
-    m_Overlays[type].hasStagingOverlay = true;
-    SDL_AtomicUnlock(&m_OverlayLock);
 }
 
 bool PlVkRenderer::notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info)
