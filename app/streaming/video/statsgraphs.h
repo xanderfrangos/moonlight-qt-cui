@@ -48,6 +48,13 @@ class StatsGraphs
 {
 public:
     static constexpr int k_SampleIntervalMs = 100;
+    // Repainting is deliberately slower than sampling. Every sample still
+    // reaches the plot; only the refresh rate differs. A republish costs a
+    // megabyte-scale surface allocation, a copy of it inside the overlay
+    // manager, and a GPU texture rebuild in the renderer, all while the render
+    // thread contends for the same overlay state lock, so doing it ten times a
+    // second is far more pressure than any other overlay in this app applies.
+    static constexpr int k_RepaintIntervalMs = 250;
     static constexpr int k_WindowSeconds = 10;
     static constexpr int k_MaxSamples = (k_WindowSeconds * 1000) / k_SampleIntervalMs;
 

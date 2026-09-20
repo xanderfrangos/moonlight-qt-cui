@@ -60,6 +60,7 @@ void StatsGraphs::run()
 
     auto lastSample = Clock::now();
     auto nextSample = lastSample + interval;
+    auto lastRepaint = Clock::time_point{};
     bool wasEnabled = false;
 
     for (;;) {
@@ -87,10 +88,16 @@ void StatsGraphs::run()
 
         const bool enabled = m_OverlayManager->isOverlayEnabled(OverlayDebugGraphs);
         if (enabled) {
-            m_OverlayManager->setOverlaySurface(OverlayDebugGraphs,
-                                                Painter::paintStatsGraphs(m_Points,
-                                                                          k_MaxSamples,
-                                                                          k_WindowSeconds));
+            // Repaint on its own slower schedule, but always immediately on the
+            // tick the graphs are turned on so they don't appear blank.
+            if (!wasEnabled ||
+                    now - lastRepaint >= std::chrono::milliseconds(k_RepaintIntervalMs)) {
+                m_OverlayManager->setOverlaySurface(OverlayDebugGraphs,
+                                                    Painter::paintStatsGraphs(m_Points,
+                                                                              k_MaxSamples,
+                                                                              k_WindowSeconds));
+                lastRepaint = now;
+            }
         }
         else if (wasEnabled) {
             // Don't keep a megabyte of pixels around while they aren't on screen

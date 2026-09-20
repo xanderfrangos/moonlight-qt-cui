@@ -997,9 +997,9 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
     // they come from Pacer's own cumulative snapshot rather than from the
     // decoder windows, which only pick them up once a second.
     if (m_Pacer != nullptr) {
-        const PacerTelemetrySnapshot snapshot = m_Pacer->telemetrySnapshot();
-        counters.renderedFrames = snapshot.renderedFrames;
-        counters.jitterDroppedFrames = snapshot.pacerDroppedFrames;
+        const PacerTelemetryCounters pacerCounters = m_Pacer->telemetryCounters();
+        counters.renderedFrames = pacerCounters.renderedFrames;
+        counters.jitterDroppedFrames = pacerCounters.pacerDroppedFrames;
     }
 
     uint32_t rtt, rttVariance;

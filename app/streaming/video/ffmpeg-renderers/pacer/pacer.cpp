@@ -110,6 +110,11 @@ PacerTelemetrySnapshot Pacer::telemetrySnapshot() const
     return m_Telemetry.snapshot();
 }
 
+PacerTelemetryCounters Pacer::telemetryCounters() const
+{
+    return m_Telemetry.counters();
+}
+
 void Pacer::renderOnMainThread()
 {
     if (m_VrrWorker != nullptr) {

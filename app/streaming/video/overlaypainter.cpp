@@ -354,11 +354,18 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
     const qreal cardHeight = (cardPadding * 2) + headerMetrics.height() + graphGap +
                              (graphHeight * graphCount) + (graphGap * (graphCount - 1));
 
-    QImage image(qRound(cardWidth + (shadowSpread * 2)),
-                 qRound(cardHeight + (shadowSpread * 2)),
-                 QImage::Format_ARGB32_Premultiplied);
-    if (image.isNull()) {
-        return nullptr;
+    // Reused across repaints. This card republishes for as long as it is on
+    // screen, and reallocating a megabyte of pixels every time churns the
+    // allocator to no purpose. Only the stats graph sampling thread paints
+    // here, so a thread-local canvas needs no additional synchronization.
+    static thread_local QImage image;
+    const QSize cardSize(qRound(cardWidth + (shadowSpread * 2)),
+                         qRound(cardHeight + (shadowSpread * 2)));
+    if (image.size() != cardSize) {
+        image = QImage(cardSize, QImage::Format_ARGB32_Premultiplied);
+        if (image.isNull()) {
+            return nullptr;
+        }
     }
     image.fill(Qt::transparent);
 

@@ -64,6 +64,15 @@ struct PacerTelemetrySnapshot {
     uint64_t vrrSourcePeriodUs = 0;
 };
 
+// The stats graphs sample ten times a second and plot counters only. Copying
+// the percentile sample arrays and sorting them under the telemetry lock would
+// put avoidable work on the presentation path at that rate, so they read this
+// instead of a full snapshot.
+struct PacerTelemetryCounters {
+    uint64_t renderedFrames = 0;
+    uint64_t pacerDroppedFrames = 0;
+};
+
 struct VrrTelemetrySample {
     uint64_t queueResidenceUs = 0;
     uint64_t decodeWaitUs = 0;
@@ -107,6 +116,12 @@ public:
         populatePrepareLatenessPercentilesLocked(snapshot);
         populateSubmitErrorPercentilesLocked(snapshot);
         return snapshot;
+    }
+
+    PacerTelemetryCounters counters() const
+    {
+        QMutexLocker lock(&m_Lock);
+        return { m_Snapshot.renderedFrames, m_Snapshot.pacerDroppedFrames };
     }
 
     void beginVrrSession()

@@ -123,6 +123,12 @@ private:
         // Read by renderers without m_StateLock held
         SDL_atomic_t anchor = {};
 
+        // Mirrors 'enabled' for the same reason. Renderers test this once per
+        // overlay per frame, and libplacebo does so while holding its own
+        // spinlock, so blocking here would spin a core against whatever the
+        // overlay worker is doing under m_StateLock.
+        SDL_atomic_t enabledForReaders = {};
+
         // Pre-rendered overlay from setOverlaySurface(), retained so it can be
         // republished when the renderer changes. Guarded by m_StateLock.
         SDL_Surface* paintedSurface = nullptr;

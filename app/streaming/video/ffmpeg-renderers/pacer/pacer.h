@@ -47,6 +47,10 @@ public:
 
     PacerTelemetrySnapshot telemetrySnapshot() const;
 
+    // Counters only, without the percentile computation telemetrySnapshot()
+    // performs. Used by the high-rate stats graph sampler.
+    PacerTelemetryCounters telemetryCounters() const;
+
     // Only the active VRR worker consumes the decoder-facing pacing metadata.
     void submitFrame(PacedFrame&& frame);
 

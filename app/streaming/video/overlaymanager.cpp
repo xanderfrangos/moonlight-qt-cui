@@ -74,8 +74,8 @@ OverlayManager::~OverlayManager()
 
 bool OverlayManager::isOverlayEnabled(OverlayType type)
 {
-    std::lock_guard<std::mutex> lock(m_StateLock);
-    return m_Overlays[type].enabled;
+    // Deliberately lock-free. See enabledForReaders.
+    return SDL_AtomicGet(&m_Overlays[type].enabledForReaders) != 0;
 }
 
 std::string OverlayManager::getOverlayText(OverlayType type)
@@ -197,6 +197,7 @@ void OverlayManager::setOverlayState(OverlayType type, bool enabled)
         auto& overlay = m_Overlays[type];
         if (overlay.enabled == enabled) return;
         overlay.enabled = enabled;
+        SDL_AtomicSet(&overlay.enabledForReaders, enabled);
         // The pre-rendered surface is kept so re-enabling doesn't require the
         // producer to paint it again.
         if (!enabled) overlay.text[0] = 0;
