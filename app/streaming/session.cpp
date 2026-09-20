@@ -1748,26 +1748,14 @@ static void getWindowPixelSize(SDL_Window* window, int& width, int& height)
     }
 }
 
-void Session::cycleStatsOverlay()
+void Session::toggleStatsOverlay()
 {
-    bool text = m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug);
-    bool graphs = m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebugGraphs);
+    // The text stats and the graphs are one overlay as far as the user is
+    // concerned, so they come up and go away together.
+    const bool enabled = !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug);
 
-    if (!text) {
-        // The graphs can only have been left on by a preference change while
-        // the text was off, but don't skip a step if that happens.
-        text = true;
-        graphs = false;
-    }
-    else if (!graphs) {
-        graphs = true;
-    }
-    else {
-        text = graphs = false;
-    }
-
-    m_OverlayManager.setOverlayState(Overlay::OverlayDebug, text);
-    m_OverlayManager.setOverlayState(Overlay::OverlayDebugGraphs, graphs);
+    m_OverlayManager.setOverlayState(Overlay::OverlayDebug, enabled);
+    m_OverlayManager.setOverlayState(Overlay::OverlayDebugGraphs, enabled);
 }
 
 void Session::refreshStatusOverlay()
@@ -1881,7 +1869,7 @@ void Session::activateGamepadMenuSelection()
         return;
 
     case GamepadMenuToggleStats:
-        cycleStatsOverlay();
+        toggleStatsOverlay();
         return;
 
     case GamepadMenuEndSession:
@@ -2302,6 +2290,7 @@ void Session::exec()
 
     // Toggle the stats overlay if requested by the user
     m_OverlayManager.setOverlayState(Overlay::OverlayDebug, m_Preferences->showPerformanceOverlay);
+    m_OverlayManager.setOverlayState(Overlay::OverlayDebugGraphs, m_Preferences->showPerformanceOverlay);
 
     // Switch to async logging mode when we enter the SDL loop
     StreamUtils::enterAsyncLoggingMode();

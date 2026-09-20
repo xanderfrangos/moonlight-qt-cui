@@ -122,8 +122,8 @@ public:
         return m_OverlayManager;
     }
 
-    // Advances the stats overlay through off -> text -> text and graphs -> off
-    void cycleStatsOverlay();
+    // Shows or hides the stats text and its graphs together
+    void toggleStatsOverlay();
 
     int streamColorRange() const
     {
