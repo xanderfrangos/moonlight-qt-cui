@@ -212,6 +212,8 @@ SOURCES += \
     gui/sdlgamepadkeynavigation.cpp \
     gui/inputmodetracker.cpp \
     gui/blurredimageprovider.cpp \
+    gui/dither.cpp \
+    gui/gradientimageprovider.cpp \
     streaming/video/overlaymanager.cpp \
     streaming/video/overlaypainter.cpp \
     streaming/video/statsgraphs.cpp \
@@ -260,6 +262,8 @@ HEADERS += \
     gui/sdlgamepadkeynavigation.h \
     gui/inputmodetracker.h \
     gui/blurredimageprovider.h \
+    gui/dither.h \
+    gui/gradientimageprovider.h \
     streaming/video/overlaymanager.h \
     streaming/video/overlaypainter.h \
     streaming/video/statsgraphs.h \

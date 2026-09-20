@@ -23,6 +23,7 @@
         <file>gui/CliPair.qml</file>
         <file>gui/TvTheme.qml</file>
         <file>gui/TvBackdrop.qml</file>
+        <file>gui/TvGradient.qml</file>
         <file>gui/TvHintBar.qml</file>
         <file>gui/TvButtonHint.qml</file>
         <file>gui/SettingsGroupBox.qml</file>

@@ -21,6 +21,17 @@ QtObject {
     readonly property int spacingMedium: 16
     readonly property int spacingLarge: 32
 
+    // Packs a color as the eight hex digits of ARGB that the image
+    // providers parse out of their URLs
+    function argbHex(color) {
+        function channel(value) {
+            var hex = Math.round(value * 255).toString(16)
+            return hex.length < 2 ? "0" + hex : hex
+        }
+
+        return channel(color.a) + channel(color.r) + channel(color.g) + channel(color.b)
+    }
+
     // Short enough to keep up with held-direction repeats on the gamepad
     readonly property int animationFast: 120
     readonly property int animationNormal: 200

@@ -213,13 +213,11 @@ ApplicationWindow {
     background: Rectangle {
         color: window.Material.backgroundColor
 
-        Rectangle {
+        TvGradient {
             anchors.fill: parent
             visible: SystemProperties.tvMode
-            gradient: Gradient {
-                GradientStop { position: 0.0; color: TvTheme.backgroundTop }
-                GradientStop { position: 1.0; color: TvTheme.backgroundBottom }
-            }
+            topColor: TvTheme.backgroundTop
+            bottomColor: TvTheme.backgroundBottom
         }
 
         // Pages can show art behind themselves by providing tvBackdropSource
