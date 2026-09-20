@@ -51,6 +51,13 @@ public:
     // performs. Used by the high-rate stats graph sampler.
     PacerTelemetryCounters telemetryCounters() const;
 
+    // Frames buffered ahead of display. VRR keeps its own queue; the legacy
+    // paths split theirs between pacing and rendering, so this is their sum.
+    uint32_t queueDepth();
+
+    // Presented-frame intervals since the last call. Resets on read.
+    PacerFrametimeStats takeFrametimeStats();
+
     // Only the active VRR worker consumes the decoder-facing pacing metadata.
     void submitFrame(PacedFrame&& frame);
 

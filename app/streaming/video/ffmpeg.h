@@ -61,7 +61,7 @@ private:
 
     void syncPacerTelemetry();
 
-    void publishStatsGraphCounters();
+    void publishStatsGraphSample(PDECODE_UNIT du);
 
     void sampleStatsGraphCounters(Overlay::StatsGraphCounters& counters);
 
@@ -141,6 +141,7 @@ private:
     // too coarse and too lagged for a 100 ms graph, so keep a running total
     // of the same bytes to difference per interval instead.
     uint64_t m_StatsGraphVideoBytes;
+    uint64_t m_StatsGraphLastFrameUs;
     std::set<IFFmpegRenderer::RendererType> m_FailedRenderers;
 
     int m_FramesIn;

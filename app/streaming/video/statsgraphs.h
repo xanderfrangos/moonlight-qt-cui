@@ -11,33 +11,79 @@ namespace Overlay {
 
 class OverlayManager;
 
+// Per-frame values seen within one sampling interval. Producers accumulate into
+// this and the sampling thread takes it, so the window it covers lines up
+// exactly with the interval being plotted. Keeping the spread rather than only
+// the mean is the point: an interval average hides the single late frame that
+// is actually felt as a stutter.
+struct StatsGraphAccumulator {
+    uint32_t count = 0;
+    double sum = 0;
+    float min = 0;
+    float max = 0;
+
+    void add(float value)
+    {
+        if (count == 0 || value < min) {
+            min = value;
+        }
+        if (count == 0 || value > max) {
+            max = value;
+        }
+        sum += value;
+        count++;
+    }
+
+    float average() const { return count != 0 ? (float)(sum / count) : 0; }
+};
+
 // Cumulative counters read once per sampling interval. The graphs plot the
 // difference between consecutive reads, so producers only have to keep
 // monotonic totals instead of maintaining a second set of short windows
 // alongside the one-second windows the text overlay uses.
 struct StatsGraphCounters {
-    uint64_t receivedFrames = 0;
-    uint64_t renderedFrames = 0;
     // Video payload as delivered, not including FEC overhead
     uint64_t videoBytes = 0;
     uint64_t networkDroppedFrames = 0;
     uint64_t jitterDroppedFrames = 0;
-    // Tenths of a millisecond, matching VIDEO_STATS
-    uint64_t totalHostProcessingLatency = 0;
-    uint64_t framesWithHostProcessingLatency = 0;
     uint32_t networkLatencyMs = 0;
+    uint32_t networkJitterMs = 0;
     bool networkLatencyValid = false;
+    // A gauge, not a counter: frames buffered ahead of display right now
+    uint32_t queueDepth = 0;
+
+    // Per-frame values, taken and reset on every sample. All in milliseconds.
+    StatsGraphAccumulator incomingFrametime;
+    StatsGraphAccumulator renderingFrametime;
+    StatsGraphAccumulator hostProcessingLatency;
+    StatsGraphAccumulator reassembly;
 };
 
 // One sampling interval's worth of plotted values.
 struct StatsGraphPoint {
-    float receivedFps = 0;
-    float renderedFps = 0;
-    float videoMbps = 0;
+    // Milliseconds per frame. The graphs show the equivalent frame rate
+    // alongside, since variance is far easier to read in frametime than in an
+    // averaged rate. Values measured per frame carry their spread across the
+    // interval as well as the mean; the rest have only one sample per interval
+    // and leave min and max equal to the value.
+    float incomingFrametimeMs = 0;
+    float incomingFrametimeMinMs = 0;
+    float incomingFrametimeMaxMs = 0;
+    float renderingFrametimeMs = 0;
+    float renderingFrametimeMinMs = 0;
+    float renderingFrametimeMaxMs = 0;
     float hostProcessingLatencyMs = 0;
+    float hostProcessingLatencyMinMs = 0;
+    float hostProcessingLatencyMaxMs = 0;
+    float reassemblyMs = 0;
+    float reassemblyMinMs = 0;
+    float reassemblyMaxMs = 0;
+    float videoMbps = 0;
     float networkDroppedFrames = 0;
     float jitterDroppedFrames = 0;
     float networkLatencyMs = 0;
+    float networkJitterMs = 0;
+    float queueDepth = 0;
 };
 
 // Samples stream statistics on a fixed interval and publishes a painted plot of

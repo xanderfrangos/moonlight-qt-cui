@@ -73,6 +73,16 @@ struct PacerTelemetryCounters {
     uint64_t pacerDroppedFrames = 0;
 };
 
+// Intervals between presented frames, accumulated since the last take. The
+// stats graphs plot the spread as well as the mean, because an interval
+// average hides exactly the single late frame that is felt as a stutter.
+struct PacerFrametimeStats {
+    uint32_t count = 0;
+    uint64_t sumUs = 0;
+    uint64_t minUs = 0;
+    uint64_t maxUs = 0;
+};
+
 struct VrrTelemetrySample {
     uint64_t queueResidenceUs = 0;
     uint64_t decodeWaitUs = 0;
@@ -124,6 +134,16 @@ public:
         return { m_Snapshot.renderedFrames, m_Snapshot.pacerDroppedFrames };
     }
 
+    // Taking rather than reading keeps the accumulated window aligned with the
+    // graph sampling interval instead of the whole session.
+    PacerFrametimeStats takeFrametimeStats()
+    {
+        QMutexLocker lock(&m_Lock);
+        const PacerFrametimeStats stats = m_Frametime;
+        m_Frametime = {};
+        return stats;
+    }
+
     void beginVrrSession()
     {
         QMutexLocker lock(&m_Lock);
@@ -139,11 +159,12 @@ public:
     }
 
     void recordLegacyFrame(uint64_t clientProcessingTimeUs,
-                           uint64_t renderingTimeUs)
+                           uint64_t renderingTimeUs,
+                           uint64_t presentUs)
     {
         QMutexLocker lock(&m_Lock);
         recordPresentedTimingLocked(clientProcessingTimeUs,
-                                    renderingTimeUs);
+                                    renderingTimeUs, 0, presentUs);
         touchLocked();
     }
 
@@ -229,7 +250,8 @@ public:
             m_Snapshot.vrrDecodeWaitUs += sample.decodeWaitUs;
             m_Snapshot.vrrBufferUs += sample.bufferUs;
             recordPresentedTimingLocked(sample.clientProcessingTimeUs,
-                                        sample.renderingTimeUs, sample.decodeWaitUs);
+                                        sample.renderingTimeUs, sample.decodeWaitUs,
+                                        sample.submissionUs);
         }
 
         touchLocked();
@@ -272,8 +294,27 @@ private:
 
     void recordPresentedTimingLocked(uint64_t clientProcessingTimeUs,
                                      uint64_t renderingTimeUs,
-                                     uint64_t decodeWaitUs = 0)
+                                     uint64_t decodeWaitUs = 0,
+                                     uint64_t presentUs = 0)
     {
+        // Interval between this presentation and the previous one. A zero
+        // timestamp means the caller has none to offer, which only breaks the
+        // chain rather than inventing an interval.
+        if (presentUs != 0) {
+            if (m_LastPresentUs != 0 && presentUs > m_LastPresentUs) {
+                const uint64_t intervalUs = presentUs - m_LastPresentUs;
+                if (m_Frametime.count == 0 || intervalUs < m_Frametime.minUs) {
+                    m_Frametime.minUs = intervalUs;
+                }
+                if (intervalUs > m_Frametime.maxUs) {
+                    m_Frametime.maxUs = intervalUs;
+                }
+                m_Frametime.sumUs += intervalUs;
+                m_Frametime.count++;
+            }
+            m_LastPresentUs = presentUs;
+        }
+
         // GPU decode synchronization remains in internal client timing, but
         // is neither rendering nor the queue delay shown in the overlay.
         const uint64_t boundedRenderingTimeUs = std::min(
@@ -346,6 +387,8 @@ private:
 
     mutable QMutex m_Lock;
     PacerTelemetrySnapshot m_Snapshot;
+    PacerFrametimeStats m_Frametime;
+    uint64_t m_LastPresentUs = 0;
     uint64_t m_LastMotionSubmissionUs = 0;
     uint64_t m_LastMotionIntervalUs = 0;
     std::array<uint64_t, kPrepareLatenessSampleCount> m_PrepareLatenessSamples {};

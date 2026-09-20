@@ -264,6 +264,7 @@ FFmpegVideoDecoder::FFmpegVideoDecoder(bool testOnly)
       m_Pacer(nullptr),
       m_BwTracker(10, 250),
       m_StatsGraphVideoBytes(0),
+      m_StatsGraphLastFrameUs(0),
       m_FramesIn(0),
       m_FramesOut(0),
       m_LastFrameNumber(0),
@@ -318,6 +319,7 @@ void FFmpegVideoDecoder::reset()
 
     m_FramesIn = m_FramesOut = 0;
     m_StatsGraphVideoBytes = 0;
+    m_StatsGraphLastFrameUs = 0;
     m_FrameInfoQueue.clear();
     m_FrameSubmitTimeQueue.clear();
 
@@ -963,25 +965,39 @@ void FFmpegVideoDecoder::addVideoStats(VIDEO_STATS& src, VIDEO_STATS& dst)
     dst.renderedFps     = (double)dst.renderedFrames / timeDiffSecs;
 }
 
-void FFmpegVideoDecoder::publishStatsGraphCounters()
+void FFmpegVideoDecoder::publishStatsGraphSample(PDECODE_UNIT du)
 {
+    // Per-frame values for the min/max bands, measured here rather than
+    // derived from interval totals so a single late frame stays visible
+    // instead of being averaged away across the interval.
+    const uint64_t arrivalUs = du->enqueueTimeUs;
+    float frametimeMs = 0;
+    if (m_StatsGraphLastFrameUs != 0 && arrivalUs > m_StatsGraphLastFrameUs) {
+        frametimeMs = (float)((arrivalUs - m_StatsGraphLastFrameUs) / 1000.0);
+    }
+    m_StatsGraphLastFrameUs = arrivalUs;
+
+    const float reassemblyMs = arrivalUs >= du->receiveTimeUs ?
+            (float)((arrivalUs - du->receiveTimeUs) / 1000.0) : 0;
+
+    std::lock_guard<std::mutex> lock(m_StatsGraphCountersLock);
+
     // Cumulative totals, since the graphs plot the difference between
     // consecutive samples. The active window is merged into the global one
     // when it rolls over, so their sum is continuous across that boundary.
-    std::lock_guard<std::mutex> lock(m_StatsGraphCountersLock);
-    m_StatsGraphCounters.receivedFrames =
-            (uint64_t)m_GlobalVideoStats.receivedFrames +
-            m_ActiveWndVideoStats.receivedFrames;
-    m_StatsGraphCounters.videoBytes = m_StatsGraphVideoBytes;
     m_StatsGraphCounters.networkDroppedFrames =
             (uint64_t)m_GlobalVideoStats.networkDroppedFrames +
             m_ActiveWndVideoStats.networkDroppedFrames;
-    m_StatsGraphCounters.totalHostProcessingLatency =
-            (uint64_t)m_GlobalVideoStats.totalHostProcessingLatency +
-            m_ActiveWndVideoStats.totalHostProcessingLatency;
-    m_StatsGraphCounters.framesWithHostProcessingLatency =
-            (uint64_t)m_GlobalVideoStats.framesWithHostProcessingLatency +
-            m_ActiveWndVideoStats.framesWithHostProcessingLatency;
+    m_StatsGraphCounters.videoBytes = m_StatsGraphVideoBytes;
+
+    if (frametimeMs > 0) {
+        m_StatsGraphCounters.incomingFrametime.add(frametimeMs);
+    }
+    if (du->frameHostProcessingLatency != 0) {
+        m_StatsGraphCounters.hostProcessingLatency.add(
+                du->frameHostProcessingLatency / 10.0f);
+    }
+    m_StatsGraphCounters.reassembly.add(reassemblyMs);
 }
 
 void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& counters)
@@ -991,20 +1007,35 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
     {
         std::lock_guard<std::mutex> lock(m_StatsGraphCountersLock);
         counters = m_StatsGraphCounters;
+
+        // The per-frame accumulators are taken, not read, so each interval
+        // reports only the frames that arrived within it.
+        m_StatsGraphCounters.incomingFrametime = {};
+        m_StatsGraphCounters.hostProcessingLatency = {};
+        m_StatsGraphCounters.reassembly = {};
     }
 
-    // Rendered and pacer-dropped frames are counted on the render threads, so
-    // they come from Pacer's own cumulative snapshot rather than from the
-    // decoder windows, which only pick them up once a second.
+    // Pacer-side values are produced on the render threads, so they come from
+    // its own telemetry rather than from the decoder windows, which only pick
+    // them up once a second.
     if (m_Pacer != nullptr) {
         const PacerTelemetryCounters pacerCounters = m_Pacer->telemetryCounters();
-        counters.renderedFrames = pacerCounters.renderedFrames;
         counters.jitterDroppedFrames = pacerCounters.pacerDroppedFrames;
+        counters.queueDepth = m_Pacer->queueDepth();
+
+        const PacerFrametimeStats frametime = m_Pacer->takeFrametimeStats();
+        if (frametime.count != 0) {
+            counters.renderingFrametime.count = frametime.count;
+            counters.renderingFrametime.sum = frametime.sumUs / 1000.0;
+            counters.renderingFrametime.min = (float)(frametime.minUs / 1000.0);
+            counters.renderingFrametime.max = (float)(frametime.maxUs / 1000.0);
+        }
     }
 
     uint32_t rtt, rttVariance;
     counters.networkLatencyValid = LiGetEstimatedRttInfo(&rtt, &rttVariance);
     counters.networkLatencyMs = counters.networkLatencyValid ? rtt : 0;
+    counters.networkJitterMs = counters.networkLatencyValid ? rttVariance : 0;
 }
 
 void FFmpegVideoDecoder::syncPacerTelemetry()
@@ -2541,8 +2572,6 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
     m_ActiveWndVideoStats.receivedFrames++;
     m_ActiveWndVideoStats.totalFrames++;
 
-    publishStatsGraphCounters();
-
     int requiredBufferSize = du->fullLength;
     if (du->frameType == FRAME_TYPE_IDR) {
         // Add some extra space in case we need to do an SPS fixup
@@ -2569,6 +2598,8 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
     }
 
     m_ActiveWndVideoStats.totalReassemblyTimeUs += (du->enqueueTimeUs - du->receiveTimeUs);
+
+    publishStatsGraphSample(du);
 
     const uint64_t decodeSubmitUs = LiGetMicroseconds();
     err = avcodec_send_packet(m_VideoDecoderCtx, m_Pkt);

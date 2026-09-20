@@ -125,21 +125,42 @@ void StatsGraphs::appendSample(const StatsGraphCounters& counters, double interv
     }
 
     StatsGraphPoint point;
+    const float intervalMs = (float)(intervalSecs * 1000.0);
 
-    // Latencies are averages over the interval rather than counters. An
-    // interval with no frames in it carries no new measurement, so hold the
-    // previous value instead of plotting a zero that would read as an
-    // improvement.
-    if (!m_Points.empty()) {
-        point.hostProcessingLatencyMs = m_Points.back().hostProcessingLatencyMs;
-        point.networkLatencyMs = m_Points.back().networkLatencyMs;
-    }
+    // An interval with no frames in it carries no new measurement. For
+    // frametime the interval itself is a lower bound on the real value, which
+    // reads as a spike; for the latencies there is no bound to infer, so the
+    // previous value is held rather than plotting a zero that would look like
+    // an improvement.
+    auto applyPerFrame = [&](const StatsGraphAccumulator& accumulator,
+                             float previousAverage, float fallback,
+                             float& average, float& minimum, float& maximum) {
+        if (accumulator.count != 0) {
+            average = accumulator.average();
+            minimum = accumulator.min;
+            maximum = accumulator.max;
+        }
+        else {
+            average = fallback > 0 ? fallback : previousAverage;
+            minimum = maximum = average;
+        }
+    };
+
+    const StatsGraphPoint previous = m_Points.empty() ? StatsGraphPoint() : m_Points.back();
+
+    applyPerFrame(counters.incomingFrametime, previous.incomingFrametimeMs, intervalMs,
+                  point.incomingFrametimeMs, point.incomingFrametimeMinMs,
+                  point.incomingFrametimeMaxMs);
+    applyPerFrame(counters.renderingFrametime, previous.renderingFrametimeMs, intervalMs,
+                  point.renderingFrametimeMs, point.renderingFrametimeMinMs,
+                  point.renderingFrametimeMaxMs);
+    applyPerFrame(counters.hostProcessingLatency, previous.hostProcessingLatencyMs, 0,
+                  point.hostProcessingLatencyMs, point.hostProcessingLatencyMinMs,
+                  point.hostProcessingLatencyMaxMs);
+    applyPerFrame(counters.reassembly, previous.reassemblyMs, 0,
+                  point.reassemblyMs, point.reassemblyMinMs, point.reassemblyMaxMs);
 
     if (intervalSecs > 0) {
-        point.receivedFps = (float)(delta(counters.receivedFrames,
-                                          m_LastCounters.receivedFrames) / intervalSecs);
-        point.renderedFps = (float)(delta(counters.renderedFrames,
-                                          m_LastCounters.renderedFrames) / intervalSecs);
         point.videoMbps = (float)(delta(counters.videoBytes, m_LastCounters.videoBytes) *
                                   8.0 / 1000000.0 / intervalSecs);
     }
@@ -148,18 +169,16 @@ void StatsGraphs::appendSample(const StatsGraphCounters& counters, double interv
     point.jitterDroppedFrames = (float)delta(counters.jitterDroppedFrames,
                                              m_LastCounters.jitterDroppedFrames);
 
-    const uint64_t latencyFrames = delta(counters.framesWithHostProcessingLatency,
-                                         m_LastCounters.framesWithHostProcessingLatency);
-    if (latencyFrames > 0) {
-        point.hostProcessingLatencyMs =
-                (float)(delta(counters.totalHostProcessingLatency,
-                              m_LastCounters.totalHostProcessingLatency) /
-                        (latencyFrames * 10.0));
-    }
-
     if (counters.networkLatencyValid) {
         point.networkLatencyMs = (float)counters.networkLatencyMs;
+        point.networkJitterMs = (float)counters.networkJitterMs;
     }
+    else {
+        point.networkLatencyMs = previous.networkLatencyMs;
+        point.networkJitterMs = previous.networkJitterMs;
+    }
+
+    point.queueDepth = (float)counters.queueDepth;
 
     m_LastCounters = counters;
 
