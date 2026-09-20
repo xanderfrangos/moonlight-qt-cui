@@ -678,42 +678,14 @@ void VAAPIRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         return;
     }
 
-    // Destroy the old image and subpicture
-    // NB: The mutex ensures the overlay is not currently being read for rendering.
-    // NB 2: It is safe to unlock here because this thread is the only surface producer.
-    SDL_LockMutex(m_OverlayMutex);
-    VAImageID oldImageId = m_OverlayImage[type].image_id;
-    SDL_zero(m_OverlayImage[type]);
+    VAImage newImage = {};
+    VASubpictureID newSubpicture = 0;
+    SDL_Rect overlayRect = {};
 
-    VASubpictureID oldSubpictureId = m_OverlaySubpicture[type];
-    m_OverlaySubpicture[type] = 0;
-    SDL_UnlockMutex(m_OverlayMutex);
-
-    if (oldSubpictureId != 0) {
-        status = vaDestroySubpicture(vaDeviceContext->display, oldSubpictureId);
-        if (status != VA_STATUS_SUCCESS) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "vaDestroySubpicture() failed: %d",
-                         status);
-        }
-    }
-    if (oldImageId != 0) {
-        status = vaDestroyImage(vaDeviceContext->display, oldImageId);
-        if (status != VA_STATUS_SUCCESS) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "vaDestroyImage() failed: %d",
-                         status);
-        }
-    }
-
-    if (!overlayEnabled) {
-        SDL_FreeSurface(newSurface);
-        return;
-    }
-
-    if (newSurface != nullptr) {
-        VAImage newImage;
-
+    // Build the replacement before touching the live overlay. That way the render
+    // thread never finds this overlay missing between two frames, and a failure
+    // below leaves the previous overlay up rather than blanking it.
+    if (overlayEnabled && newSurface != nullptr) {
         SDL_assert(!SDL_MUSTLOCK(newSurface));
 
         status = vaCreateImage(vaDeviceContext->display, &m_OverlayFormat, newSurface->w, newSurface->h, &newImage);
@@ -752,30 +724,52 @@ void VAAPIRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         }
 
         // The position is resolved at render time, once the window size is known
-        SDL_Rect overlayRect;
         overlayRect.x = 0;
         overlayRect.y = 0;
         overlayRect.w = newSurface->w;
         overlayRect.h = newSurface->h;
 
-        // Surface data is no longer needed
-        SDL_FreeSurface(newSurface);
-
-        VASubpictureID newSubpicture;
         status = vaCreateSubpicture(vaDeviceContext->display, newImage.image_id, &newSubpicture);
         if (status != VA_STATUS_SUCCESS) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "vaCreateSubpicture() failed: %d",
                          status);
             vaDestroyImage(vaDeviceContext->display, newImage.image_id);
+            SDL_FreeSurface(newSurface);
             return;
         }
+    }
 
-        SDL_LockMutex(m_OverlayMutex);
-        m_OverlayImage[type] = newImage;
-        m_OverlaySubpicture[type] = newSubpicture;
-        m_OverlayRect[type] = overlayRect;
-        SDL_UnlockMutex(m_OverlayMutex);
+    // Surface data is no longer needed
+    SDL_FreeSurface(newSurface);
+
+    // Swap in the new image and subpicture, or none if the overlay is now disabled.
+    // NB: The mutex ensures the old overlay is not currently being read for rendering.
+    SDL_LockMutex(m_OverlayMutex);
+    VAImageID oldImageId = m_OverlayImage[type].image_id;
+    VASubpictureID oldSubpictureId = m_OverlaySubpicture[type];
+    m_OverlayImage[type] = newImage;
+    m_OverlaySubpicture[type] = newSubpicture;
+    m_OverlayRect[type] = overlayRect;
+    SDL_UnlockMutex(m_OverlayMutex);
+
+    // NB: It is safe to destroy outside the mutex because this thread is the only
+    // surface producer, so nothing can hand the old overlay back to the renderer.
+    if (oldSubpictureId != 0) {
+        status = vaDestroySubpicture(vaDeviceContext->display, oldSubpictureId);
+        if (status != VA_STATUS_SUCCESS) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "vaDestroySubpicture() failed: %d",
+                         status);
+        }
+    }
+    if (oldImageId != 0) {
+        status = vaDestroyImage(vaDeviceContext->display, oldImageId);
+        if (status != VA_STATUS_SUCCESS) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "vaDestroyImage() failed: %d",
+                         status);
+        }
     }
 }
 
