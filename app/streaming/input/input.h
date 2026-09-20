@@ -35,6 +35,11 @@ struct GamepadState {
     // Last stick direction reported to the gamepad menu, for edge detection
     int menuNavDir;
 
+    // Buttons that were held when the gamepad menu closed. They stay hidden
+    // from the host until they're physically released, so the presses that
+    // worked the menu don't leak into the game underneath it.
+    int suppressedButtons;
+
     int buttons;
     short lsX, lsY;
     short rsX, rsY;
@@ -136,6 +141,8 @@ public:
     int getAttachedGamepadMask();
 
     void sendAllGamepadStates();
+
+    void notifyGamepadMenuClosed();
 
     void sendGuideButtonPress(short gamepadIndex);
 

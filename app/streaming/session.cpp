@@ -1848,10 +1848,10 @@ void Session::closeGamepadMenu()
     m_GamepadMenuOpen = false;
     refreshStatusOverlay();
 
-    // Gamepad input was swallowed while the menu was up, so resynchronize the
-    // host with whatever is actually held down now.
+    // Hide the buttons that worked the menu from the host and resynchronize it
+    // with whatever else is actually held down now.
     if (m_InputHandler != nullptr) {
-        m_InputHandler->sendAllGamepadStates();
+        m_InputHandler->notifyGamepadMenuClosed();
     }
 }
 
@@ -1872,9 +1872,9 @@ void Session::activateGamepadMenuSelection()
 
     switch (selection) {
     case GamepadMenuPressGuide:
-        // closeGamepadMenu() has already resynced whatever is physically held
-        // down, which is at least the A button that got us here. The press is
-        // sent on its own so the host doesn't read it as a chord.
+        // closeGamepadMenu() has already resynced the host, with the A button
+        // that got us here suppressed. The Guide press is sent on its own so
+        // the host doesn't read it as a chord.
         if (m_InputHandler != nullptr) {
             m_InputHandler->sendGuideButtonPress(m_GamepadMenuGamepadIndex);
         }
