@@ -16,7 +16,10 @@ class OverlayManager;
 // monotonic totals instead of maintaining a second set of short windows
 // alongside the one-second windows the text overlay uses.
 struct StatsGraphCounters {
+    uint64_t receivedFrames = 0;
     uint64_t renderedFrames = 0;
+    // Video payload as delivered, not including FEC overhead
+    uint64_t videoBytes = 0;
     uint64_t networkDroppedFrames = 0;
     uint64_t jitterDroppedFrames = 0;
     // Tenths of a millisecond, matching VIDEO_STATS
@@ -28,7 +31,9 @@ struct StatsGraphCounters {
 
 // One sampling interval's worth of plotted values.
 struct StatsGraphPoint {
+    float receivedFps = 0;
     float renderedFps = 0;
+    float videoMbps = 0;
     float hostProcessingLatencyMs = 0;
     float networkDroppedFrames = 0;
     float jitterDroppedFrames = 0;

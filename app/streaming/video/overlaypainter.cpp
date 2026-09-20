@@ -315,6 +315,8 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
                                        int windowSeconds)
 {
     static const GraphSpec k_Graphs[] = {
+        { "Incoming frame rate", &StatsGraphPoint::receivedFps,
+          QColor(0x26, 0xA6, 0x9A), " FPS", 0, 30 },
         { "Rendering frame rate", &StatsGraphPoint::renderedFps,
           QColor(0x4C, 0xAF, 0x50), " FPS", 0, 30 },
         { "Host processing latency", &StatsGraphPoint::hostProcessingLatencyMs,
@@ -325,6 +327,8 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
           QColor(0xFF, 0xA7, 0x26), "", 0, 4 },
         { "Network latency", &StatsGraphPoint::networkLatencyMs,
           QColor(0xAB, 0x47, 0xBC), " ms", 0, 20 },
+        { "Bandwidth", &StatsGraphPoint::videoMbps,
+          QColor(0xEC, 0x40, 0x7A), " Mbps", 1, 5 },
     };
     const int graphCount = (int)SDL_arraysize(k_Graphs);
 
@@ -333,8 +337,8 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
     const qreal cardWidth = 360;
     const qreal labelHeight = 18;
     const qreal labelGap = 3;
-    const qreal plotHeight = 52;
-    const qreal graphGap = 12;
+    const qreal plotHeight = 46;
+    const qreal graphGap = 10;
     const qreal shadowSpread = 14;
 
     QFont headerFont = menuFont(13, QFont::DemiBold);

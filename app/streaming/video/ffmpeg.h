@@ -137,6 +137,10 @@ private:
     Overlay::StatsGraphs m_StatsGraphs;
     std::mutex m_StatsGraphCountersLock;
     Overlay::StatsGraphCounters m_StatsGraphCounters;
+    // BandwidthTracker smooths over 2.5 seconds of 250 ms buckets, which is
+    // too coarse and too lagged for a 100 ms graph, so keep a running total
+    // of the same bytes to difference per interval instead.
+    uint64_t m_StatsGraphVideoBytes;
     std::set<IFFmpegRenderer::RendererType> m_FailedRenderers;
 
     int m_FramesIn;

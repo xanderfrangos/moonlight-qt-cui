@@ -129,8 +129,12 @@ void StatsGraphs::appendSample(const StatsGraphCounters& counters, double interv
     }
 
     if (intervalSecs > 0) {
+        point.receivedFps = (float)(delta(counters.receivedFrames,
+                                          m_LastCounters.receivedFrames) / intervalSecs);
         point.renderedFps = (float)(delta(counters.renderedFrames,
                                           m_LastCounters.renderedFrames) / intervalSecs);
+        point.videoMbps = (float)(delta(counters.videoBytes, m_LastCounters.videoBytes) *
+                                  8.0 / 1000000.0 / intervalSecs);
     }
     point.networkDroppedFrames = (float)delta(counters.networkDroppedFrames,
                                               m_LastCounters.networkDroppedFrames);

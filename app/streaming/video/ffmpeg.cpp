@@ -263,6 +263,7 @@ FFmpegVideoDecoder::FFmpegVideoDecoder(bool testOnly)
       m_ConsecutiveFailedDecodes(0),
       m_Pacer(nullptr),
       m_BwTracker(10, 250),
+      m_StatsGraphVideoBytes(0),
       m_FramesIn(0),
       m_FramesOut(0),
       m_LastFrameNumber(0),
@@ -316,6 +317,7 @@ void FFmpegVideoDecoder::reset()
     }
 
     m_FramesIn = m_FramesOut = 0;
+    m_StatsGraphVideoBytes = 0;
     m_FrameInfoQueue.clear();
     m_FrameSubmitTimeQueue.clear();
 
@@ -967,6 +969,10 @@ void FFmpegVideoDecoder::publishStatsGraphCounters()
     // consecutive samples. The active window is merged into the global one
     // when it rolls over, so their sum is continuous across that boundary.
     std::lock_guard<std::mutex> lock(m_StatsGraphCountersLock);
+    m_StatsGraphCounters.receivedFrames =
+            (uint64_t)m_GlobalVideoStats.receivedFrames +
+            m_ActiveWndVideoStats.receivedFrames;
+    m_StatsGraphCounters.videoBytes = m_StatsGraphVideoBytes;
     m_StatsGraphCounters.networkDroppedFrames =
             (uint64_t)m_GlobalVideoStats.networkDroppedFrames +
             m_ActiveWndVideoStats.networkDroppedFrames;
@@ -2484,6 +2490,7 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
     }
 
     m_BwTracker.AddBytes(du->fullLength);
+    m_StatsGraphVideoBytes += du->fullLength;
 
     // Flip stats windows roughly every second
     if (LiGetMicroseconds() > m_ActiveWndVideoStats.measurementStartUs + 1000000) {
