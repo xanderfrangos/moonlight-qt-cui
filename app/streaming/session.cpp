@@ -1,4 +1,4 @@
-#include "input/dualsensehaptics.h"
+#include "streaming/input/dualsensehaptics.h"
 #include <QNetworkInterface>
 #include <QSysInfo>
 #include <QDir>
@@ -197,13 +197,12 @@ void Session::clConnectionStatusUpdate(int connectionStatus)
     switch (connectionStatus)
     {
     case CONN_STATUS_POOR:
-        s_ActiveSession->m_OverlayManager.updateOverlayText(Overlay::OverlayStatusUpdate,
+        s_ActiveSession->m_OverlayManager.setStatusMessage(Overlay::StatusSource::Network,
                                                             s_ActiveSession->m_StreamConfig.bitrate > 5000 ?
                                                                 "Slow connection to PC\nReduce your bitrate" : "Poor connection to PC");
-        s_ActiveSession->m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
         break;
     case CONN_STATUS_OKAY:
-        s_ActiveSession->m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, false);
+        s_ActiveSession->m_OverlayManager.setStatusMessage(Overlay::StatusSource::Network, "");
         break;
     }
 }
@@ -280,7 +279,6 @@ void Session::clSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlag
     setControllerLEDEvent.user.data2 = (void *) state;
     if (SDL_PushEvent(&setControllerLEDEvent) <= 0) SDL_free(state);
 }
-
 
 bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             StreamingPreferences::RendererSelection renderer,
@@ -1100,6 +1098,16 @@ bool Session::initialize(QQuickWindow* qtWindow)
     }
 #endif
 
+    // Snapshot an alternative codec before force-AV1 validation removes it.
+    // Match HDR/chroma and require hardware decoding at this stream size.
+    m_HevcPacingAlternative = (m_SupportedVideoFormats & VIDEO_FORMAT_MASK_AV1) &&
+        m_Computer->maxLumaPixelsHEVC != 0 &&
+        getDecoderAvailability(testWindow, m_Preferences->videoDecoderSelection,
+            m_Preferences->enableYUV444 ?
+                (m_Preferences->enableHdr ? VIDEO_FORMAT_H265_REXT10_444 : VIDEO_FORMAT_H265_REXT8_444) :
+                (m_Preferences->enableHdr ? VIDEO_FORMAT_H265_MAIN10 : VIDEO_FORMAT_H265),
+            m_StreamConfig.width, m_StreamConfig.height, m_StreamConfig.fps) == DecoderAvailability::Hardware;
+
     // Check for validation errors/warnings and emit
     // signals for them, if appropriate
     bool ret = validateLaunch(testWindow);
@@ -1811,15 +1819,11 @@ void Session::refreshStatusOverlay()
     m_OverlayManager.setOverlaySurface(Overlay::OverlayStatusUpdate, nullptr);
 
     if (m_MouseEmulationRefCount > 0) {
-        m_OverlayManager.setOverlayStyle(Overlay::OverlayStatusUpdate, Overlay::OverlayAnchorBottomLeft,
-                                         k_StatusColor, k_NoBackground);
-        m_OverlayManager.updateOverlayText(Overlay::OverlayStatusUpdate, "Gamepad mouse mode active\nLong press Start to deactivate");
-        m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
+        m_OverlayManager.setStatusMessage(Overlay::StatusSource::Mouse,
+                                         "Gamepad mouse mode active\nLong press Start to deactivate");
     }
     else {
-        m_OverlayManager.setOverlayStyle(Overlay::OverlayStatusUpdate, Overlay::OverlayAnchorBottomLeft,
-                                         k_StatusColor, k_NoBackground);
-        m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, false);
+        m_OverlayManager.setStatusMessage(Overlay::StatusSource::Mouse, "");
     }
 }
 
@@ -1960,6 +1964,7 @@ bool Session::startConnectionAsync()
                       enableGameOptimizations,
                       m_Preferences->playAudioOnHost,
                       m_InputHandler->getAttachedGamepadMask(),
+                      m_InputHandler->getAttachedPlayStationGamepadMask(),
                       !m_Preferences->multiController,
                       rtspSessionUrl);
     } catch (const GfeHttpResponseException& e) {
@@ -2329,6 +2334,8 @@ void Session::exec()
 
     // Switch to async logging mode when we enter the SDL loop
     StreamUtils::enterAsyncLoggingMode();
+
+    m_InputHandler->initializeControllers();
 
     // Hijack this thread to be the SDL main thread. We have to do this
     // because we want to suspend all Qt processing until the stream is over.

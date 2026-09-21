@@ -18,6 +18,7 @@ public:
     struct Sample {
         uint64_t frame = 0, intended = 0, submitted = 0, deadline = 0, ready = 0, buffer = 0;
         bool valid = false, absorbable = false;
+        uint64_t serialService = 0, decoderQueue = 0;
     };
     // Observation only. This explains the request made after an outcome;
     // the controller applies that request to subsequent frames. In particular,
@@ -59,6 +60,7 @@ public:
         uint64_t toleranceUs = ToleranceUs;
         bool severityWeighted = false;
         bool averageValid = false;
+        bool serviceOverloaded = false; // Qualified one-second workload, diagnostic only.
         bool initialCalibrationComplete = false;
         uint64_t calibrationCoverageUs = 0, calibrationSamples = 0;
         Update update;
@@ -77,7 +79,9 @@ public:
                  uint64_t toleranceUs = 500,
                  uint64_t scoreWindowUs = 30000000,
                  uint64_t initialWarmupUs = 1000000,
-                 size_t initialMinimumSamples = 2) {
+                 size_t initialMinimumSamples = 2,
+                 bool recentPressureRelease = false,
+                 uint64_t serialServiceGate = 0) {
         m_Stats.toleranceUs = toleranceUs;
         m_Stats.severityWeighted = severityWeighted;
         minimum = std::min(minimum, maximum);
@@ -116,6 +120,9 @@ public:
         if (bucket.tick != tick) bucket = Bucket{tick};
         ++bucket.samples;
         bucket.total += error;
+        bucket.service += s.serialService;
+        bucket.decoderQueue += s.decoderQueue;
+        bucket.intended += intended;
         if (!m_First) {
             m_First = s.submitted;
             // Only a fresh session may use the shorter calibration window.
@@ -125,10 +132,11 @@ public:
             m_SequenceMinimumSamples = m_Stats.initialCalibrationComplete ? 2 : initialMinimumSamples;
         }
         ++m_SequenceSamples;
-        uint64_t samples = 0, total = 0;
+        uint64_t samples = 0, total = 0, service = 0, decoderQueue = 0, intendedTime = 0;
         for (const auto& b : m_Window) {
             if (tick >= b.tick && tick - b.tick < m_Window.size()) {
                 samples += b.samples; total += b.total;
+                service += b.service; decoderQueue += b.decoderQueue; intendedTime += b.intended;
             }
         }
         m_Stats.averageErrorUs = samples ? double(total) / samples : 0;
@@ -138,6 +146,7 @@ public:
             m_Stats.calibrationCoverageUs >= m_SequenceWarmupUs;
         if (!m_Stats.averageValid) return;
         m_Stats.initialCalibrationComplete = true;
+        m_Stats.serviceOverloaded = service > intendedTime || decoderQueue > intendedTime;
         const bool pressure = total > samples * toleranceUs;
         // Weight the score by evaluated time, not frame rate. Attribute the
         // preceding interval to its evaluated one-second mean; gaps are unknown.
@@ -158,7 +167,10 @@ public:
         const bool currentPressure = severityWeighted ? loss > allowedLoss : pressure;
         // Old score debt holds protection, but cannot authorize another attack
         // without current, attributable error outside the preset's allowance.
-        const bool holdProtection = currentPressure || (severityWeighted && belowTarget);
+        const bool historicalPressure = severityWeighted && belowTarget;
+        const bool historyHolds = !recentPressureRelease && historicalPressure;
+        const bool holdProtection = currentPressure ||
+            historyHolds;
         if (holdProtection) {
             m_LastPressure = s.submitted;
             if (severityWeighted) m_ReleaseFraction = 0;
@@ -175,10 +187,22 @@ public:
         update.cooldownRemainingUs = m_LastAttack ?
             remaining(s.submitted - m_LastAttack, 250000) : 0;
         update.action = currentPressure ? Action::CurrentPressure :
-            holdProtection ? Action::HistoryHold : Action::RecoveryHold;
+            historyHolds ? Action::HistoryHold : Action::RecoveryHold;
         const bool freshError = severityWeighted ? error > toleranceUs : error != 0;
         const bool grow = currentPressure && (!severityWeighted || belowTarget);
-        if (grow && freshError && delayed.absorbable && lateness &&
+        // Revision 1 mistook every slow frame for sustained overload. A
+        // jitter buffer can cover a transient dependency stall when subsequent
+        // frames recover. Judge capacity over the same qualified one-second
+        // window as interval pressure, not the single late/catch-up pair.
+        // Sequence breaks discard this evidence, preventing stale headroom
+        // from authorizing growth across missing frames or source epochs.
+        const bool windowAbsorbable = service <= intendedTime && decoderQueue <= intendedTime;
+        const bool delayedAbsorbable = delayed.absorbable &&
+            (!serialServiceGate ||
+             (serialServiceGate >= 2 ? windowAbsorbable :
+              (delayed.serialService <= intended &&
+               delayed.decoderQueue <= intended)));
+        if (grow && freshError && delayedAbsorbable && lateness &&
                 (!m_LastAttack || s.submitted - m_LastAttack >= 250000)) {
             const auto excess = severityWeighted ?
                 uint64_t(std::ceil(std::min(250.0, std::max(0.0, excessUs - allowedLoss * intended)))) :
@@ -212,10 +236,16 @@ public:
             update.action = m_Target == minimum ? Action::Minimum : Action::Release;
         }
         else if (grow) {
-            update.action = !delayed.absorbable ? Action::NotAbsorbable :
+            update.action = !delayedAbsorbable ? Action::NotAbsorbable :
                 !freshError || !lateness ? Action::NoFreshMiss : Action::Cooldown;
         }
-        else if (!holdProtection && !s.absorbable) update.action = Action::NotAbsorbable;
+        else if (!holdProtection &&
+                 !(s.absorbable &&
+                   (!serialServiceGate || (serialServiceGate >= 2 ? windowAbsorbable :
+                    (s.serialService <= intended &&
+                     s.decoderQueue <= intended))))) {
+            update.action = Action::NotAbsorbable;
+        }
         if (beforeUs != boundedUs) update.action = Action::LimitChange;
         update.requestedUs = m_Target;
     }
@@ -230,7 +260,10 @@ public:
     }
     void reset() { *this = IntervalBuffer{}; }
 private:
-    struct Bucket { uint64_t tick = 0, samples = 0, total = 0; };
+    struct Bucket {
+        uint64_t tick = 0, samples = 0, total = 0;
+        uint64_t service = 0, decoderQueue = 0, intended = 0;
+    };
     struct ScoreBucket {
         uint64_t tick = 0, evaluated = 0, failed = 0;
         double weightedLoss = 0;

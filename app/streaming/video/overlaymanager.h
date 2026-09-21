@@ -33,6 +33,7 @@ enum OverlayAnchor {
     // uploaded as a tiny texture instead of a screen-sized one.
     OverlayAnchorFill,
 };
+enum class StatusSource { Network, ClientPacing, Mouse, Count };
 
 class IOverlayRenderer
 {
@@ -75,6 +76,7 @@ public:
     void updateOverlayText(OverlayType type, const char* text);
     int getOverlayMaxTextLength();
     void setOverlayState(OverlayType type, bool enabled);
+    void setStatusMessage(StatusSource source, const std::string& text);
     SDL_Color getOverlayColor(OverlayType type);
     int getOverlayFontSize(OverlayType type);
     SDL_Surface* getUpdatedOverlaySurface(OverlayType type);
@@ -139,6 +141,7 @@ private:
     IOverlayRenderer* m_Renderer;
     QByteArray m_FontData;
     std::mutex m_StateLock;
+    std::string m_StatusMessages[static_cast<int>(StatusSource::Count)];
     std::condition_variable m_WorkReady;
     // Only renderer attachment and callbacks take this lock. Producers never
     // wait for rasterization, texture upload or renderer destruction.

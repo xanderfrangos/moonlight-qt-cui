@@ -72,7 +72,8 @@ private:
     bool prepareFrameForPresent(AVFrame* frame,
                                 uint64_t decodeBoundary = 0);
     bool initializeVrrPresentReadyFence();
-    bool waitForVrrPresentReady(uint64_t decodeBoundary);
+    bool beginVrrPresentReady();
+    bool finishVrrPresentReady(bool releaseContextWhileWaiting);
     HRESULT presentPreparedFrame(const DxgiPresentParameters& parameters);
     UINT legacyPresentFlags() const;
     void initializeVrrPresentationState(SDL_Window* window,
@@ -84,6 +85,7 @@ private:
     void populateVrrGpuReadyFeedback(VrrPresentFeedback& feedback) const;
     VrrFallbackReason evaluateVrrEligibility(
         bool prioritizeOutputCompatibility);
+    bool retirePreparedVrrFrameForMutation();
     void releasePreparedVrrFrame();
     void queueRenderDeviceReset();
     void renderOverlay(Overlay::OverlayType type);
@@ -92,7 +94,7 @@ private:
     int queryDisplayBitsPerComponent();
     void refreshDitherState();
     void bindVideoVertexBuffer(bool frameChanged, AVFrame* frame);
-    void renderVideo(AVFrame* frame, uint64_t decodeBoundary = 0);
+    bool renderVideo(AVFrame* frame, uint64_t decodeBoundary = 0);
     bool checkDecoderSupport(IDXGIAdapter* adapter);
     bool createDeviceByAdapterIndex(int adapterIndex, bool* adapterNotFound = nullptr);
     bool setupSharedDevice(IDXGIAdapter1* adapter);
@@ -199,6 +201,7 @@ private:
     bool m_VrrSuspended;
     VrrFallbackReason m_VrrFallbackReason;
     bool m_VrrFramePrepared;
+    uint64_t m_VrrPreparedDecodeBoundary;
     bool m_VrrContextLocked;
     Microsoft::WRL::ComPtr<ID3D11Fence> m_VrrPresentReadyFence;
     UINT64 m_VrrPresentReadyFenceValue;

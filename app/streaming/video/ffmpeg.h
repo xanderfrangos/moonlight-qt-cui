@@ -8,6 +8,7 @@
 #include "../bandwidth.h"
 #include "decoder.h"
 #include "incomingframetiming.h"
+#include "clientpacingwarning.h"
 #include "ffmpeg-renderers/renderer.h"
 #include "ffmpeg-renderers/pacer/pacer.h"
 #include "statsgraphs.h"
@@ -129,7 +130,6 @@ private:
     VIDEO_STATS m_LastWndVideoStats;
     VIDEO_STATS m_GlobalVideoStats;
     PacerTelemetrySnapshot m_LastPacerTelemetry;
-
     // The stats graphs sample ten times a second, which is far more often than
     // the one-second windows above roll over. The decoder-owned totals are
     // republished here on every decode unit so the sampling thread can read
@@ -145,6 +145,8 @@ private:
     // Fixed once the connection has negotiated it, so it's worked out when
     // sampling starts rather than on every sample.
     uint32_t m_StatsGraphPacketWireBytes;
+    ClientPacingWarning m_ClientPacingWarning;
+    int m_VrrLatencyMode = 0;
     std::set<IFFmpegRenderer::RendererType> m_FailedRenderers;
 
     int m_FramesIn;

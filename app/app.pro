@@ -193,6 +193,7 @@ SOURCES += \
     settings/controlleridentity.cpp \
     settings/streamingpreferences.cpp \
     diagnostics/diagnosticcapture.cpp \
+    diagnostics/gputrace.cpp \
     diagnostics/diagnosticzip.cpp \
     streaming/input/abstouch.cpp \
     streaming/input/gamepad.cpp \
@@ -227,7 +228,6 @@ SOURCES += \
     wm.cpp
 
 HEADERS += \
-    streaming/input/dualsensehaptics.h \
     streaming/input/dualsensehid.h \
     streaming/input/dualsensetriggers.h \
     ../third-party/saxense/packet.h \
@@ -254,7 +254,9 @@ HEADERS += \
     cli/startstream.h \
     settings/streamingpreferences.h \
     diagnostics/diagnosticcapture.h \
+    diagnostics/gputrace.h \
     diagnostics/diagnosticzip.h \
+    streaming/input/dualsensehaptics.h \
     streaming/input/input.h \
     streaming/session.h \
     streaming/video/amddecodepolicy.h \
@@ -279,6 +281,7 @@ HEADERS += \
     streaming/video/overlaypainter.h \
     streaming/video/statsgraphs.h \
     streaming/video/videopacketsize.h \
+    streaming/video/clientpacingwarning.h \
     backend/systemproperties.h \
     windowsvblankvirtualization.h
 
@@ -317,6 +320,7 @@ ffmpeg {
         streaming/video/ffmpeg-renderers/pacer/vrr/smoothnessfeedback.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtimingcontroller.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrframedroppolicy.h \
+        streaming/video/ffmpeg-renderers/pacer/vrr/vrrcatchup.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtargetwaiter.h
 }
 libva {

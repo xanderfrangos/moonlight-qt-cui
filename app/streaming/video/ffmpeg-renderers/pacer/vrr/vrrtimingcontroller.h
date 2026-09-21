@@ -9,6 +9,7 @@
 #include "intervalbuffer.h"
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -36,6 +37,14 @@
     X(uint64_t, playout_gpu_readiness_maximum_us, playoutGpuReadinessMaximumUs, 12000) \
     X(uint64_t, playout_prediction_only, playoutPredictionOnly, 0) \
     X(uint64_t, playout_responsive_buffer, playoutResponsiveBuffer, 0) \
+    /* Production source mapping is anchored before worker/backend waits. */ \
+    X(uint64_t, playout_source_mapping_decoder_output, playoutSourceMappingDecoderOutput, 0) \
+    /* Gate buffer growth on the complete serial service path. */ \
+    X(uint64_t, playout_serial_service_gate, playoutSerialServiceGate, 0) \
+    /* Long quality history remains diagnostic while recent pressure owns release. */ \
+    X(uint64_t, playout_recent_pressure_release, playoutRecentPressureRelease, 0) \
+    /* Zero preserves historical burst recovery. Production starts at 2 percent. */ \
+    X(uint64_t, playout_catchup_per_mille, playoutCatchupPerMille, 0) \
     /* Historical captures retain the one-second/two-interval warmup. */ \
     X(uint64_t, playout_interval_initial_warmup_us, playoutIntervalInitialWarmupUs, 1000000) \
     X(size_t, playout_interval_initial_minimum_samples, playoutIntervalInitialMinimumSamples, 2) \
@@ -97,6 +106,9 @@
     X(uint64_t, playout_smoothing_period_alpha_per_mille, playoutSmoothingPeriodAlphaPerMille, 50) \
     X(uint64_t, playout_smoothing_max_lag_us, playoutSmoothingMaxLagUs, 8000) \
     X(uint64_t, playout_smoothing_snap_per_mille, playoutSmoothingSnapPerMille, 1000) \
+    /* 0: historical pair gate; 1: window; 2: window and compensated bursts. */ \
+    X(uint64_t, playout_smoothing_windowed_cadence, playoutSmoothingWindowedCadence, 0) \
+    X(uint64_t, playout_smoothing_recovery_us, playoutSmoothingRecoveryUs, 200000) \
     X(uint64_t, playout_metronome_enabled, playoutMetronomeEnabled, 0) \
     X(uint64_t, playout_delay_start_period_per_mille, playoutDelayStartPeriodPerMille, 0) \
     X(uint64_t, playout_delay_maximum_period_per_mille, playoutDelayMaximumPeriodPerMille, 0) \
@@ -300,6 +312,14 @@ public:
     // starts. Failed/unknown waits are deliberately not learned.
     void noteGpuReadyWait(uint64_t waitUs, bool completed,
                           uint64_t completionUs = 0);
+    // A backend may verify render completion only at the final native-present
+    // boundary after useful overlap with the cadence hold. Feed its residual
+    // CPU wait to future lead learning and its conservative service bound to
+    // the growth gate. The observation time is not the frame's readiness time.
+    void noteDeferredGpuReady(uint64_t waitUs, bool completed,
+                              uint64_t completionUs = 0,
+                              uint64_t serviceUpperBoundUs = 0,
+                              bool readinessWasPending = false);
     void noteSchedulerDelays(uint64_t renderDelayUs,
                              uint64_t targetDelayUs,
                              bool targetDelayValid);
@@ -363,6 +383,9 @@ private:
     Vrr13::RecentReadiness m_RecentReadiness;
     uint64_t m_CadenceStableSinceUs = 0;
     uint64_t m_PreviousSmoothingIntervalUs = 0;
+    std::array<uint64_t, 4> m_SmoothingCadenceIntervals{};
+    size_t m_SmoothingCadenceCount = 0;
+    size_t m_SmoothingCadenceIndex = 0;
     struct PendingFrame {
         Vrr13::SmoothnessFeedback::Sample smoothness;
         Vrr13::ReadinessPrediction::Probe prediction;
@@ -372,6 +395,12 @@ private:
         bool hasPreparationDuration = false;
         int64_t readyOffsetUs = 0;
         uint64_t preparationDurationUs = 0;
+        uint64_t rawPreparationDurationUs = 0;
+        uint64_t acquisitionWaitUs = 0;
+        uint64_t decodeSyncWaitUs = 0;
+        uint64_t deferredGpuServiceUs = 0;
+        uint64_t deferredGpuWaitUs = 0;
+        uint64_t deferredGpuReadyUs = 0;
         uint64_t preparationCompleteUs = 0;
         uint64_t intervalIntendedUs = 0;
         bool intervalValid = false;
@@ -457,6 +486,7 @@ private:
 
     void clearTimeline(bool retainLearnedBudgets);
     void initializeTimeline(const PacedFrame& frame);
+    uint64_t sourceMappingUs(const PacedFrame& frame) const;
     CadenceObservation observeCadence(const PacedFrame& frame);
     void observeRtpCadence(uint32_t rtpDelta,
                            CadenceObservation& observation);
@@ -545,6 +575,7 @@ private:
     bool m_LastCadenceUsedRtp = false;
 
     bool m_HaveLastSubmission = false;
+    bool m_CatchupActive = false;
     uint64_t m_LastSubmissionUs = 0;
     unsigned int m_CleanSpacingFrames = 0;
     unsigned int m_PhaseErrorFrames = 0;
@@ -607,6 +638,7 @@ private:
     // runs a dozen microseconds slow per frame drifts visibly.
     uint64_t m_MetronomePeriodUsQ16 = 0;
     uint64_t m_SmoothedPeriodUs = 0;
+    int64_t m_SmoothedPeriodRemainder = 0;
     // Recent magnitudes of the stamp's deviation from the metronome grid
     // once known debt is excluded. Their upper percentile is the capture
     // jitter the grid absorbs; a deviation beyond it is motion timing the

@@ -485,6 +485,15 @@ bool validateVrrTimingParameters(const VrrTimingParameters& value,
             (!value.playoutPredictionOnly || value.playoutReadinessHitchThresholdUs))) {
         return fail("playout_responsive_buffer requires prediction-only playout without historical hitch feedback");
     }
+    if (value.playoutSourceMappingDecoderOutput > 1 ||
+            value.playoutSerialServiceGate > 2 ||
+            value.playoutRecentPressureRelease > 1) {
+        return fail("source mapping and recent pressure flags must be 0 or 1; serial service revision must be 0..2");
+    }
+    if ((value.playoutSerialServiceGate || value.playoutRecentPressureRelease) &&
+            value.playoutResponsiveBuffer < 6) {
+        return fail("serial service and recent pressure policies require the interval buffer");
+    }
     if (value.playoutOnTimeTargetPerMillion < 900000 || value.playoutOnTimeTargetPerMillion > 1000000)
         return fail("playout_on_time_target_per_million must be in 900000..1000000");
     if (value.playoutReadinessWindowUs < 3000000 || value.playoutReadinessWindowUs > 300000000 ||
@@ -510,6 +519,15 @@ bool validateVrrTimingParameters(const VrrTimingParameters& value,
     if (value.playoutSmoothingGainPerMille > 1000 ||
             value.playoutSmoothingPeriodAlphaPerMille > 1000) {
         return fail("playout_smoothing gain and period alpha must be in 0..1000");
+    }
+    if (value.playoutCatchupPerMille > 100) {
+        return fail("playout_catchup_per_mille must be in 0..100");
+    }
+    if (value.playoutSmoothingWindowedCadence > 2) {
+        return fail("playout_smoothing_windowed_cadence must be in 0..2");
+    }
+    if (value.playoutSmoothingRecoveryUs > 1000000) {
+        return fail("playout_smoothing_recovery_us must be in 0..1000000");
     }
     if (value.playoutDelayMinimumSamples == 0 ||
             value.playoutDelayReservoirSamples == 0 ||

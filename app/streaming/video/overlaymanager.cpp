@@ -78,6 +78,31 @@ bool OverlayManager::isOverlayEnabled(OverlayType type)
     return SDL_AtomicGet(&m_Overlays[type].enabledForReaders) != 0;
 }
 
+void OverlayManager::setStatusMessage(StatusSource source, const std::string& text)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_StateLock);
+        auto& message = m_StatusMessages[static_cast<int>(source)];
+        if (message == text) return;
+        message = text;
+        std::string combined = m_StatusMessages[static_cast<int>(StatusSource::Mouse)];
+        if (combined.empty()) {
+            combined = m_StatusMessages[static_cast<int>(StatusSource::Network)];
+            const auto& client = m_StatusMessages[static_cast<int>(StatusSource::ClientPacing)];
+            if (!combined.empty() && !client.empty()) combined += "\n\n";
+            combined += client;
+        }
+        auto& overlay = m_Overlays[OverlayStatusUpdate];
+        if (combined == overlay.text && overlay.enabled == !combined.empty()) return;
+        SDL_utf8strlcpy(overlay.text, combined.c_str(), sizeof(overlay.text));
+        overlay.enabled = !combined.empty();
+        ++overlay.revision;
+        overlay.dirty = true;
+        overlay.queued = std::chrono::steady_clock::now();
+    }
+    m_WorkReady.notify_one();
+}
+
 std::string OverlayManager::getOverlayText(OverlayType type)
 {
     std::lock_guard<std::mutex> lock(m_StateLock);
@@ -370,4 +395,3 @@ SDL_Surface* OverlayManager::RenderTextOutlinedWrapped(TTF_Font* font, const cha
     SDL_FreeSurface(textSurface);
     return outlineSurface;
 }
-

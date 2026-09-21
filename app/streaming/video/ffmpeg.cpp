@@ -2,6 +2,7 @@
 #include "ffmpeg.h"
 #include "utils.h"
 #include "streaming/session.h"
+#include "diagnostics/gputrace.h"
 
 #ifdef HAVE_H264BITSTREAM
 #include <h264_stream.h>
@@ -337,6 +338,11 @@ void FFmpegVideoDecoder::reset()
         m_LastPacerTelemetry = {};
     }
 
+    m_ClientPacingWarning = {};
+    if (Session::get() && !m_TestOnly) {
+        Session::get()->getOverlayManager().setStatusMessage(Overlay::StatusSource::ClientPacing, "");
+    }
+
     // Windows normally roll over from submitDecodeUnit(). Session shutdown
     // may occur at any point within a window, so merge its remaining decoder-
     // owned values before the final global log is produced.
@@ -579,6 +585,7 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
     m_OriginalVideoHeight = params->height;
     m_StreamFps = params->frameRate;
     m_VideoFormat = params->videoFormat;
+    m_VrrLatencyMode = params->vrrLatencyMode;
     m_CurrentTestMode = testMode;
 
     // Don't bother initializing Pacer if we're not actually going to render
@@ -1184,6 +1191,18 @@ void FFmpegVideoDecoder::syncPacerTelemetry()
             snapshot.vrrSubmitErrorMaxUs;
     }
 
+    const auto& interval = snapshot.vrrReadiness.interval;
+    const auto warning = m_ClientPacingWarning.observe(LiGetMicroseconds(),
+        snapshot.vrrActive && Session::get()->clientPacingWarningsEnabled(),
+        interval.initialCalibrationComplete && interval.evaluatedUs != 0,
+        snapshot.vrrBufferCapUs != 0 && snapshot.vrrAppliedBufferUs >= snapshot.vrrBufferCapUs,
+        interval.averageValid && interval.serviceOverloaded,
+        delta(snapshot.vrrPacingDroppedFrames, m_LastPacerTelemetry.vrrPacingDroppedFrames) != 0 ||
+        delta(snapshot.vrrPrepareLateFrames, m_LastPacerTelemetry.vrrPrepareLateFrames) != 0,
+        interval.qualityPercent());
+    Session::get()->getOverlayManager().setStatusMessage(Overlay::StatusSource::ClientPacing,
+        ClientPacingWarning::message(warning, (m_VideoFormat & VIDEO_FORMAT_MASK_AV1) != 0,
+            Session::get()->hevcPacingAlternative(), m_VrrLatencyMode == 0));
     m_LastPacerTelemetry = snapshot;
 }
 
@@ -1202,6 +1221,10 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
     int offset = 0;
     const char* codecString;
     int ret;
+    // Match the worker's deep-trace switch, including Settings-enabled tracing.
+    // SDL2-compat may cache an older environment from before the connection.
+    const bool advancedStats = qEnvironmentVariable("MOONLIGHT_VRR_DEEP_TRACE")
+        .startsWith(QLatin1Char('1'));
 
     // Start with an empty string
     output[offset] = 0;
@@ -1353,21 +1376,28 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
                        "Frames dropped by your network connection: %.2f%%\n"
                        "Frames dropped by client pacing: %.2f%%\n"
                        "Average network latency: %s\n"
-                       "Average decoding time: %.2f ms\n"
-                       "Average frame queue delay: %.2f ms\n"
-                       "Average rendering time (including monitor V-sync latency): %.2f ms\n",
+                       "Average decoding time: %.2f ms\n",
                        (float)stats.networkDroppedFrames / stats.totalFrames * 100,
                        (float)stats.pacerDroppedFrames / stats.decodedFrames * 100,
                        rttString,
-                       (double)(stats.totalDecodeTimeUs / 1000.0) / stats.decodedFrames,
-                       (double)(stats.totalQueuePacingTimeUs / 1000.0) / stats.renderedFrames,
-                       (double)(stats.totalRenderingTimeUs / 1000.0) / stats.renderedFrames);
+                       (double)(stats.totalDecodeTimeUs / 1000.0) / stats.decodedFrames);
         if (ret < 0 || ret >= length - offset) {
             SDL_assert(false);
             return;
         }
 
         offset += ret;
+
+        // Only advanced tracing replaces the normal rows with a breakdown.
+        if (!advancedStats || !stats.vrrPresentedFrames) {
+            ret = snprintf(&output[offset], length - offset,
+                           "Average frame queue delay: %.2f ms\n"
+                           "Average rendering time (including monitor V-sync latency): %.2f ms\n",
+                           stats.totalQueuePacingTimeUs / (stats.renderedFrames * 1000.0),
+                           stats.totalRenderingTimeUs / (stats.renderedFrames * 1000.0));
+            if (ret < 0 || ret >= length - offset) { SDL_assert(false); return; }
+            offset += ret;
+        }
     }
 
     if (stats.incomingTimingValid) {
@@ -1390,6 +1420,66 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
             stats.vrrPacingDroppedFrames != 0 ||
             stats.vrrPresentFailedFrames != 0 ||
             stats.vrrPresentCancelledFrames != 0) {
+        if (advancedStats && stats.vrrStateSequence && stats.vrrReadiness.intervalPolicy) {
+            const auto& interval = stats.vrrReadiness.interval;
+            const auto& update = interval.update;
+            using Action = Vrr13::IntervalBuffer::Action;
+            const char* reason = "Waiting for timing measurements";
+            char recovery[96];
+            // Describe the observer's reason, not a guessed hardware cause.
+            // This request affects subsequent frames; applied buffer is separate.
+            switch (update.action) {
+            case Action::Learning:
+            case Action::SequenceBreak:
+                reason = interval.initialCalibrationComplete ?
+                    "Holding - collecting fresh timing after an interruption" :
+                    "Starting - collecting timing measurements";
+                break;
+            case Action::Grow:
+                reason = "Increasing - frames were not ready in time";
+                break;
+            case Action::Capped:
+                reason = "Limited - late frames need more buffer than allowed";
+                break;
+            case Action::CurrentPressure:
+                reason = "Holding - current frame timing is outside the target";
+                break;
+            case Action::HistoryHold:
+                reason = "Holding - recent timing errors still affect the score";
+                break;
+            case Action::RecoveryHold:
+                snprintf(recovery, sizeof(recovery),
+                         "Holding - needs %.1f s more stable timing before shrinking",
+                         update.holdRemainingUs / 1000000.0);
+                reason = recovery;
+                break;
+            case Action::Release:
+                reason = "Shrinking - timing has stayed within the target";
+                break;
+            case Action::Minimum:
+                reason = "Minimum - timing is within the target";
+                break;
+            case Action::NotAbsorbable:
+                reason = "Holding - waiting for a stable workload before adjusting";
+                break;
+            case Action::Cooldown:
+                reason = "Holding - waiting between buffer increases";
+                break;
+            case Action::NoFreshMiss:
+                reason = "Holding - no new late frame justifies an increase";
+                break;
+            case Action::LimitChange:
+                reason = "Adjusting - the buffer limit changed";
+                break;
+            }
+            ret = snprintf(&output[offset], length - offset,
+                "\nVRR buffer: %.2f ms added (limit %.2f ms) | %s\n"
+                "Buffer status: %s\n",
+                stats.vrrAppliedBufferUs / 1000.0, stats.vrrBufferCapUs / 1000.0,
+                stats.vrrTelemetryActive ? "Active" : "Inactive", reason);
+            if (ret < 0 || ret >= length - offset) { SDL_assert(false); return; }
+            offset += ret;
+        }
         if (stats.vrrReadiness.samples == 0) {
             ret = snprintf(&output[offset],
                            length - offset,
@@ -1417,15 +1507,27 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
                 if (interval.averageValid)
                     snprintf(average, sizeof(average), "%.3f ms", interval.averageErrorUs / 1000.0);
                 else snprintf(average, sizeof(average), "collecting");
-                ret = snprintf(&output[offset], length - offset,
-                    "VRR pacing: %s | Client timing quality (%s): %s / %.2f%% target%s\n"
-                    "Client interval error (1s): %s | Tolerance: %.2f ms | Dropped (30s): %llu\n",
-                    stats.vrrTelemetryActive ? "Active" : "Inactive",
-                    scoreWindow, score,
-                    stats.vrrOnTimeTargetPerMillion / 10000.0,
-                    stats.vrrBufferAtLimit ? " (buffer limit)" : "", average,
-                    interval.toleranceUs / 1000.0,
-                    static_cast<unsigned long long>(readiness.dropped));
+                if (advancedStats) {
+                    ret = snprintf(&output[offset], length - offset,
+                        "Client timing: %s (target %.2f%% over %s)\n"
+                        "Timing error (1s avg): %s | Allowed: %.2f ms | Drops (30s): %llu\n",
+                        score,
+                        stats.vrrOnTimeTargetPerMillion / 10000.0,
+                        scoreWindow, average,
+                        interval.toleranceUs / 1000.0,
+                        static_cast<unsigned long long>(readiness.dropped));
+                }
+                else {
+                    ret = snprintf(&output[offset], length - offset,
+                        "VRR pacing: %s | Smoothness (%s): %s / %.2f%% target%s\n"
+                        "Client interval error (1s): %s | Tolerance: %.2f ms | Dropped (30s): %llu\n",
+                        stats.vrrTelemetryActive ? "Active" : "Inactive",
+                        scoreWindow, score,
+                        stats.vrrOnTimeTargetPerMillion / 10000.0,
+                        stats.vrrBufferAtLimit ? " (buffer limit)" : "", average,
+                        interval.toleranceUs / 1000.0,
+                        static_cast<unsigned long long>(readiness.dropped));
+                }
             }
             else if (readiness.meanMissPolicy) {
                 ret = snprintf(&output[offset], length - offset,
@@ -1458,58 +1560,28 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
 
         offset += ret;
 
-        if (stats.vrrStateSequence && stats.vrrReadiness.intervalPolicy) {
-            const auto& interval = stats.vrrReadiness.interval;
-            const auto& update = interval.update;
-            char growth[64], clipped[64];
-            const auto describeEvent = [&](char* text, size_t size, uint64_t atUs, uint64_t costUs) {
-                if (atUs && stats.vrrReadiness.atUs >= atUs)
-                    snprintf(text, size, "%.3f ms (%.1f s ago)", costUs / 1000.0,
-                        (stats.vrrReadiness.atUs - atUs) / 1000000.0);
-                else snprintf(text, size, "none");
-            };
-            describeEvent(growth, sizeof(growth), interval.lastGrowthAtUs, interval.lastGrowthUs);
-            describeEvent(clipped, sizeof(clipped), interval.lastClippedAtUs, interval.lastClippedUs);
-            ret = snprintf(&output[offset], length - offset,
-                "Buffer reserve: %.2f / %.2f ms | Request: %.2f ms | %s\n"
-                "Last growth: %s | Last capped step: %s | Hold: %.1f s\n"
-                "Calibration: %s | Evidence: %.2f s, %llu intervals\n",
-                stats.vrrAppliedBufferUs / 1000.0, stats.vrrBufferCapUs / 1000.0,
-                update.requestedUs / 1000.0, Vrr13::IntervalBuffer::actionName(update.action),
-                growth, clipped, update.holdRemainingUs / 1000000.0,
-                interval.averageValid ? "ready" : interval.initialCalibrationComplete ? "requalifying" : "collecting",
-                interval.calibrationCoverageUs / 1000000.0,
-                static_cast<unsigned long long>(interval.calibrationSamples));
-            if (ret < 0 || ret >= length - offset) { SDL_assert(false); return; }
-            offset += ret;
-        }
-        if (stats.vrrPresentedFrames) {
+        if (advancedStats && stats.vrrPresentedFrames) {
             const double divisor = stats.vrrPresentedFrames * 1000.0;
             const uint64_t residence = qMin(stats.vrrQueueResidenceUs, stats.vrrQueuePacingUs);
             char gpuReady[80];
             if (stats.vrrGpuReadyWaitFrames) {
-                snprintf(gpuReady, sizeof(gpuReady), "%.2f ms (%.0f%% measured)",
+                snprintf(gpuReady, sizeof(gpuReady), "%.2f ms (%.0f%% sampled)",
                     stats.vrrGpuReadyWaitUs / (stats.vrrGpuReadyWaitFrames * 1000.0),
                     stats.vrrGpuReadyWaitFrames * 100.0 / stats.vrrPresentedFrames);
             }
             else snprintf(gpuReady, sizeof(gpuReady), "N/A");
             ret = snprintf(&output[offset], length - offset,
-                "GPU decode synchronization wait: %.2f ms\n"
-                "Queue breakdown: residence %.2f ms | pacing/other %.2f ms\n"
-                "Preparation: %.2f ms | GPU ready wait (included): %s | Present call: %.2f ms\n"
-                "GPU preparation head start: %.2f ms | Protected submissions: %.1f%%\n",
+                "\nAfter decoding (average time per frame):\n"
+                "  GPU decode wait: %.2f ms\n"
+                "  Frame queue: %.2f ms (queued %.2f + pacing/other %.2f)\n"
+                "  Rendering: %.2f ms (prepare %.2f + submit %.2f)\n"
+                "  GPU wait within rendering: %s\n",
                 stats.vrrDecodeWaitUs / divisor,
+                stats.vrrQueuePacingUs / divisor,
                 residence / divisor, (stats.vrrQueuePacingUs - residence) / divisor,
-                stats.vrrPreparationUs / divisor, gpuReady,
-                stats.vrrPresentCallUs / divisor, stats.vrrGpuReadinessLeadUs / 1000.0,
-                stats.vrrLatchedFrames * 100.0 / stats.vrrPresentedFrames);
-            if (ret < 0 || ret >= length - offset) { SDL_assert(false); return; }
-            offset += ret;
-        }
-        if (stats.vrrMotionPairs) {
-            ret = snprintf(&output[offset], length - offset,
-                "Submission jerk >2 ms: %.2f%% (includes host cadence)\n",
-                stats.vrrMotionHitches * 100.0 / stats.vrrMotionPairs);
+                stats.vrrPreparationUs / divisor + stats.vrrPresentCallUs / divisor,
+                stats.vrrPreparationUs / divisor, stats.vrrPresentCallUs / divisor,
+                gpuReady);
             if (ret < 0 || ret >= length - offset) { SDL_assert(false); return; }
             offset += ret;
         }
@@ -2371,7 +2443,14 @@ void FFmpegVideoDecoder::decoderThreadProc()
 
             // Waiting for input. All output frames have been received.
             // Block until we receive a new frame from the host.
-            if (!LiWaitForNextVideoFrame(&handle, &du)) {
+            auto* inputTrace = m_FrontendRenderer->gpuDiagnosticTrace();
+            const auto inputBeginUs = inputTrace ? LiGetMicroseconds() : 0;
+            const bool haveInput = LiWaitForNextVideoFrame(&handle, &du);
+            if (inputTrace) inputTrace->record({"decoder_input_wait",
+                haveInput ? int64_t(du->rtpTimestamp) : -1, 0,
+                inputBeginUs, LiGetMicroseconds(), 0, haveInput,
+                haveInput ? du->frameNumber : -1});
+            if (!haveInput) {
                 // This might be a signal from the main thread to exit
                 continue;
             }
@@ -2395,12 +2474,34 @@ void FFmpegVideoDecoder::decoderThreadProc()
 
             int err;
             do {
+                auto* gpuTrace = m_FrontendRenderer->gpuDiagnosticTrace();
+                const auto receiveCpu = gpuTrace ? GpuTrace::ThreadSample::capture() : GpuTrace::ThreadSample{};
+                const auto receiveBeginUs = gpuTrace ? LiGetMicroseconds() : 0;
                 err = avcodec_receive_frame(m_VideoDecoderCtx, frame);
+                // Preserve the immutable decoder-output boundary before any
+                // diagnostic publication or metadata work.
+                const auto receiveEndUs = (gpuTrace || err == 0) ? LiGetMicroseconds() : 0;
+                if (gpuTrace) {
+                    const auto pts = m_FrameInfoQueue.isEmpty() ? int64_t(-1) :
+                        int64_t(m_FrameInfoQueue.head().rtpTimestamp);
+                    gpuTrace->recordThreadSpan({"decoder_receive", pts,
+                        err == 0 ? receiveEndUs : 0, receiveBeginUs, receiveEndUs, 0, err}, receiveCpu);
+                    if (err == 0) {
+                        // Reading AVFrame metadata is passive; never query VA
+                        // readiness on this thread (v1 serialized the decoder).
+                        const auto surface = frame->format == AV_PIX_FMT_VAAPI ?
+                            uint64_t(reinterpret_cast<uintptr_t>(frame->data[3])) : 0;
+                        gpuTrace->record({"decoder_surface", pts, receiveEndUs,
+                            receiveEndUs, receiveEndUs, surface,
+                            m_FrameInfoQueue.isEmpty() ? -1 : m_FrameInfoQueue.head().frameNumber,
+                            frame->format, frame->width, frame->height, int64_t(m_FramesIn - m_FramesOut)});
+                    }
+                }
                 if (err == 0) {
                     // This is the immutable origin for client-processing
                     // timing. Capture it immediately when FFmpeg exposes the
                     // decoded frame, before any metadata or handoff work.
-                    const uint64_t decoderOutputUs = LiGetMicroseconds();
+                    const uint64_t decoderOutputUs = receiveEndUs;
                     SDL_assert(m_FrameInfoQueue.size() == m_FramesIn - m_FramesOut);
                     m_FramesOut++;
 
@@ -2533,7 +2634,10 @@ void FFmpegVideoDecoder::decoderThreadProc()
                         pacedFrame.setDeliveryTimeline(receiveUs,
                                                        reassembledUs,
                                                        decodeSubmitUs);
+                        const auto handoffBeginUs = gpuTrace ? LiGetMicroseconds() : 0;
                         m_Pacer->submitFrame(std::move(pacedFrame));
+                        if (gpuTrace) gpuTrace->record({"decoder_handoff", rtpTimestamp,
+                            decoderOutputUs, handoffBeginUs, LiGetMicroseconds(), 0, frameNumber});
                     }
                     else {
                         m_Pacer->submitFrame(frame);
@@ -2593,6 +2697,8 @@ void FFmpegVideoDecoder::decoderThreadProc()
 
 int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
 {
+    auto* gpuTrace = m_FrontendRenderer->gpuDiagnosticTrace();
+    const auto submitEntryUs = gpuTrace ? LiGetMicroseconds() : 0;
     PLENTRY entry = du->bufferList;
     int err;
 
@@ -2695,8 +2801,21 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
 
     publishStatsGraphSample(du);
 
+    if (gpuTrace) {
+        gpuTrace->record({"packet_delivery", du->rtpTimestamp, 0, du->receiveTimeUs,
+            du->enqueueTimeUs, 0, du->frameNumber, du->fullLength, m_Pkt->size,
+            du->frameType, int64_t(m_FramesIn - m_FramesOut)});
+        gpuTrace->record({"packet_build", du->rtpTimestamp, 0, submitEntryUs,
+            LiGetMicroseconds(), 0, du->frameNumber});
+        const auto now = LiGetMicroseconds();
+        gpuTrace->record({"packet_send_enter", du->rtpTimestamp, 0, now, now, 0, du->frameNumber});
+    }
+    const auto sendCpu = gpuTrace ? GpuTrace::ThreadSample::capture() : GpuTrace::ThreadSample{};
     const uint64_t decodeSubmitUs = LiGetMicroseconds();
     err = avcodec_send_packet(m_VideoDecoderCtx, m_Pkt);
+    const auto sendEndUs = gpuTrace ? LiGetMicroseconds() : 0;
+    if (gpuTrace) gpuTrace->recordThreadSpan({"packet_send", du->rtpTimestamp, 0,
+        decodeSubmitUs, sendEndUs, 0, err}, sendCpu);
     if (err < 0) {
         char errorstring[512];
         av_strerror(err, errorstring, sizeof(errorstring));

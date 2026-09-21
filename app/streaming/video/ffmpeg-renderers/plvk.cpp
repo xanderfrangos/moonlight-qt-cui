@@ -11,6 +11,8 @@
 // Implementation in plvk_c.c
 #define PL_LIBAV_IMPLEMENTATION 0
 #include <libplacebo/utils/libav.h>
+#include <libplacebo/dispatch.h>
+#include <libplacebo/shaders.h>
 
 #include <SDL_vulkan.h>
 
@@ -73,13 +75,16 @@ public:
 namespace {
 
 #ifdef Q_OS_LINUX
-// Keep the Vulkan completion observation bounded. A frame that cannot become
-// idle inside this interval is a renderer/device fault, not an invitation to
-// hold the pacer indefinitely. The shared controller learns only successful
-// waits, so this bound cannot turn a sustained GPU overload into unbounded
-// playout latency.
+// Bound both the synchronous software-frame completion fallback and
+// backpressure on the asynchronous hardware-source retirement queue. A frame
+// that cannot retire inside this interval is a renderer/device fault, not an
+// invitation to hold the pacer indefinitely.
 constexpr uint64_t kVulkanGpuReadyTimeoutUs = 50000;
 constexpr unsigned int kVulkanGpuReadyPollLimit = 100000;
+// PACER_MAX_OUTSTANDING_FRAMES reserves two decoder surfaces beyond its
+// three-frame queue for the worker/current backend lifetime. Do not retain a
+// third source here or the asynchronous path can exhaust that allowance.
+constexpr size_t kVulkanRetainedSourceFrameLimit = 2;
 #endif
 
 const char* vulkanPresentModeName(VkPresentModeKHR mode)
@@ -241,6 +246,7 @@ PlVkRenderer::PlVkRenderer(AVHWDeviceType hwDeviceType, IFFmpegRenderer *backend
     }
 
     m_Log = pl_log_create(PL_API_VER, &logParams);
+    m_GpuTrace = GpuTrace::create();
 }
 
 PlVkRenderer::~PlVkRenderer()
@@ -249,6 +255,17 @@ PlVkRenderer::~PlVkRenderer()
     // started libplacebo frame owns an internal swapchain mutex, so release it
     // before any of the Vulkan objects below are destroyed.
     cancelVrrFrame();
+#ifdef Q_OS_LINUX
+    releaseAllVrrSourceFrames();
+    if (m_VrrRetainedSourceFrameTotal != 0) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Vulkan VRR source retirement summary: retained=%llu capacity_waits=%llu wait_us=%llu high_water=%zu",
+                    static_cast<unsigned long long>(m_VrrRetainedSourceFrameTotal),
+                    static_cast<unsigned long long>(m_VrrSourceRetirementWaits),
+                    static_cast<unsigned long long>(m_VrrSourceRetirementWaitUs),
+                    m_VrrSourceRetentionHighWater);
+    }
+#endif
 #if defined(HAS_WAYLAND) && defined(Q_OS_LINUX)
     m_GamescopeRepaint.reset();
 #endif
@@ -1471,6 +1488,11 @@ void PlVkRenderer::cleanupRenderContext()
     // We have to submit a pending swapchain frame before shutting down in
     // order to release a mutex that pl_swapchain_start_frame() acquires.
     cancelVrrFrame();
+#ifdef Q_OS_LINUX
+    // The render context is about to stop servicing retirement polls. Finish
+    // outstanding commands before dropping the AVFrame references they own.
+    releaseAllVrrSourceFrames();
+#endif
 }
 
 IVrrFramePresenter* PlVkRenderer::getVrrFramePresenter()
@@ -1496,6 +1518,24 @@ VrrFallbackReason PlVkRenderer::checkSupport() const
         VrrFallbackReason::InitializationFailed;
 }
 
+void PlVkRenderer::gpuRenderInfo(void* opaque, const pl_render_info* info)
+{
+    auto self = static_cast<PlVkRenderer*>(opaque);
+    if (!self->m_GpuTrace || !info || !info->pass) return;
+    // libplacebo owns asynchronous timer queries. These are historical samples
+    // for this shader signature, NOT execution times of the identifying frame.
+    const auto pass = info->pass;
+    const auto now = LiGetMicroseconds();
+    GpuTrace::Row row{"shader_history", self->m_GpuTracePts,
+        self->m_GpuTraceOutputUs, now, now, pass->signature,
+        info->stage, info->index, pass->num_samples,
+        static_cast<int64_t>(pass->last), static_cast<int64_t>(pass->average)};
+    if (pass->shader && pass->shader->description) {
+        SDL_strlcpy(row.detail, pass->shader->description, sizeof(row.detail));
+    }
+    self->m_GpuTrace->record(row);
+}
+
 uint64_t PlVkRenderer::waitForDecode(AVFrame* frame)
 {
 #ifdef HAVE_LIBVA
@@ -1509,18 +1549,190 @@ uint64_t PlVkRenderer::waitForDecode(AVFrame* frame)
         return 0;
     }
     auto vaDeviceContext = (AVVAAPIDeviceContext*)hwFrameCtx->device_ctx->hwctx;
+    const auto surface = static_cast<VASurfaceID>(reinterpret_cast<uintptr_t>(frame->data[3]));
+    VASurfaceStatus before = VASurfaceRendering;
+    VAStatus queryStatus = VA_STATUS_ERROR_UNIMPLEMENTED;
+    if (m_GpuTrace) {
+        const auto queryCpu = GpuTrace::ThreadSample::capture();
+        const auto queryBegin = LiGetMicroseconds();
+        queryStatus = vaQuerySurfaceStatus(vaDeviceContext->display, surface, &before);
+        const auto queryEnd = LiGetMicroseconds();
+        m_GpuTrace->recordThreadSpan({"decode_query_cpu", frame->pts, uint64_t(frame->pkt_dts),
+            queryBegin, queryEnd, surface, queryStatus}, queryCpu);
+        m_GpuTrace->record({"decode_wait_status", frame->pts, uint64_t(frame->pkt_dts),
+            queryBegin, queryEnd, surface, queryStatus, before});
+    }
+    const auto cpuBeforeSync = m_GpuTrace ? GpuTrace::ThreadSample::capture() : GpuTrace::ThreadSample{};
+    if (m_GpuTrace) {
+        const auto now = LiGetMicroseconds();
+        m_GpuTrace->record({"decode_sync_enter", frame->pts, uint64_t(frame->pkt_dts),
+            now, now, surface});
+    }
     const uint64_t startUs = LiGetMicroseconds();
     // libplacebo syncs the surface again when it imports the frame; that
     // second sync returns at once because this one already waited.
-    vaSyncSurface(vaDeviceContext->display,
-                  (VASurfaceID)(uintptr_t)frame->data[3]);
+    const VAStatus status = vaSyncSurface(
+        vaDeviceContext->display,
+        (VASurfaceID)(uintptr_t)frame->data[3]);
     const uint64_t endUs = LiGetMicroseconds();
+    if (m_GpuTrace) m_GpuTrace->recordThreadSpan({"decode_sync", frame->pts, uint64_t(frame->pkt_dts),
+        startUs, endUs, surface, status}, cpuBeforeSync);
+    if (status != VA_STATUS_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "vaSyncSurface() failed before Vulkan VRR preparation: %d (%s)",
+                     status, vaErrorStr(status));
+        // This is the hardware path's explicit decode-readiness barrier.
+        // Do not rely on a later mapping call to reject an unsynchronized VA
+        // surface: make prepareFrame() fail its support check and enter the
+        // normal renderer recovery path before any Vulkan read is recorded.
+        m_VrrFallbackReason =
+            VrrFallbackReason::AdaptivePresentationUnavailable;
+        queueRenderDeviceReset();
+    }
     return endUs >= startUs ? endUs - startUs : 0;
 #else
     (void) frame;
     return 0;
 #endif
 }
+
+#ifdef Q_OS_LINUX
+bool PlVkRenderer::vrrSourceFrameBusy(const pl_frame& frame) const
+{
+    if (m_Vulkan == nullptr || m_Vulkan->gpu == nullptr) {
+        return true;
+    }
+
+    for (int plane = 0; plane < frame.num_planes; ++plane) {
+        const pl_tex texture = frame.planes[plane].texture;
+        if (texture != nullptr && pl_tex_poll(m_Vulkan->gpu, texture, 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void PlVkRenderer::retireCompletedVrrSourceFrames()
+{
+    if (m_Vulkan == nullptr || m_Vulkan->gpu == nullptr) {
+        return;
+    }
+
+    for (auto frame = m_VrrRetainedSourceFrames.begin();
+         frame != m_VrrRetainedSourceFrames.end();) {
+        const auto pollStartUs = m_GpuTrace ? LiGetMicroseconds() : 0;
+        if (vrrSourceFrameBusy(frame->frame)) {
+            if (m_GpuTrace) frame->lastBusyUs = pollStartUs;
+            ++frame;
+            continue;
+        }
+
+        if (m_GpuTrace) {
+            const auto now = LiGetMicroseconds();
+            m_GpuTrace->record({"source_retired", frame->pts, frame->outputUs, frame->lastBusyUs, now});
+        }
+        pl_unmap_avframe(m_Vulkan->gpu, &frame->frame);
+        frame = m_VrrRetainedSourceFrames.erase(frame);
+    }
+}
+
+bool PlVkRenderer::ensureVrrSourceRetentionSlot()
+{
+    retireCompletedVrrSourceFrames();
+    if (m_VrrRetainedSourceFrames.size() <
+            kVulkanRetainedSourceFrameLimit) {
+        return true;
+    }
+
+    // A two-entry bound accounts for the pacer's current/deferred surface
+    // allowance. Backpressure here is exceptional: normally the previous
+    // source read retires while the worker waits for its presentation target.
+    // Keep the same fault bound as the former output-completion wait.
+    ++m_VrrSourceRetirementWaits;
+    const uint64_t waitStartUs = LiGetMicroseconds();
+    uint64_t nowUs = waitStartUs;
+    unsigned int pollCount = 0;
+    while (m_VrrRetainedSourceFrames.size() >=
+           kVulkanRetainedSourceFrameLimit) {
+        if (m_VrrWindowChangePending.load() || m_VrrSuspended) {
+            m_VrrSourceRetirementWaitUs += nowUs >= waitStartUs ?
+                nowUs - waitStartUs : 0;
+            return false;
+        }
+        if (m_Vulkan == nullptr || m_Vulkan->gpu == nullptr ||
+                pl_gpu_is_failed(m_Vulkan->gpu)) {
+            m_VrrSourceRetirementWaitUs += nowUs >= waitStartUs ?
+                nowUs - waitStartUs : 0;
+            queueRenderDeviceReset();
+            return false;
+        }
+        if ((nowUs >= waitStartUs &&
+             nowUs - waitStartUs >= kVulkanGpuReadyTimeoutUs) ||
+                ++pollCount >= kVulkanGpuReadyPollLimit) {
+            const uint64_t waitedUs = nowUs >= waitStartUs ?
+                nowUs - waitStartUs : 0;
+            m_VrrSourceRetirementWaitUs += waitedUs;
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "Vulkan VRR source retirement timed out after %llu us with %zu mappings retained",
+                         static_cast<unsigned long long>(waitedUs),
+                         m_VrrRetainedSourceFrames.size());
+            m_VrrFallbackReason =
+                VrrFallbackReason::AdaptivePresentationUnavailable;
+            queueRenderDeviceReset();
+            return false;
+        }
+
+        std::this_thread::yield();
+        retireCompletedVrrSourceFrames();
+        nowUs = LiGetMicroseconds();
+    }
+
+    m_VrrSourceRetirementWaitUs += nowUs >= waitStartUs ?
+        nowUs - waitStartUs : 0;
+    return true;
+}
+
+void PlVkRenderer::retainVrrSourceFrame(pl_frame& frame)
+{
+    SDL_assert(m_VrrRetainedSourceFrames.size() <
+               kVulkanRetainedSourceFrameLimit);
+    m_VrrRetainedSourceFrames.push_back({frame, m_GpuTracePts, m_GpuTraceOutputUs, 0});
+    if (m_GpuTrace) {
+        const auto now = LiGetMicroseconds();
+        m_GpuTrace->record({"source_retained", m_GpuTracePts, m_GpuTraceOutputUs,
+            now, now, 0, int64_t(m_VrrRetainedSourceFrames.size())});
+    }
+    SDL_zero(frame);
+    ++m_VrrRetainedSourceFrameTotal;
+    m_VrrSourceRetentionHighWater = std::max(
+        m_VrrSourceRetentionHighWater,
+        m_VrrRetainedSourceFrames.size());
+}
+
+void PlVkRenderer::releaseAllVrrSourceFrames()
+{
+    if (m_VrrRetainedSourceFrames.empty() || m_Vulkan == nullptr ||
+            m_Vulkan->gpu == nullptr) {
+        return;
+    }
+
+    // Teardown is the intended use for pl_gpu_finish(). Once it returns, all
+    // retained source mappings can be unreferenced without recycling external
+    // decoder memory while Vulkan still reads it. A failed device has no
+    // useful completion to wait for; libplacebo teardown handles that state.
+    if (!pl_gpu_is_failed(m_Vulkan->gpu)) {
+        pl_gpu_finish(m_Vulkan->gpu);
+    }
+    for (auto& frame : m_VrrRetainedSourceFrames) {
+        if (m_GpuTrace) {
+            const auto now = LiGetMicroseconds();
+            m_GpuTrace->record({"source_teardown", frame.pts, frame.outputUs, now, now});
+        }
+        pl_unmap_avframe(m_Vulkan->gpu, &frame.frame);
+    }
+    m_VrrRetainedSourceFrames.clear();
+}
+#endif
 
 bool PlVkRenderer::waitForVrrGpuReady(VrrPresentFeedback& feedback)
 {
@@ -1652,9 +1864,24 @@ VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
         return result;
     }
 
+#ifdef Q_OS_LINUX
+    // Retained source mappings are the completion authority for the
+    // asynchronous hardware path. Reserve space before acquiring a swapchain
+    // image so a retirement timeout never leaves an image mutex held.
+    const auto retentionStartUs = m_GpuTrace ? LiGetMicroseconds() : 0;
+    const bool retentionReady = ensureVrrSourceRetentionSlot();
+    if (m_GpuTrace) m_GpuTrace->record({"source_capacity", frame->pts, uint64_t(frame->pkt_dts),
+        retentionStartUs, LiGetMicroseconds(), 0, retentionReady, int64_t(m_VrrRetainedSourceFrames.size())});
+    if (!retentionReady) {
+        return result;
+    }
+#endif
+
     // Clear readiness evidence only after the duplicate-frame guard above;
     // an already-acquired frame keeps its telemetry until present/cancel.
     m_VrrGpuReadyFeedback = {};
+    m_GpuTracePts = frame->pts;
+    m_GpuTraceOutputUs = uint64_t(frame->pkt_dts);
 
     // A size/display callback arrives on the main thread. Clear the current
     // generation before acquisition; a concurrent new callback remains set
@@ -1668,16 +1895,19 @@ VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
 #else
     (void) windowChanged;
 #endif
-    const uint64_t syncStartUs = LiGetMicroseconds();
-    result.decodeSyncUs = waitForDecode(frame);
+    // VrrPacingWorker already waited at the immutable decoder-output boundary.
+    // libplacebo's AV_HWFRAME_MAP_READ import validates that dependency again;
+    // another explicit vaSyncSurface() here only re-synchronizes the same VA
+    // surface and cannot make it ready sooner.
     const uint64_t acquireStartUs = LiGetMicroseconds();
-    (void) syncStartUs;
     if (!acquireVrrSwapchainFrame()) {
         return result;
     }
     const uint64_t acquireEndUs = LiGetMicroseconds();
     result.acquireUs = acquireEndUs >= acquireStartUs ?
         acquireEndUs - acquireStartUs : 0;
+    if (m_GpuTrace) m_GpuTrace->record({"acquire", m_GpuTracePts, m_GpuTraceOutputUs,
+        acquireStartUs, acquireEndUs});
 
     if (m_VrrWindowChangePending.load()) {
         result.cancellationMaySubmit = m_HasPendingSwapchainFrame;
@@ -1687,6 +1917,9 @@ VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
     m_VrrPreparingFrame = true;
     m_VrrRenderSucceeded = false;
     m_VrrRenderTimingActive = false;
+#ifdef Q_OS_LINUX
+    m_VrrCurrentSourceRetained = false;
+#endif
     renderFrame(frame);
     const uint64_t renderEndUs = LiGetMicroseconds();
     result.renderUs = renderEndUs >= acquireEndUs ? renderEndUs - acquireEndUs : 0;
@@ -1699,6 +1932,8 @@ VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
         pl_gpu_flush(m_Vulkan->gpu);
     }
     const uint64_t flushEndUs = LiGetMicroseconds();
+    if (m_GpuTrace) m_GpuTrace->record({"render_flush", m_GpuTracePts, m_GpuTraceOutputUs,
+        renderEndUs, flushEndUs, 0, m_VrrRenderSucceeded});
     result.flushUs = flushEndUs >= renderEndUs ? flushEndUs - renderEndUs : 0;
     result.timingValid = true;
 
@@ -1714,7 +1949,22 @@ VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
     }
 
 #ifdef Q_OS_LINUX
-    if (!waitForVrrGpuReady(result.feedback)) {
+    // VAAPI readiness was established before mapping, and the mapped source
+    // remains owned until its Vulkan reads retire. libplacebo's swapchain
+    // submission signals a render-complete semaphore that vkQueuePresentKHR
+    // waits on; a CPU output wait is not needed for this handoff. Avoid
+    // serializing that wait with the next frame's vaSyncSurface(). The shared
+    // controller prepares on arrival so the GPU gets the existing target hold
+    // even when this path has no CPU completion sample to train a render lead.
+    // Mailbox provides native latch protection. Immediate still needs the
+    // completion check: a late GPU render must not bunch actual flips behind
+    // correctly spaced CPU submissions. Other imports/software keep it too.
+    const bool asynchronousVaapiSource =
+        frame->format == AV_PIX_FMT_VAAPI && m_VrrCurrentSourceRetained &&
+        canLatchAdaptivePresent();
+    if (m_GpuTrace) m_GpuTrace->record({"output_wait_mode", m_GpuTracePts, m_GpuTraceOutputUs,
+        flushEndUs, flushEndUs, 0, asynchronousVaapiSource});
+    if (!asynchronousVaapiSource && !waitForVrrGpuReady(result.feedback)) {
         m_VrrGpuReadyFeedback = result.feedback;
         result.cancellationMaySubmit = m_HasPendingSwapchainFrame;
         const bool gpuReadinessTimedOut =
@@ -1729,12 +1979,18 @@ VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
         }
         return result;
     }
+    retireCompletedVrrSourceFrames();
 #endif
 
     m_VrrFramePrepared = true;
     result.prepared = true;
     result.cancellationMaySubmit = true;
+#ifdef Q_OS_LINUX
+    result.sourceFrameReusable = m_VrrRetainedSourceFrames.empty();
+    m_VrrCurrentSourceRetained = false;
+#else
     result.sourceFrameReusable = true;
+#endif
     m_VrrGpuReadyFeedback = result.feedback;
     return result;
 }
@@ -1765,8 +2021,22 @@ VrrPresentFeedback PlVkRenderer::presentAdaptive(const VrrPresentRequest& reques
     // commit or a CPU completion event. Only this worker presents this surface.
     if (m_PresentationFeedback) m_PresentationFeedback->request(presentationId);
 #endif
+    if (m_GpuTrace && m_SwapchainFrame.fbo) {
+        const auto begin = LiGetMicroseconds();
+        const bool busy = pl_tex_poll(m_Vulkan->gpu, m_SwapchainFrame.fbo, 0);
+        m_GpuTrace->record({"output_status_before_present", m_GpuTracePts, m_GpuTraceOutputUs,
+            begin, LiGetMicroseconds(), presentationId, busy});
+    }
     const uint64_t submissionTimeUs = LiGetMicroseconds();
     const bool submitted = submitPendingSwapchainFrame();
+    if (m_GpuTrace) m_GpuTrace->record({"present", m_GpuTracePts, m_GpuTraceOutputUs,
+        submissionTimeUs, LiGetMicroseconds(), presentationId, submitted});
+#ifdef Q_OS_LINUX
+    // The target wait often gives the source reads enough time to finish.
+    // Reclaim completed mappings promptly; an incomplete one remains owned by
+    // the bounded queue and is checked again before the next preparation.
+    retireCompletedVrrSourceFrames();
+#endif
 
     VrrPresentFeedback feedback = m_VrrGpuReadyFeedback;
     m_VrrGpuReadyFeedback = {};
@@ -1841,8 +2111,15 @@ bool PlVkRenderer::cancelVrrFrame()
     m_VrrPreparingFrame = false;
     m_VrrFramePrepared = false;
     m_VrrRenderSucceeded = false;
+#ifdef Q_OS_LINUX
+    m_VrrCurrentSourceRetained = false;
+    retireCompletedVrrSourceFrames();
+#endif
 
     const bool submitted = submitPendingSwapchainFrame();
+#ifdef Q_OS_LINUX
+    retireCompletedVrrSourceFrames();
+#endif
     if (!submitted && hadPendingFrame) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "pl_swapchain_submit_frame() failed while abandoning Vulkan VRR frame");
@@ -1921,7 +2198,7 @@ bool PlVkRenderer::restoreFixedPresentation(VrrFallbackReason reason)
 
 void PlVkRenderer::renderFrame(AVFrame *frame)
 {
-    pl_frame mappedFrame, targetFrame;
+    pl_frame mappedFrame = {}, targetFrame = {};
 
     // If waitToRender() failed to get the next swapchain frame, skip
     // rendering this frame. It probably means the window is occluded.
@@ -1929,7 +2206,11 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
         return;
     }
 
-    if (!mapAvFrameToPlacebo(frame, &mappedFrame)) {
+    const auto mapStartUs = m_GpuTrace ? LiGetMicroseconds() : 0;
+    const bool mapped = mapAvFrameToPlacebo(frame, &mappedFrame);
+    if (m_GpuTrace && m_VrrPreparingFrame) m_GpuTrace->record({"surface_import",
+        m_GpuTracePts, m_GpuTraceOutputUs, mapStartUs, LiGetMicroseconds(), 0, mapped});
+    if (!mapped) {
         // This function logs internally
         return;
     }
@@ -2023,9 +2304,18 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
     // Render the video image and overlays into the swapchain buffer
     targetFrame.num_overlays = (int)overlays.size();
     targetFrame.overlays = overlays.data();
+    auto renderParams = m_RenderParams;
+    if (m_GpuTrace && m_VrrPreparingFrame) {
+        renderParams.info_callback = gpuRenderInfo;
+        renderParams.info_priv = this;
+    }
+    const auto renderCpu = m_GpuTrace ? GpuTrace::ThreadSample::capture() : GpuTrace::ThreadSample{};
+    const auto renderStartUs = m_GpuTrace ? LiGetMicroseconds() : 0;
     const bool renderSucceeded = pl_render_image(m_Renderer, &mappedFrame,
                                                   &targetFrame,
-                                                  &m_RenderParams);
+                                                  &renderParams);
+    if (m_GpuTrace && m_VrrPreparingFrame) m_GpuTrace->recordThreadSpan({"render_commands",
+        m_GpuTracePts, m_GpuTraceOutputUs, renderStartUs, LiGetMicroseconds(), 0, renderSucceeded}, renderCpu);
     if (!renderSucceeded) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "pl_render_image() failed");
@@ -2035,9 +2325,20 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
     if (m_VrrPreparingFrame) {
         // The VRR worker owns the target wait. It calls presentFrame()
         // later, so retain the acquired image instead of submitting here.
-        // Mapping and overlay lifetime can still end now because libplacebo
-        // retains the GPU work it recorded for the swapchain frame.
+        // Overlay lifetime can end now because libplacebo retains the recorded
+        // work. On Linux hardware mappings, retain the mapped AVFrame and its
+        // imported source textures until their GPU reads actually retire.
         m_VrrRenderSucceeded = renderSucceeded;
+#ifdef Q_OS_LINUX
+        const AVPixFmtDescriptor* pixelFormat =
+            frame != nullptr ? av_pix_fmt_desc_get(
+                static_cast<AVPixelFormat>(frame->format)) : nullptr;
+        if (pixelFormat != nullptr &&
+                (pixelFormat->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
+            retainVrrSourceFrame(mappedFrame);
+            m_VrrCurrentSourceRetained = true;
+        }
+#endif
         goto UnmapExit;
     }
 
