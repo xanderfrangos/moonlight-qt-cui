@@ -1474,7 +1474,7 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
         }
         if (stats.vrrPresentedFrames) {
             const double divisor = stats.vrrPresentedFrames * 1000.0;
-            const uint64_t residence = std::min(stats.vrrQueueResidenceUs, stats.vrrQueuePacingUs);
+            const uint64_t residence = qMin(stats.vrrQueueResidenceUs, stats.vrrQueuePacingUs);
             char gpuReady[80];
             if (stats.vrrGpuReadyWaitFrames) {
                 snprintf(gpuReady, sizeof(gpuReady), "%.2f ms (%.0f%% measured)",
