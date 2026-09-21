@@ -44,6 +44,14 @@ struct StatsGraphAccumulator {
 struct StatsGraphCounters {
     // Video payload as delivered, not including FEC overhead
     uint64_t videoBytes = 0;
+    // Packets the host sent, data and FEC parity, as announced by each FEC
+    // block header. These are 32-bit and wrap, unlike the other totals.
+    uint32_t videoDataPackets = 0;
+    uint32_t videoFecPackets = 0;
+    // Size of every one of those packets on the wire, IP header included.
+    // The host pads all shards of a block to the same size for FEC, so this
+    // is a constant for the session.
+    uint32_t videoPacketWireBytes = 0;
     uint64_t networkDroppedFrames = 0;
     uint64_t jitterDroppedFrames = 0;
     uint32_t networkLatencyMs = 0;
@@ -79,6 +87,9 @@ struct StatsGraphPoint {
     float reassemblyMinMs = 0;
     float reassemblyMaxMs = 0;
     float videoMbps = 0;
+    // Everything the video stream puts on the network: payload, FEC parity,
+    // shard padding and packet headers
+    float networkMbps = 0;
     float networkDroppedFrames = 0;
     float jitterDroppedFrames = 0;
     float networkLatencyMs = 0;

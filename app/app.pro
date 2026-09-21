@@ -221,6 +221,7 @@ SOURCES += \
     streaming/video/overlaymanager.cpp \
     streaming/video/overlaypainter.cpp \
     streaming/video/statsgraphs.cpp \
+    streaming/video/videopacketsize.cpp \
     streaming/vrrratepolicy.cpp \
     backend/systemproperties.cpp \
     wm.cpp
@@ -277,6 +278,7 @@ HEADERS += \
     streaming/video/overlaymanager.h \
     streaming/video/overlaypainter.h \
     streaming/video/statsgraphs.h \
+    streaming/video/videopacketsize.h \
     backend/systemproperties.h \
     windowsvblankvirtualization.h
 

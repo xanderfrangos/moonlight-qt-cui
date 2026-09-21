@@ -163,6 +163,15 @@ void StatsGraphs::appendSample(const StatsGraphCounters& counters, double interv
     if (intervalSecs > 0) {
         point.videoMbps = (float)(delta(counters.videoBytes, m_LastCounters.videoBytes) *
                                   8.0 / 1000000.0 / intervalSecs);
+
+        // The packet counts only restart with the connection, and start()
+        // takes a fresh baseline for that, so a decrease here is a 32-bit
+        // wrap that plain unsigned subtraction already handles.
+        const uint32_t packets =
+                (uint32_t)(counters.videoDataPackets - m_LastCounters.videoDataPackets) +
+                (uint32_t)(counters.videoFecPackets - m_LastCounters.videoFecPackets);
+        point.networkMbps = (float)((double)packets * counters.videoPacketWireBytes *
+                                    8.0 / 1000000.0 / intervalSecs);
     }
     point.networkDroppedFrames = (float)delta(counters.networkDroppedFrames,
                                               m_LastCounters.networkDroppedFrames);

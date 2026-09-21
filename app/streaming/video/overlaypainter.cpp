@@ -241,6 +241,11 @@ struct GraphSpec {
     qreal minScale;
     // Frametime graphs also print the frame rate they correspond to.
     bool withFrameRate = false;
+    // A second series drawn as a line over the first, with its current value
+    // named alongside the main one. Null when a graph plots only one series.
+    float StatsGraphPoint::* secondaryField = nullptr;
+    const char* secondaryName = nullptr;
+    QColor secondaryColor;
 };
 
 // Rounds a full-scale value up to the next 1/2/5 x 10^n so the axis label reads
@@ -280,6 +285,9 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
             windowMax = high;
         }
         scale = qMax(scale, high);
+        if (spec.secondaryField) {
+            scale = qMax(scale, (qreal)(points[i].*spec.secondaryField));
+        }
     }
     scale = niceCeil(scale);
 
@@ -344,6 +352,17 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
         painter.setBrush(Qt::NoBrush);
         painter.setPen(QPen(spec.color, 1.5));
         painter.drawPolyline(line);
+
+        if (spec.secondaryField) {
+            QPolygonF secondaryLine;
+            secondaryLine.reserve((int)points.size());
+            for (size_t i = 0; i < points.size(); i++) {
+                secondaryLine.append(pointAt(i, spec.secondaryField));
+            }
+            painter.setPen(QPen(spec.secondaryColor, 1.5));
+            painter.drawPolyline(secondaryLine);
+        }
+
         painter.setClipping(false);
     }
 
@@ -369,9 +388,12 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
         { "Incoming frametime", &StatsGraphPoint::incomingFrametimeMs,
           &StatsGraphPoint::incomingFrametimeMinMs, &StatsGraphPoint::incomingFrametimeMaxMs,
           QColor(0x26, 0xA6, 0x9A), " ms", 1, 20, true },
-        { "Bandwidth", &StatsGraphPoint::videoMbps,
+        // Everything on the wire, with the video payload inside it drawn over
+        // the top, so the gap between the two is the FEC and packet overhead.
+        { "Bandwidth", &StatsGraphPoint::networkMbps,
           nullptr, nullptr,
-          QColor(0xEC, 0x40, 0x7A), " Mbps", 1, 5 },
+          QColor(0xEC, 0x40, 0x7A), " Mbps", 1, 5, false,
+          &StatsGraphPoint::videoMbps, "video", QColor(0xF8, 0xBB, 0xD0) },
         { "Network latency", &StatsGraphPoint::networkLatencyMs,
           nullptr, nullptr,
           QColor(0xAB, 0x47, 0xBC), " ms", 0, 20 },
@@ -494,6 +516,18 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
             painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter, rateText);
             valueRect.setRight(valueRect.right() -
                                QFontMetricsF(scaleFont).horizontalAdvance(rateText));
+        }
+        else if (!points.empty() && spec.secondaryField) {
+            // Named in its own line colour, which doubles as the legend
+            const QString secondaryText = QStringLiteral("  (%1 %2)")
+                    .arg(points.back().*spec.secondaryField, 0, 'f', spec.decimals)
+                    .arg(QString::fromUtf8(spec.secondaryName));
+
+            painter.setFont(scaleFont);
+            painter.setPen(spec.secondaryColor);
+            painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter, secondaryText);
+            valueRect.setRight(valueRect.right() -
+                               QFontMetricsF(scaleFont).horizontalAdvance(secondaryText));
         }
 
         painter.setFont(valueFont);

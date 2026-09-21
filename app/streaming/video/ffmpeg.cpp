@@ -17,6 +17,7 @@ extern "C" {
 #include "ffmpeg-renderers/sdlvid.h"
 #include "ffmpeg-renderers/genhwaccel.h"
 #include "vrrrenderpolicy.h"
+#include "videopacketsize.h"
 
 #ifdef Q_OS_WIN32
 #include "ffmpeg-renderers/dxva2.h"
@@ -265,6 +266,7 @@ FFmpegVideoDecoder::FFmpegVideoDecoder(bool testOnly)
       m_BwTracker(10, 250),
       m_StatsGraphVideoBytes(0),
       m_StatsGraphLastFrameUs(0),
+      m_StatsGraphPacketWireBytes(0),
       m_FramesIn(0),
       m_FramesOut(0),
       m_LastFrameNumber(0),
@@ -827,6 +829,7 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
 
         // Sampling runs whether or not the graphs are visible, so they already
         // cover a full window by the time the user brings them up.
+        m_StatsGraphPacketWireBytes = getVideoPacketWireBytes();
         m_StatsGraphs.start(&Session::get()->getOverlayManager(),
                             [this](Overlay::StatsGraphCounters& counters) {
                                 sampleStatsGraphCounters(counters);
@@ -1041,6 +1044,14 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
             counters.renderingFrametime.max = (float)(frametime.maxUs / 1000.0);
         }
     }
+
+    // Written by the video receive thread. Each field is a single aligned
+    // 32-bit counter, so a read that races an update is merely one sample
+    // stale, which is harmless for a graph.
+    const RTP_VIDEO_STATS* rtpStats = LiGetRTPVideoStats();
+    counters.videoDataPackets = rtpStats->packetCountVideo;
+    counters.videoFecPackets = rtpStats->packetCountFec;
+    counters.videoPacketWireBytes = m_StatsGraphPacketWireBytes;
 
     uint32_t rtt, rttVariance;
     counters.networkLatencyValid = LiGetEstimatedRttInfo(&rtt, &rttVariance);

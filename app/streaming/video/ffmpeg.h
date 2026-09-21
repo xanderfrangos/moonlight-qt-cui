@@ -142,6 +142,9 @@ private:
     // of the same bytes to difference per interval instead.
     uint64_t m_StatsGraphVideoBytes;
     uint64_t m_StatsGraphLastFrameUs;
+    // Fixed once the connection has negotiated it, so it's worked out when
+    // sampling starts rather than on every sample.
+    uint32_t m_StatsGraphPacketWireBytes;
     std::set<IFFmpegRenderer::RendererType> m_FailedRenderers;
 
     int m_FramesIn;
