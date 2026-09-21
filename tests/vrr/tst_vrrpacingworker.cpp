@@ -669,7 +669,7 @@ void testTelemetrySnapshotsRemainCumulative()
            decodeSnapshot.totalRenderingTimeUs == 1000 &&
            decodeSnapshot.vrrDecodeWaitUs == 4000,
            "decode synchronization is diagnostic time, not visible queue delay");
-    legacyTelemetry.recordLegacyFrame(100, 40);
+    legacyTelemetry.recordLegacyFrame(100, 40, 0);
     const PacerTelemetrySnapshot legacySnapshot =
         telemetryStats(legacyTelemetry);
     expect(legacySnapshot.renderedFrames == 1 &&
@@ -777,7 +777,7 @@ void testTelemetrySnapshotsRemainCumulative()
                finalSnapshot.vrrPresentFailedFrames == 1 &&
                finalSnapshot.vrrStateSequence == finalSnapshot.sequence,
            "telemetry must keep bounded timing distributions and output outcomes separate");
-    telemetry.recordLegacyFrame(9000, 1000);
+    telemetry.recordLegacyFrame(9000, 1000, 0);
     const auto mixed = telemetryStats(telemetry);
     expect(mixed.renderedFrames == frameCount + 1 && mixed.vrrPresentedFrames == frameCount &&
                mixed.vrrQueuePacingUs == sequenceSum && mixed.vrrPreparationUs == sequenceSum,
