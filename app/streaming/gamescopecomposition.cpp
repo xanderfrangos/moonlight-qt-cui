@@ -29,8 +29,13 @@ bool GamescopeComposition::runCommand(const QStringList& arguments, QString& out
             output = "gamescopectl and an installed host bridge are unavailable";
             return false;
         }
-        args = {"env", "GAMESCOPE_WAYLAND_DISPLAY=" + qEnvironmentVariable("GAMESCOPE_WAYLAND_DISPLAY"),
-                "XDG_RUNTIME_DIR=" + qEnvironmentVariable("XDG_RUNTIME_DIR"), "gamescopectl"};
+        // Built with operator<< because a mixed const char*/QString brace
+        // list is ambiguous on the Steam Link SDK's Qt 5.
+        args = QStringList()
+            << "env"
+            << "GAMESCOPE_WAYLAND_DISPLAY=" + qEnvironmentVariable("GAMESCOPE_WAYLAND_DISPLAY")
+            << "XDG_RUNTIME_DIR=" + qEnvironmentVariable("XDG_RUNTIME_DIR")
+            << "gamescopectl";
         args.append(arguments);
     }
     QProcess process;

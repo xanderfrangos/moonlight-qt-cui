@@ -1,4 +1,5 @@
 #include "profile.h"
+#include "jsoninteger.h"
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -24,13 +25,13 @@ bool loadProfile(const QString& path, const QString& key, Reserve& reserve)
 {
     if (key.isEmpty()) return false;
     auto entry = read(path).value(key).toObject();
-    const auto age = QDateTime::currentSecsSinceEpoch() - entry.value("updated").toInteger();
+    const auto age = QDateTime::currentSecsSinceEpoch() - jsonInteger(entry.value("updated"));
     if (age < 0 || age > 14 * 86400) return false;
     const auto values = entry.value("weights").toArray();
     std::vector<int64_t> words;
     for (const auto& value : values) {
-        if (!value.isDouble() || value.toDouble() != double(value.toInteger(-1))) return false;
-        words.push_back(value.toInteger(-1));
+        if (!value.isDouble() || value.toDouble() != double(jsonInteger(value, -1))) return false;
+        words.push_back(jsonInteger(value, -1));
     }
     Reserve restored(reserve.version());
     if (!restored.loadProfile(words)) return false;
@@ -48,10 +49,10 @@ bool saveProfile(const QString& path, const QString& key, const Reserve& reserve
     auto profiles = read(path);
     const auto now = QDateTime::currentSecsSinceEpoch();
     const auto oldEntry = profiles.value(key).toObject();
-    const auto previous = oldEntry.value("updated").toInteger();
+    const auto previous = jsonInteger(oldEntry.value("updated"));
     if (previous > 0 && now >= previous && now - previous < 60) return false;
     for (const auto& name : profiles.keys()) {
-        const auto age = now - profiles.value(name).toObject().value("updated").toInteger();
+        const auto age = now - jsonInteger(profiles.value(name).toObject().value("updated"));
         if (age < 0 || age > 14 * 86400) profiles.remove(name);
     }
     profiles.remove(key);
@@ -59,7 +60,7 @@ bool saveProfile(const QString& path, const QString& key, const Reserve& reserve
         QString oldest;
         qint64 oldestTime = now + 1;
         for (auto i = profiles.begin(); i != profiles.end(); ++i) {
-            const auto time = i.value().toObject().value("updated").toInteger();
+            const auto time = jsonInteger(i.value().toObject().value("updated"));
             if (time < oldestTime) { oldestTime = time; oldest = i.key(); }
         }
         if (oldest.isEmpty()) return false;
@@ -74,8 +75,8 @@ bool saveProfile(const QString& path, const QString& key, const Reserve& reserve
     std::vector<int64_t> oldWords;
     bool integral = true;
     for (const auto& v : oldEntry.value("weights").toArray()) {
-        integral = integral && v.isDouble() && v.toDouble() == double(v.toInteger(-1));
-        oldWords.push_back(v.toInteger(-1));
+        integral = integral && v.isDouble() && v.toDouble() == double(jsonInteger(v, -1));
+        oldWords.push_back(jsonInteger(v, -1));
     }
     const bool oldValid = integral && previous > 0 && now >= previous && now - previous < 86400 &&
         old.loadProfile(oldWords);
