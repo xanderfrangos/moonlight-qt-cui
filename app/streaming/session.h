@@ -123,7 +123,7 @@ public:
         return m_OverlayManager;
     }
 
-    // Shows or hides the stats text and its graphs together
+    // Shows or hides the configured arrangement of stats overlays.
     void toggleStatsOverlay();
     bool clientPacingWarningsEnabled() const { return m_Preferences->connectionWarnings; }
     bool hevcPacingAlternative() const { return m_HevcPacingAlternative; }
@@ -158,6 +158,7 @@ signals:
     void launchWarningsChanged();
 
 private:
+    void setStatsOverlayEnabled(bool enabled);
     void exec();
 
     bool startConnectionAsync();

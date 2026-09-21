@@ -2354,6 +2354,53 @@ Flickable {
                                   qsTr("You can toggle it at any time while streaming using Ctrl+Alt+Shift+S or Select+L1+R1+X.") + "\n\n" +
                                   qsTr("The performance overlay is not supported on Steam Link or Raspberry Pi.")
                 }
+
+                Column {
+                    width: parent.width
+                    spacing: 5
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("Performance stats arrangement")
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                    }
+
+                    AutoResizingComboBox {
+                        id: performanceOverlayModeComboBox
+                        textRole: "text"
+                        model: ListModel {
+                            id: performanceOverlayModeListModel
+                            ListElement {
+                                text: qsTr("Text only")
+                                val: StreamingPreferences.POM_TEXT_ONLY
+                            }
+                            ListElement {
+                                text: qsTr("Text and graphs")
+                                val: StreamingPreferences.POM_TEXT_AND_GRAPHS
+                            }
+                            ListElement {
+                                text: qsTr("Graphs only")
+                                val: StreamingPreferences.POM_GRAPHS_ONLY
+                            }
+                        }
+                        currentIndex: {
+                            for (var i = 0; i < performanceOverlayModeListModel.count; i++) {
+                                if (performanceOverlayModeListModel.get(i).val === StreamingPreferences.performanceOverlayMode) {
+                                    return i
+                                }
+                            }
+                            return 1
+                        }
+                        onActivated: {
+                            StreamingPreferences.performanceOverlayMode = performanceOverlayModeListModel.get(currentIndex).val
+                        }
+                        Component.onCompleted: {
+                            recalculateWidth()
+                            languageChanged.connect(recalculateWidth)
+                        }
+                    }
+                }
             }
         }
     }

@@ -1767,12 +1767,19 @@ static void getWindowPixelSize(SDL_Window* window, int& width, int& height)
 
 void Session::toggleStatsOverlay()
 {
-    // The text stats and the graphs are one overlay as far as the user is
-    // concerned, so they come up and go away together.
-    const bool enabled = !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug);
+    const bool enabled = !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug) &&
+                         !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebugGraphs);
 
-    m_OverlayManager.setOverlayState(Overlay::OverlayDebug, enabled);
-    m_OverlayManager.setOverlayState(Overlay::OverlayDebugGraphs, enabled);
+    setStatsOverlayEnabled(enabled);
+}
+
+void Session::setStatsOverlayEnabled(bool enabled)
+{
+    const int mode = m_Preferences->performanceOverlayMode;
+    m_OverlayManager.setOverlayState(Overlay::OverlayDebug,
+                                     enabled && mode != StreamingPreferences::POM_GRAPHS_ONLY);
+    m_OverlayManager.setOverlayState(Overlay::OverlayDebugGraphs,
+                                     enabled && mode != StreamingPreferences::POM_TEXT_ONLY);
 }
 
 void Session::refreshStatusOverlay()
@@ -2328,9 +2335,8 @@ void Session::exec()
     // Start rich presence to indicate we're in game
     RichPresenceManager presence(*m_Preferences, m_App.name);
 
-    // Toggle the stats overlay if requested by the user
-    m_OverlayManager.setOverlayState(Overlay::OverlayDebug, m_Preferences->showPerformanceOverlay);
-    m_OverlayManager.setOverlayState(Overlay::OverlayDebugGraphs, m_Preferences->showPerformanceOverlay);
+    // Show the configured stats overlay arrangement if requested by the user.
+    setStatsOverlayEnabled(m_Preferences->showPerformanceOverlay);
 
     // Switch to async logging mode when we enter the SDL loop
     StreamUtils::enterAsyncLoggingMode();

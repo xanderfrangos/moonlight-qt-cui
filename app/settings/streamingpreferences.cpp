@@ -65,6 +65,7 @@
 #define SER_PACKETSIZE "packetsize"
 #define SER_DETECTNETBLOCKING "detectnetblocking"
 #define SER_SHOWPERFOVERLAY "showperfoverlay"
+#define SER_PERFOVERLAYMODE "performanceoverlaymode"
 #define SER_SWAPMOUSEBUTTONS "swapmousebuttons"
 #define SER_MUTEONFOCUSLOSS "muteonfocusloss"
 #define SER_BACKGROUNDGAMEPAD "backgroundgamepad"
@@ -208,6 +209,14 @@ void StreamingPreferences::reload()
     gamepadMouse = settings.value(SER_GAMEPADMOUSE, true).toBool();
     detectNetworkBlocking = settings.value(SER_DETECTNETBLOCKING, true).toBool();
     showPerformanceOverlay = settings.value(SER_SHOWPERFOVERLAY, false).toBool();
+    performanceOverlayMode = POM_TEXT_AND_GRAPHS;
+    if (settings.contains(SER_PERFOVERLAYMODE)) {
+        bool validMode = false;
+        const int savedMode = settings.value(SER_PERFOVERLAYMODE).toInt(&validMode);
+        if (validMode && savedMode >= POM_TEXT_ONLY && savedMode <= POM_GRAPHS_ONLY) {
+            performanceOverlayMode = savedMode;
+        }
+    }
     packetSize = settings.value(SER_PACKETSIZE, 0).toInt();
     swapMouseButtons = settings.value(SER_SWAPMOUSEBUTTONS, false).toBool();
     muteOnFocusLoss = settings.value(SER_MUTEONFOCUSLOSS, false).toBool();
@@ -444,6 +453,7 @@ void StreamingPreferences::save()
     settings.setValue(SER_PACKETSIZE, packetSize);
     settings.setValue(SER_DETECTNETBLOCKING, detectNetworkBlocking);
     settings.setValue(SER_SHOWPERFOVERLAY, showPerformanceOverlay);
+    settings.setValue(SER_PERFOVERLAYMODE, performanceOverlayMode);
     settings.setValue(SER_AUDIOCFG, static_cast<int>(audioConfig));
     settings.setValue(SER_HDR, enableHdr);
     settings.setValue(SER_YUV444, enableYUV444);
