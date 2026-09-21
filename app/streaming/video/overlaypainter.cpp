@@ -416,7 +416,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
         { "Frame queue depth", &StatsGraphPoint::queueDepth,
           nullptr, nullptr,
           QColor(0x9C, 0xCC, 0x65), "", 0, 3 },
-        { "Dropped by network jitter", &StatsGraphPoint::jitterDroppedFrames,
+        { "Dropped by jitter or late", &StatsGraphPoint::jitterDroppedFrames,
           nullptr, nullptr,
           QColor(0xFF, 0xA7, 0x26), "", 0, 4 },
     };
