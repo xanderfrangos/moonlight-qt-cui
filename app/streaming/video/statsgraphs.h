@@ -111,7 +111,7 @@ public:
     // manager, and a GPU texture rebuild in the renderer, all while the render
     // thread contends for the same overlay state lock, so doing it ten times a
     // second is far more pressure than any other overlay in this app applies.
-    static constexpr int k_RepaintIntervalMs = 250;
+    static constexpr int k_RepaintIntervalMs = 200;
     static constexpr int k_WindowSeconds = 10;
     static constexpr int k_MaxSamples = (k_WindowSeconds * 1000) / k_SampleIntervalMs;
 
