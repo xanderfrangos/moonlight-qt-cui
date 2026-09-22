@@ -2506,8 +2506,10 @@ An average FPS counter alone can conceal all of these.
 
 ### Stats history graphs (2026-09-20)
 
-The stats hotkey (keyboard, gamepad combo, and the gamepad menu item) now
-cycles off -> text -> text plus graphs -> off through `Session::cycleStatsOverlay()`.
+The performance settings select one of three saved arrangements: text only,
+text plus graphs (the default), or graphs only. The stats hotkey (keyboard,
+gamepad combo, and the gamepad menu item) toggles the selected arrangement as a
+unit through `Session::toggleStatsOverlay()`.
 The graphs are a second overlay type, `OverlayDebugGraphs`, anchored top right
 opposite the existing text, and are painted with QPainter by
 `Overlay::Painter::paintStatsGraphs()` at a fixed pixel size, matching the fixed
