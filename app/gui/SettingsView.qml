@@ -1086,7 +1086,7 @@ Flickable {
                 CheckBox {
                     id: enableHdr
                     width: parent.width
-                    text: qsTr("Enable HDR")
+                    text: qsTr("Enable HDR / 10-bit color")
                     font.pointSize: 12
 
                     enabled: SystemProperties.supportsHdr
@@ -1101,7 +1101,7 @@ Flickable {
                     ToolTip.timeout: 5000
                     ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: enabled ?
-                                      qsTr("The stream will be HDR-capable, but some games may require an HDR monitor on your host PC to enable HDR mode.")
+                                      qsTr("The stream will be HDR-capable, but some games may require an HDR monitor on your host PC to enable HDR mode. Alternatively, enables 10-bit SDR if enabled in Vibeshine or Vibepollo.")
                                     :
                                       qsTr("HDR streaming is not supported on this PC.")
                 }
@@ -1109,7 +1109,7 @@ Flickable {
                 Column {
                     width: parent.width
                     spacing: 5
-                    visible: SystemProperties.supportsVideoDithering
+                    visible: SystemProperties.supportsVideoDithering && enableHdr.checked
 
                     Label {
                         width: parent.width
@@ -1196,7 +1196,7 @@ Flickable {
                     Label {
                         width: parent.width
                         wrapMode: Text.Wrap
-                        text: qsTr("Only affects 10-bit streams. Reconnect the stream after changing this setting.")
+                        text: qsTr("Only affects 10-bit SDR streams. Reconnect the stream after changing this setting.")
                     }
                 }
 
@@ -1272,7 +1272,7 @@ Flickable {
                     Label {
                         width: parent.width
                         wrapMode: Text.Wrap
-                        text: qsTr("Rebuilds gradients before they are reduced for output, so unlike dithering it can also reduce banding that came from the host. Reconnect the stream after changing this setting.")
+                        text: qsTr("Rebuilds gradients before they are reduced for output, so unlike dithering it can also reduce banding that came from the host. Works best with 10-bit SDR streams. Reconnect the stream after changing this setting.")
                     }
                 }
             }
