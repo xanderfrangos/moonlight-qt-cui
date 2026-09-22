@@ -955,6 +955,22 @@ void testPrepareOnArrivalSpendsTheCushion()
 
 void testProductionPreparationUsesAvailableSlack()
 {
+    // Production spends the existing playout interval on preparation
+    // while retaining the dynamic queue and its independent GPU lead.
+    for (int mode : {0, 1, 2}) {
+        auto session = config(120, 120);
+        session.latencyMode = mode;
+        const auto policy = vrrTimingParametersForSession(session);
+        expect(policy.playoutPrepareOnArrival == 1 &&
+                   policy.renderStartAfterSubmissionUs == 0 &&
+                   policy.renderStartPreserveLearnedLead == 1,
+               "production must spend the playout cushion on preparation without squeezing learned lead");
+        expect(policy.playoutResponsiveBuffer == 7 &&
+                   policy.playoutSerialServiceGate == 2 &&
+                   policy.playoutSourceMappingDecoderOutput == 0 &&
+                   policy.playoutSmoothingGainPerMille == 150,
+               "early preparation must retain dynamic buffering, immutable mapping and current smoothing");
+    }
     // An asynchronous renderer cannot learn a render-ahead budget from a CPU
     // completion wait that it deliberately avoids. Give it the existing
     // playout interval from the first frame, including after a decode stall,
@@ -963,6 +979,8 @@ void testProductionPreparationUsesAvailableSlack()
         auto session = config(120, 120);
         session.latencyMode = mode;
         auto policy = vrrTimingParametersForSession(session);
+        policy.playoutPrepareOnArrival = 1;
+        policy.renderStartAfterSubmissionUs = 0;
         policy.sourcePlayoutDelayUs = 10000;
         policy.playoutDelayAdaptive = 0;
         auto delayedPolicy = policy;
@@ -5079,7 +5097,7 @@ void testMeanMissBuffer()
         session.latencyMode = mode;
         const auto policy = vrrTimingParametersForSession(session);
         expect(policy.playoutResponsiveBuffer == 7 &&
-            policy.playoutSourceMappingDecoderOutput == 1 &&
+            policy.playoutSourceMappingDecoderOutput == 0 &&
             policy.playoutSerialServiceGate == 2 &&
             policy.playoutRecentPressureRelease == 1 &&
             policy.playoutMeanMissHoldUs == (mode == 2 ? 6000000 : mode == 1 ? 8000000 : 10000000) &&

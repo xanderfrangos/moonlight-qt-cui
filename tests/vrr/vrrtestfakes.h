@@ -22,7 +22,7 @@ extern "C" {
 #include <thread>
 #include <vector>
 
-class FakeVrrFramePresenter final : public IVrrFramePresenter {
+class FakeVrrFramePresenter : public IVrrFramePresenter {
 public:
     bool canLatchAdaptivePresent() const override
     {
@@ -339,6 +339,12 @@ public:
         return m_Condition.wait_for(lock, std::chrono::milliseconds(2000), [&] {
             return m_DecodeWaitCount >= count;
         });
+    }
+
+    size_t decodeWaitCount() const
+    {
+        std::unique_lock<std::mutex> lock(m_Mutex);
+        return m_DecodeWaitCount;
     }
 
     bool waitForPresentCount(size_t count,

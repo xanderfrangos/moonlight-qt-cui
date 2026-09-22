@@ -247,7 +247,7 @@ void VrrReplayConfigTest::offsetRecoveryPolicyRoundTrip()
     QCOMPARE(restored.playoutOffsetSlewUsPerSecond, uint64_t(2400));
     QCOMPARE(restored.playoutOffsetSourceClock, uint64_t(1));
     QCOMPARE(restored.playoutOffsetMaximumStepUs, uint64_t(100));
-    QCOMPARE(restored.playoutSourceMappingDecoderOutput, uint64_t(1));
+    QCOMPARE(restored.playoutSourceMappingDecoderOutput, uint64_t(0));
     QCOMPARE(restored.playoutSerialServiceGate, uint64_t(2));
     QCOMPARE(restored.playoutRecentPressureRelease, uint64_t(1));
     QVERIFY(vrrReplayParameterNames().contains("controller.playout_offset_cadence_gate"));
@@ -2243,6 +2243,20 @@ void VrrReplayConfigTest::busyWorkerReadinessFloor()
 
 void VrrReplayConfigTest::decodeReadinessOrder()
 {
+    // Preparation can complete before dequeue, or while the pacer waits for
+    // its ticket. It cannot claim completion after the scheduling decision.
+    QVERIFY(vrrPreparedReadinessOrderValid(
+        1000, 1010, 5000, 5100, 2200, 1100, 2200, 1000, 2210, 2400, 4900));
+    QVERIFY(vrrPreparedReadinessOrderValid(
+        1000, 1010, 1200, 5100, 2200, 1100, 2200, 1000, 2210, 2400, 4900));
+    QVERIFY(!vrrPreparedReadinessOrderValid(
+        1000, 1010, 1200, 4800, 2200, 1100, 2200, 1000, 2210, 2400, 4900));
+    QVERIFY(!vrrPreparedReadinessOrderValid(
+        1000, 1010, 1200, 5100, 2200, 1100, 2200, 1200, 2210, 2400, 4900));
+    QVERIFY(!vrrPreparedReadinessOrderValid(
+        1000, 1010, 1200, 5100, 2200, 1100, 2200, 1000, 2210, 5000, 4900));
+    QVERIFY(vrrPreparedReadinessOrderValid(
+        1000, 1010, 1200, 5100, 1000, 1100, 1000, 100, 1210, 2400, 4900));
     QVERIFY(vrrDecodeReadinessOrderValid(1000, 1000, 1020, 1030, 1040, 0, true));
     QVERIFY(vrrDecodeReadinessOrderValid(1000, 2200, 1020, 1030, 2210, 1100, true));
     QVERIFY(vrrDecodeReadinessOrderValid(1000, 1000, 1020, 0, 0, 0, false));

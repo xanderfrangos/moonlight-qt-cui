@@ -81,10 +81,9 @@ namespace {
 // invitation to hold the pacer indefinitely.
 constexpr uint64_t kVulkanGpuReadyTimeoutUs = 50000;
 constexpr unsigned int kVulkanGpuReadyPollLimit = 100000;
-// PACER_MAX_OUTSTANDING_FRAMES reserves two decoder surfaces beyond its
-// three-frame queue for the worker/current backend lifetime. Do not retain a
-// third source here or the asynchronous path can exhaust that allowance.
-constexpr size_t kVulkanRetainedSourceFrameLimit = 2;
+// Allow up to four retained source frames in flight on the GPU to prevent
+// capacity stalls during high frame rates, while bounding memory usage.
+constexpr size_t kVulkanRetainedSourceFrameLimit = 4;
 #endif
 
 const char* vulkanPresentModeName(VkPresentModeKHR mode)
@@ -251,6 +250,7 @@ PlVkRenderer::PlVkRenderer(AVHWDeviceType hwDeviceType, IFFmpegRenderer *backend
 
 PlVkRenderer::~PlVkRenderer()
 {
+    stopFramePreparation();
     // A VRR worker can be stopped between preparation and presentation. A
     // started libplacebo frame owns an internal swapchain mutex, so release it
     // before any of the Vulkan objects below are destroyed.
@@ -324,6 +324,13 @@ PlVkRenderer::~PlVkRenderer()
         // Hold DRM master in case the Vulkan implmentation wants to restore DRM state
         DrmMasterLocker locker;
 
+#ifdef Q_OS_LINUX
+        pl_renderer_destroy(&m_PreparationRenderer);
+        if (m_Vulkan) {
+            for (auto& texture : m_PreparationTextures) pl_tex_destroy(m_Vulkan->gpu, &texture);
+            for (auto& texture : m_PreparationFreeTextures) pl_tex_destroy(m_Vulkan->gpu, &texture);
+        }
+#endif
         pl_renderer_destroy(&m_Renderer);
         pl_swapchain_destroy(&m_Swapchain);
 #ifdef Q_OS_DARWIN
@@ -1149,7 +1156,7 @@ bool PlVkRenderer::prepareDecoderContext(AVCodecContext *context, AVDictionary *
     return true;
 }
 
-bool PlVkRenderer::mapAvFrameToPlacebo(const AVFrame *frame, pl_frame* mappedFrame)
+bool PlVkRenderer::mapAvFrameToPlacebo(const AVFrame *frame, pl_frame* mappedFrame, pl_tex* textures)
 {
 #ifdef Q_OS_DARWIN
     if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
@@ -1162,7 +1169,7 @@ bool PlVkRenderer::mapAvFrameToPlacebo(const AVFrame *frame, pl_frame* mappedFra
     {
         pl_avframe_params mapParams = {};
         mapParams.frame = frame;
-        mapParams.tex = m_Textures;
+        mapParams.tex = textures ? textures : m_Textures;
         if (!pl_map_avframe_ex(m_Vulkan->gpu, mappedFrame, &mapParams)) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "pl_map_avframe_ex() failed");
@@ -1450,6 +1457,9 @@ bool PlVkRenderer::acquirePendingSwapchainFrame(
     }
 
     m_HasPendingSwapchainFrame = true;
+#ifdef Q_OS_LINUX
+    updatePreparationTarget();
+#endif
 
 #ifdef PLVK_USE_EARLY_RENDER_TO_WAIT
     // Preserve the MoltenVK drawable-acquisition workaround for the rare
@@ -1550,18 +1560,10 @@ uint64_t PlVkRenderer::waitForDecode(AVFrame* frame)
     }
     auto vaDeviceContext = (AVVAAPIDeviceContext*)hwFrameCtx->device_ctx->hwctx;
     const auto surface = static_cast<VASurfaceID>(reinterpret_cast<uintptr_t>(frame->data[3]));
-    VASurfaceStatus before = VASurfaceRendering;
-    VAStatus queryStatus = VA_STATUS_ERROR_UNIMPLEMENTED;
-    if (m_GpuTrace) {
-        const auto queryCpu = GpuTrace::ThreadSample::capture();
-        const auto queryBegin = LiGetMicroseconds();
-        queryStatus = vaQuerySurfaceStatus(vaDeviceContext->display, surface, &before);
-        const auto queryEnd = LiGetMicroseconds();
-        m_GpuTrace->recordThreadSpan({"decode_query_cpu", frame->pts, uint64_t(frame->pkt_dts),
-            queryBegin, queryEnd, surface, queryStatus}, queryCpu);
-        m_GpuTrace->record({"decode_wait_status", frame->pts, uint64_t(frame->pkt_dts),
-            queryBegin, queryEnd, surface, queryStatus, before});
-    }
+    // Do not probe VA status for diagnostics here. On the Deck this query
+    // can block for milliseconds behind driver work, before the required
+    // synchronization even begins. Time the existing sync without adding
+    // another driver call to the frame-delivery path.
     const auto cpuBeforeSync = m_GpuTrace ? GpuTrace::ThreadSample::capture() : GpuTrace::ThreadSample{};
     if (m_GpuTrace) {
         const auto now = LiGetMicroseconds();
@@ -1838,6 +1840,290 @@ bool PlVkRenderer::waitForVrrGpuReady(VrrPresentFeedback& feedback)
 #endif
 }
 
+#ifdef Q_OS_LINUX
+struct PlVkRenderer::PreparedImage : VrrPreparedFrame {
+    explicit PreparedImage(PlVkRenderer* renderer) : owner(renderer) {}
+    ~PreparedImage() override
+    {
+        av_frame_free(&source);
+        if (texture) {
+            QMutexLocker lock(&owner->m_PreparationLock);
+            owner->m_PreparationFreeTextures.push_back(texture);
+        }
+    }
+    PlVkRenderer* owner;
+    AVFrame* source = nullptr;
+    pl_tex texture = nullptr;
+    pl_tex_params params = {};
+    pl_swapchain_frame target = {};
+    pl_color_space sourceColor = {};
+    std::atomic_bool handedOff { false };
+};
+
+void PlVkRenderer::updatePreparationTarget()
+{
+    QMutexLocker lock(&m_PreparationLock);
+    // Only the VAAPI Mailbox path diagnosed here opts into offscreen staging.
+    // Other backends retain their existing synchronization and native policy.
+    const auto texture = m_SwapchainFrame.fbo;
+    // Experimental: the extra render/copy completion waits regress 4K
+    // throughput. Keep the direct asynchronous retained-source path as the
+    // default until staged preparation demonstrates a live benefit.
+    m_PreparationTargetValid = qEnvironmentVariableIntValue("MOONLIGHT_VRR_OFFSCREEN_PREPARATION") == 1 &&
+        m_VrrRequested && !m_PreparationStopping &&
+        m_VrrAdaptivePresentMode == VK_PRESENT_MODE_MAILBOX_KHR &&
+        m_Vulkan->gpu->limits.thread_safe && texture && texture->params.format &&
+        (texture->params.format->caps & PL_FMT_CAP_BLITTABLE);
+    if (!m_PreparationTargetValid) return;
+    m_PreparationTarget = m_SwapchainFrame;
+    m_PreparationTarget.fbo = nullptr; // Never hand a swapchain texture across threads.
+    m_PreparationTextureParams = {};
+    m_PreparationTextureParams.w = texture->params.w;
+    m_PreparationTextureParams.h = texture->params.h;
+    m_PreparationTextureParams.format = texture->params.format;
+    m_PreparationTextureParams.renderable = true;
+    m_PreparationTextureParams.blit_src = true;
+}
+
+int PlVkRenderer::preparationThreadProc(void* opaque)
+{
+    auto self = static_cast<PlVkRenderer*>(opaque);
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH);
+    for (;;) {
+        std::shared_ptr<PreparedImage> image;
+        {
+            QMutexLocker lock(&self->m_PreparationLock);
+            while (!self->m_PreparationStopping && self->m_PreparationQueue.empty())
+                self->m_PreparationChanged.wait(&self->m_PreparationLock);
+            if (self->m_PreparationStopping) break;
+            image = std::move(self->m_PreparationQueue.front());
+            self->m_PreparationQueue.pop_front();
+            self->m_PreparingImage = image;
+        }
+        if (!image->cancelled()) self->prepareImage(image);
+        else image->complete(false);
+        {
+            QMutexLocker lock(&self->m_PreparationLock);
+            // Do not put the next expensive render ahead of the current
+            // image's final swapchain copy on the shared GPU queue.
+            while (!self->m_PreparationStopping && !image->cancelled() &&
+                    image->timing.readyUs && !image->handedOff.load())
+                self->m_PreparationChanged.wait(&self->m_PreparationLock, 1);
+            self->m_PreparingImage.reset();
+        }
+    }
+    return 0;
+}
+
+void PlVkRenderer::prepareImage(const std::shared_ptr<PreparedImage>& image)
+{
+    image->timing.startUs = LiGetMicroseconds();
+    image->timing.decodeWaitUs = waitForDecode(image->source);
+    image->timing.decodeReadyUs = image->timing.decodeWaitUs > 200 ?
+        LiGetMicroseconds() : uint64_t(image->source->pkt_dts);
+    if (image->cancelled() ||
+            m_VrrFallbackReason.load() != VrrFallbackReason::NoFallback) {
+        image->complete(false);
+        return;
+    }
+    image->timing.renderStartUs = LiGetMicroseconds();
+    if (!m_PreparationRenderer)
+        m_PreparationRenderer = pl_renderer_create(m_Log, m_Vulkan->gpu);
+    {
+        QMutexLocker lock(&m_PreparationLock);
+        if (!m_PreparationFreeTextures.empty()) {
+            image->texture = m_PreparationFreeTextures.back();
+            m_PreparationFreeTextures.pop_back();
+        }
+    }
+    if (!m_PreparationRenderer ||
+            !pl_tex_recreate(m_Vulkan->gpu, &image->texture, &image->params)) {
+        image->complete(false);
+        return;
+    }
+    image->target.fbo = image->texture;
+    pl_frame source = {}, target = {};
+    if (!mapAvFrameToPlacebo(image->source, &source, m_PreparationTextures)) {
+        image->complete(false);
+        return;
+    }
+    image->sourceColor = source.color;
+    pl_frame_from_swapchain(&target, &image->target);
+    const bool rendered = renderMappedImage(m_PreparationRenderer, source, target,
+                                             m_RenderParams);
+    pl_gpu_flush(m_Vulkan->gpu);
+    image->timing.renderEndUs = LiGetMicroseconds();
+    bool pending = true;
+    while ((pending = pl_tex_poll(m_Vulkan->gpu, image->texture, 1000000))) {
+        if (pl_gpu_is_failed(m_Vulkan->gpu) ||
+                LiGetMicroseconds() - image->timing.renderEndUs >= kVulkanGpuReadyTimeoutUs)
+            break;
+    }
+    if (pending || !rendered) {
+        // Even an abandoned output owns GPU reads of the decoder mapping.
+        // Drain those reads on this preparation thread before unmapping it.
+        pl_gpu_finish(m_Vulkan->gpu);
+    }
+    if (pending) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Vulkan VRR offscreen preparation exceeded its GPU completion bound");
+        m_VrrFallbackReason = VrrFallbackReason::AdaptivePresentationUnavailable;
+        queueRenderDeviceReset();
+    }
+    image->timing.readyUs = LiGetMicroseconds();
+    pl_unmap_avframe(m_Vulkan->gpu, &source);
+    if (m_GpuTrace) {
+        m_GpuTrace->record({"stage_render", image->source->pts,
+            uint64_t(image->source->pkt_dts), image->timing.renderStartUs,
+            image->timing.renderEndUs, 0, rendered});
+        m_GpuTrace->record({"stage_output_ready", image->source->pts,
+            uint64_t(image->source->pkt_dts), image->timing.renderEndUs,
+            image->timing.readyUs, 0, !pending});
+    }
+    // The output is independent of its decoder surface now. Keeping this
+    // clone through the pacing hold would unnecessarily pin the decoder pool.
+    av_frame_free(&image->source);
+    image->complete(rendered && !pending && !image->cancelled() &&
+                    !pl_gpu_is_failed(m_Vulkan->gpu));
+}
+#endif
+
+std::shared_ptr<VrrPreparedFrame> PlVkRenderer::queueFramePreparation(AVFrame* frame, uint64_t)
+{
+#ifdef Q_OS_LINUX
+    if (!frame || frame->format != AV_PIX_FMT_VAAPI || frame->pkt_dts <= 0) return {};
+    std::shared_ptr<PreparedImage> evicted;
+    auto image = std::make_shared<PreparedImage>(this);
+    {
+        QMutexLocker lock(&m_PreparationLock);
+        if (!m_PreparationTargetValid || m_PreparationStopping) return {};
+        image->params = m_PreparationTextureParams;
+        image->target = m_PreparationTarget;
+        image->source = av_frame_clone(frame);
+        if (!image->source) return {};
+        if (!m_PreparationThread) {
+            m_PreparationThread = SDL_CreateThread(preparationThreadProc, "VRRPrepare", this);
+            if (!m_PreparationThread) return {};
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Vulkan VRR: bounded offscreen preparation enabled (three admitted waiting frames)");
+        }
+        if (m_PreparationQueue.size() >= 3) {
+            evicted = std::move(m_PreparationQueue.front());
+            m_PreparationQueue.pop_front();
+            evicted->cancel();
+            evicted->complete(false);
+        }
+        m_PreparationQueue.push_back(image);
+        m_PreparationChanged.wakeOne();
+    }
+    return image;
+#else
+    (void) frame;
+    return {};
+#endif
+}
+
+void PlVkRenderer::stopFramePreparation()
+{
+#ifdef Q_OS_LINUX
+    std::deque<std::shared_ptr<PreparedImage>> discarded;
+    {
+        QMutexLocker lock(&m_PreparationLock);
+        m_PreparationStopping = true;
+        if (m_PreparingImage) m_PreparingImage->cancel();
+        discarded.swap(m_PreparationQueue);
+        for (auto& image : discarded) {
+            image->cancel();
+            image->complete(false);
+        }
+        m_PreparationChanged.wakeAll();
+    }
+    if (m_PreparationThread) {
+        SDL_WaitThread(m_PreparationThread, nullptr);
+        m_PreparationThread = nullptr;
+    }
+#endif
+}
+
+VrrPrepareResult PlVkRenderer::activatePreparedFrame(
+    const std::shared_ptr<VrrPreparedFrame>& prepared, AVFrame* frame,
+    uint64_t decodeBoundary, const VrrPresentRequest& request)
+{
+#ifdef Q_OS_LINUX
+    (void) decodeBoundary;
+    (void) request;
+    const auto image = std::static_pointer_cast<PreparedImage>(prepared);
+    VrrPrepareResult result;
+    if (image->cancelled() || m_VrrSuspended ||
+            checkSupport() != VrrFallbackReason::NoFallback) return result;
+    m_GpuTracePts = frame->pts;
+    m_GpuTraceOutputUs = uint64_t(frame->pkt_dts);
+    // The preparation thread never touches the swapchain or its lock pair.
+    if (!pl_color_space_equal(&image->sourceColor, &m_LastColorspace)) {
+        m_LastColorspace = image->sourceColor;
+        pl_swapchain_colorspace_hint(m_Swapchain, &m_LastColorspace);
+    }
+    const bool windowChanged = m_VrrWindowChangePending.exchange(false);
+    if (windowChanged && m_GamescopeTiming) m_GamescopeTiming->reset();
+#ifdef HAS_WAYLAND
+    if (windowChanged && m_PresentationFeedback) m_PresentationFeedback->clear();
+#endif
+    const uint64_t acquireStart = LiGetMicroseconds();
+    if (!acquireVrrSwapchainFrame()) return result;
+    const uint64_t acquireEnd = LiGetMicroseconds();
+    const auto actual = m_SwapchainFrame.fbo;
+    if (actual->params.w != image->params.w || actual->params.h != image->params.h ||
+            actual->params.format != image->params.format ||
+            m_SwapchainFrame.flipped != image->target.flipped ||
+            !pl_color_space_equal(&m_SwapchainFrame.color_space, &image->target.color_space) ||
+            !pl_color_repr_equal(&m_SwapchainFrame.color_repr, &image->target.color_repr)) {
+        // The output epoch changed. Render the same source into the newly
+        // acquired target; never show an image encoded for the old output.
+        m_VrrPreparingFrame = true;
+        m_VrrRenderSucceeded = false;
+        renderFrame(frame);
+        m_VrrPreparingFrame = false;
+        pl_gpu_flush(m_Vulkan->gpu);
+    }
+    else {
+        pl_tex_blit_params blit = {};
+        blit.src = image->texture;
+        blit.dst = actual;
+        pl_tex_blit(m_Vulkan->gpu, &blit);
+        pl_gpu_flush(m_Vulkan->gpu);
+        m_VrrRenderSucceeded = true;
+    }
+    // Only the short final copy is left on the pacing thread. The expensive
+    // decode/render/completion stage overlaps the preceding frame's cadence hold.
+    m_VrrGpuReadyFeedback = {};
+    m_GpuTracePts = frame->pts;
+    m_GpuTraceOutputUs = uint64_t(frame->pkt_dts);
+    result.cancellationMaySubmit = true;
+    result.acquireUs = acquireEnd - acquireStart;
+    result.renderUs = LiGetMicroseconds() - acquireEnd;
+    result.timingValid = true;
+    result.prepared = m_VrrRenderSucceeded && waitForVrrGpuReady(m_VrrGpuReadyFeedback);
+    if (!result.prepared &&
+            ((m_VrrGpuReadyFeedback.gpuReadyWaitResultValid &&
+              m_VrrGpuReadyFeedback.gpuReadyWaitResult == 1) ||
+             pl_gpu_is_failed(m_Vulkan->gpu))) {
+        m_VrrFallbackReason = VrrFallbackReason::AdaptivePresentationUnavailable;
+        queueRenderDeviceReset();
+    }
+    if (m_GpuTrace) m_GpuTrace->record({"stage_copy", m_GpuTracePts,
+        m_GpuTraceOutputUs, acquireEnd, LiGetMicroseconds(), 0, result.prepared});
+    result.feedback = m_VrrGpuReadyFeedback;
+    result.sourceFrameReusable = result.prepared;
+    m_VrrFramePrepared = result.prepared;
+    image->handedOff.store(true);
+    m_PreparationChanged.wakeAll();
+    return result;
+#else
+    (void) prepared;
+    return prepareFrame(frame, decodeBoundary, request);
+#endif
+}
+
 VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
                                             uint64_t decodeBoundary)
 {
@@ -1949,22 +2235,23 @@ VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
     }
 
 #ifdef Q_OS_LINUX
-    // VAAPI readiness was established before mapping, and the mapped source
-    // remains owned until its Vulkan reads retire. libplacebo's swapchain
+    // Restore VRR14's asynchronous hardware-render handoff. Decode readiness
+    // is established by the import path, and a retained mapped source remains
+    // owned until its Vulkan reads retire. libplacebo's swapchain
     // submission signals a render-complete semaphore that vkQueuePresentKHR
     // waits on; a CPU output wait is not needed for this handoff. Avoid
-    // serializing that wait with the next frame's vaSyncSurface(). The shared
-    // controller prepares on arrival so the GPU gets the existing target hold
-    // even when this path has no CPU completion sample to train a render lead.
-    // Mailbox provides native latch protection. Immediate still needs the
-    // completion check: a late GPU render must not bunch actual flips behind
-    // correctly spaced CPU submissions. Other imports/software keep it too.
-    const bool asynchronousVaapiSource =
-        frame->format == AV_PIX_FMT_VAAPI && m_VrrCurrentSourceRetained &&
-        canLatchAdaptivePresent();
+    // serializing that wait with the next frame's vaSyncSurface(). Rendering
+    // executes during the remaining target hold, using VRR14's render-start
+    // scheduling and the current controller's preserved preparation lead.
+    // The render-complete semaphore applies to every presentation mode, not
+    // just Mailbox. As in VRR14, CPU submission spacing is not proof of GPU
+    // completion or physical flip spacing. Keep the software/import fallback
+    // when no mapped source was retained; it must not release backing storage
+    // while GPU reads are outstanding.
+    const bool asynchronousHardwareSource = m_VrrCurrentSourceRetained;
     if (m_GpuTrace) m_GpuTrace->record({"output_wait_mode", m_GpuTracePts, m_GpuTraceOutputUs,
-        flushEndUs, flushEndUs, 0, asynchronousVaapiSource});
-    if (!asynchronousVaapiSource && !waitForVrrGpuReady(result.feedback)) {
+        flushEndUs, flushEndUs, 0, asynchronousHardwareSource});
+    if (!asynchronousHardwareSource && !waitForVrrGpuReady(result.feedback)) {
         m_VrrGpuReadyFeedback = result.feedback;
         result.cancellationMaySubmit = m_HasPendingSwapchainFrame;
         const bool gpuReadinessTimedOut =
@@ -2196,6 +2483,73 @@ bool PlVkRenderer::restoreFixedPresentation(VrrFallbackReason reason)
     return true;
 }
 
+bool PlVkRenderer::renderMappedImage(pl_renderer renderer, const pl_frame& source,
+                                     pl_frame targetFrame, const pl_render_params& params)
+{
+#ifdef Q_OS_LINUX
+    QMutexLocker renderLock(&m_ImageRenderLock);
+#endif
+    // Reserve enough space to avoid allocating under the overlay lock
+    pl_overlay_part overlayParts[Overlay::OverlayMax] = {};
+    std::vector<pl_overlay> overlays;
+    overlays.reserve(Overlay::OverlayMax);
+
+
+    // Take ownership of anything the overlay worker handed us and upload it
+    // here, where we own pl_gpu exclusively.
+    uploadPendingOverlays();
+
+    // m_Overlays[].overlay and hasOverlay belong to this thread alone, so
+    // collecting them needs no lock.
+    for (int i = 0; i < Overlay::OverlayMax; i++) {
+        if (m_Overlays[i].hasOverlay &&
+            Session::get()->getOverlayManager().isOverlayEnabled((Overlay::OverlayType)i)) {
+            // Position the overlay
+            overlayParts[i].src = { 0, 0, (float)m_Overlays[i].overlay.tex->params.w, (float)m_Overlays[i].overlay.tex->params.h };
+
+            int x, y, w, h;
+            Overlay::OverlayManager::getOverlayRect(Session::get()->getOverlayManager().getOverlayAnchor((Overlay::OverlayType)i),
+                                                    (int)overlayParts[i].src.x1, (int)overlayParts[i].src.y1,
+                                                    (int)targetFrame.crop.x1, (int)targetFrame.crop.y1,
+                                                    false, x, y, w, h);
+
+            overlayParts[i].dst.x0 = x;
+            overlayParts[i].dst.y0 = y;
+            overlayParts[i].dst.x1 = x + w;
+            overlayParts[i].dst.y1 = y + h;
+
+            m_Overlays[i].overlay.parts = &overlayParts[i];
+            m_Overlays[i].overlay.num_parts = 1;
+
+            overlays.push_back(m_Overlays[i].overlay);
+        }
+    }
+
+    SDL_Rect src;
+    src.x = source.crop.x0;
+    src.y = source.crop.y0;
+    src.w = source.crop.x1 - source.crop.x0;
+    src.h = source.crop.y1 - source.crop.y0;
+
+    SDL_Rect dst;
+    dst.x = targetFrame.crop.x0;
+    dst.y = targetFrame.crop.y0;
+    dst.w = targetFrame.crop.x1 - targetFrame.crop.x0;
+    dst.h = targetFrame.crop.y1 - targetFrame.crop.y0;
+
+    // Scale the video to the surface size while preserving the aspect ratio
+    StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
+
+    targetFrame.crop.x0 = dst.x;
+    targetFrame.crop.y0 = dst.y;
+    targetFrame.crop.x1 = dst.x + dst.w;
+    targetFrame.crop.y1 = dst.y + dst.h;
+
+    targetFrame.num_overlays = int(overlays.size());
+    targetFrame.overlays = overlays.data();
+    return pl_render_image(renderer, &source, &targetFrame, &params);
+}
+
 void PlVkRenderer::renderFrame(AVFrame *frame)
 {
     pl_frame mappedFrame = {}, targetFrame = {};
@@ -2234,62 +2588,7 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
         }
     }
 
-    // Reserve enough space to avoid allocating under the overlay lock
-    pl_overlay_part overlayParts[Overlay::OverlayMax] = {};
-    std::vector<pl_overlay> overlays;
-    overlays.reserve(Overlay::OverlayMax);
-
     pl_frame_from_swapchain(&targetFrame, &m_SwapchainFrame);
-
-    // Take ownership of anything the overlay worker handed us and upload it
-    // here, where we own pl_gpu exclusively.
-    uploadPendingOverlays();
-
-    // m_Overlays[].overlay and hasOverlay belong to this thread alone, so
-    // collecting them needs no lock.
-    for (int i = 0; i < Overlay::OverlayMax; i++) {
-        if (m_Overlays[i].hasOverlay &&
-            Session::get()->getOverlayManager().isOverlayEnabled((Overlay::OverlayType)i)) {
-            // Position the overlay
-            overlayParts[i].src = { 0, 0, (float)m_Overlays[i].overlay.tex->params.w, (float)m_Overlays[i].overlay.tex->params.h };
-
-            int x, y, w, h;
-            Overlay::OverlayManager::getOverlayRect(Session::get()->getOverlayManager().getOverlayAnchor((Overlay::OverlayType)i),
-                                                    (int)overlayParts[i].src.x1, (int)overlayParts[i].src.y1,
-                                                    (int)targetFrame.crop.x1, (int)targetFrame.crop.y1,
-                                                    false, x, y, w, h);
-
-            overlayParts[i].dst.x0 = x;
-            overlayParts[i].dst.y0 = y;
-            overlayParts[i].dst.x1 = x + w;
-            overlayParts[i].dst.y1 = y + h;
-
-            m_Overlays[i].overlay.parts = &overlayParts[i];
-            m_Overlays[i].overlay.num_parts = 1;
-
-            overlays.push_back(m_Overlays[i].overlay);
-        }
-    }
-
-    SDL_Rect src;
-    src.x = mappedFrame.crop.x0;
-    src.y = mappedFrame.crop.y0;
-    src.w = mappedFrame.crop.x1 - mappedFrame.crop.x0;
-    src.h = mappedFrame.crop.y1 - mappedFrame.crop.y0;
-
-    SDL_Rect dst;
-    dst.x = targetFrame.crop.x0;
-    dst.y = targetFrame.crop.y0;
-    dst.w = targetFrame.crop.x1 - targetFrame.crop.x0;
-    dst.h = targetFrame.crop.y1 - targetFrame.crop.y0;
-
-    // Scale the video to the surface size while preserving the aspect ratio
-    StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
-
-    targetFrame.crop.x0 = dst.x;
-    targetFrame.crop.y0 = dst.y;
-    targetFrame.crop.x1 = dst.x + dst.w;
-    targetFrame.crop.y1 = dst.y + dst.h;
 
 #ifndef PLVK_USE_EARLY_RENDER_TO_WAIT
     // For PLVK_USE_EARLY_RENDER_TO_WAIT, we already timed our early render in waitToRender()
@@ -2302,8 +2601,6 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
 #endif
 
     // Render the video image and overlays into the swapchain buffer
-    targetFrame.num_overlays = (int)overlays.size();
-    targetFrame.overlays = overlays.data();
     auto renderParams = m_RenderParams;
     if (m_GpuTrace && m_VrrPreparingFrame) {
         renderParams.info_callback = gpuRenderInfo;
@@ -2311,9 +2608,8 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
     }
     const auto renderCpu = m_GpuTrace ? GpuTrace::ThreadSample::capture() : GpuTrace::ThreadSample{};
     const auto renderStartUs = m_GpuTrace ? LiGetMicroseconds() : 0;
-    const bool renderSucceeded = pl_render_image(m_Renderer, &mappedFrame,
-                                                  &targetFrame,
-                                                  &renderParams);
+    const bool renderSucceeded = renderMappedImage(m_Renderer, mappedFrame,
+                                                    targetFrame, renderParams);
     if (m_GpuTrace && m_VrrPreparingFrame) m_GpuTrace->recordThreadSpan({"render_commands",
         m_GpuTracePts, m_GpuTraceOutputUs, renderStartUs, LiGetMicroseconds(), 0, renderSucceeded}, renderCpu);
     if (!renderSucceeded) {

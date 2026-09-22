@@ -13,6 +13,14 @@ does not change video timing or replay policy.
 Reference baseline: `06fae71f` (vrr17 branch), plus the client-warning and
 gradual backlog-recovery follow-up described below. This includes source ownership,
 buffer attribution and decode-wait starvation prevention (2026-09-20).
+The 2026-09-21 preparation-stage follow-up is based on `18602b1c`, including
+Gemini's decode-completion source mapping and preparation-on-arrival changes.
+Linux VAAPI/Mailbox has experimental offscreen preparation independently of the
+pacing thread, as described in section 7.2. Following live 4K throughput
+regressions, this requires `MOONLIGHT_VRR_OFFSCREEN_PREPARATION=1`; the default
+retains the direct asynchronous hardware-source path. Other backends retain their
+existing execution path. This changes execution overlap, not buffer ceilings
+or source cadence policy; physical smoothness still requires a live retest.
 Production now selects serial-service revision 2: the shared interval buffer
 compares workload with intended time over its qualified one-second window,
 rather than treating one slow frame as sustained overload. Deferred D3D GPU
@@ -21,7 +29,7 @@ verified pending at the final wait supplies readiness lateness. Historical
 revisions 0/1 remain available. See
 [service-gate correction](docs/vrr-service-gate-correction.md).
 Live GPU diagnostics now add a separate asynchronous CSV under existing deep
-tracing: VA surface status at the worker wait, CPU dependency
+tracing: CPU dependency
 spans, source-retirement bounds, output readiness before presentation, and
 libplacebo's delayed shader-duration history. Shader samples are not tagged to
 their originating frame and do not expose absolute GPU start times. See
@@ -29,13 +37,19 @@ their originating frame and do not expose absolute GPU start times. See
 schema or policy; the service-gate correction above changes production policy.
 GPU diagnostic revision 2 removes the decoder-thread surface-status query: live
 revision-1 captures showed it blocking behind another frame's decode synchronization.
-The worker-side query and remaining timing observations are retained for retesting.
+Revision 2 retained the worker-side query for retesting.
 Revision 3 timestamps existing packet send/receive, packet delivery/assembly and
 pacer handoff, associates output surfaces with frame IDs, and samples Linux
 thread CPU time/context switches around send/receive, VA sync/status and render
 commands. Decoder-thread instrumentation only reads metadata and OS counters;
 it performs no new driver calls. These spans expose CPU-versus-blocked time and
 cross-thread overlap, not internal driver locks or GPU engine execution times.
+Revision 4 removes the worker-side VA status query as well. The latest completed
+4K HEVC capture `20260921-005750-93776` recorded 1.05 ms mean and 7.62 ms p95
+inside that diagnostic call, before the required `vaSyncSurface` wait. Timing
+the existing synchronization preserves readiness and its measurements without
+adding this potentially blocking probe. This removes diagnostic driver work;
+some of its wait may move into synchronization, so FPS recovery is not implied.
 The current follow-up enables early preparation on both platforms and
 asynchronous VAAPI/Vulkan Mailbox output, described below. That follow-up still needs
 live validation; the baseline's latest high-bitrate run delivers about 100 FPS
@@ -1085,8 +1099,8 @@ successful IDR completion establishes valid reference state.
 | `receiveTimeUs` | Client monotonic microseconds | First packet arrival for the frame. Not host capture time. |
 | `enqueueTimeUs` / reassembled time | Client monotonic microseconds | Complete compressed frame assembled/queued. |
 | `decodeSubmitUs` | Client monotonic microseconds | Sampled immediately before FFmpeg packet submission. |
-| `decoderOutputUs` | Client monotonic microseconds | Immutable timestamp captured immediately when FFmpeg returns the decoded frame; production RTP-to-client mapping and client-processing reporting origin. |
-| `decodeCompleteUs` | Client monotonic microseconds | Conservative post-output readiness observation retained for historical policies. A material blocking wait advances it to the post-wait clock; production source mapping does not use it. |
+| `decoderOutputUs` | Client monotonic microseconds | Immutable timestamp captured immediately when FFmpeg returns the decoded frame; client-processing reporting origin. |
+| `decodeCompleteUs` | Client monotonic microseconds | Post-output readiness observation; anchors production RTP-to-client mapping so hardware decode duration is absorbed in the sender offset. |
 | `decodeSyncWaitUs` | Elapsed client microseconds | Explicit CPU time spent by the worker on a decoder/backend completion primitive. It is serial service and latency accounting, not a source-clock timestamp. A zero value does not exclude a GPU-queued dependency. |
 | Worker queue, decision, preparation, wait, submission times | Client monotonic microseconds | Distinct CPU-side lifecycle boundaries. |
 | Shared fence values | GPU ordering identities | Establish dependencies/completion; not elapsed time by themselves. |
@@ -1211,9 +1225,9 @@ resetting the codec merely because an image was not presented.
    or discontinuous stamps. Record `queue_stale` without a controller decision.
    The sole image remains eligible. Then dequeue the retained frame.
 2. Check stop/suspend state and establish this frame's decode dependency. Record
-   any explicit CPU wait as serial service. Production keeps `decoderOutputUs`
-   as the source-mapping and stale-age boundary even when a later readiness
-   observation exists.
+   any explicit CPU wait as serial service. Production at `18602b1c` maps from
+   decode completion; immutable `decoderOutputUs` remains the full-latency
+   origin. Historical captured parameters can instead select decoder output.
 3. Ask `VrrTimingController::schedule()` for the target, render-start deadline,
    latch request, and diagnostics using the current monotonic time.
 4. Apply stale replacement policy when newer work is available.
@@ -1242,6 +1256,78 @@ resetting the codec merely because an image was not presented.
    the target already issued for this frame.
 12. Trace the outcome and retain/defer frame ownership as required by the presenter.
    Backend source retirement may continue after this worker step.
+
+With `MOONLIGHT_VRR_OFFSCREEN_PREPARATION=1` on Linux VAAPI/Mailbox,
+after the first ordinary frame establishes the real
+swapchain format, admitted frames also receive cancellable preparation tickets.
+A separate thread performs decode synchronization, source import, rendering
+to an offscreen texture, and output-completion polling. It owns its own
+libplacebo renderer and mapping textures; it never acquires a swapchain image.
+The pacing thread waits for the ticket before scheduling, then acquires the
+swapchain, copies the completed output, verifies that short copy has completed,
+and applies the ordinary target wait. Only after the copy does preparation of
+the next image proceed, preventing its GPU work from delaying that copy.
+
+The 2026-09-21 freeze correction is based on `abd6b82d`. A completed
+preparation ticket bypasses the two pre-render stale-replacement checks:
+rendering has already finished, and a newer queued source is not evidence of
+a ready replacement. Queue capacity and expiry still shed waiting work, and
+shutdown, suspension and output-epoch checks still cancel active work. This
+prevents a render/drop loop under sustained GPU load without altering source
+timestamps or hiding preparation latency. The completed live capture
+`20260921-002333-70409` reproduced exactly and contained only two presentations
+in 45.8 seconds, with 2,528 completed staged images rejected as stale. This was
+presentation starvation rather than a mutex deadlock. A worker regression
+exercises repeated 40 ms preparation with newer queued images in all three
+latency modes. It fails before the correction and passes afterward; all eleven
+VRR/backend/profile/GPU trace suites, replay help, native startup and the latest
+capture's exact replay check pass. Evidence is in `build/freeze-fix-validation/`.
+Actual GPU throughput and visible recovery still need a live retest.
+
+The subsequent `20260921-004719-85692` session log reported 54.17 and 31.90
+rendered FPS for its two 3840x2160 streams, despite 105.36 and 107.74 incoming
+FPS. Offscreen preparation introduces an extra target copy and CPU-observed
+completion waits before allowing the next preparation job. It is now opt-in;
+the default once again renders directly into the swapchain and retains the
+mapped source until GPU reads retire, using the presentation semaphore for
+completion. This removes the new staging cost; recovered 4K throughput still
+requires live verification. The completed-ticket starvation correction remains
+in place for experimental use.
+
+Tickets refer to the existing three waiting admissions plus the active image;
+they do not add another playout queue. Eviction and lifecycle discard cancel
+the corresponding ticket. The preparation queue is independently bounded to
+three pending jobs and one running job. Completed textures are reused. A
+cancelled job that already submitted GPU work retains its source mapping until
+the output completes; a timeout/error drains outstanding GPU work before
+unmapping. Shutdown interrupts ticket waits and joins preparation before
+renderer destruction. An output-size, representation, or colorspace mismatch
+rerenders the same source into the current swapchain instead of displaying an
+image encoded for the old output. Unsupported formats retain the existing path.
+
+The main trace appends `prepared_ahead` and `stage_*` fields to schema 5. Stage
+decode, render-command, and output-ready boundaries precede the scheduling
+decision and may precede pacing dequeue. The recorded pacing-thread decode wait
+remains zero for these frames. Aggregate statistics include actual stage decode
+wait and rendering service rather than counting them as queue residence.
+The GPU sidecar adds `stage_render` and `stage_output_ready` spans. The latter
+is a CPU completion observation, not a GPU execution timestamp or scanout proof.
+Replay validates stage ordering independently of direct-worker readiness.
+For direct-worker captures, serial-service revision 2 identifies post-wait
+clock semantics independently of the source-mapping selection, fixing the
+false exact-baseline rejection after Gemini restored decode-anchored mapping.
+Counterfactual replay retains recorded stage readiness; it cannot predict
+how changing GPU scheduling changes stage throughput or compositor service.
+
+Preparation-stage validation (2026-09-21): the native incremental release and
+offscreen startup help pass, as do eleven deterministic VRR/backend/profile/GPU
+trace suites. Nine exact replay checks pass, including prepared-frame shutdown
+while awaiting completion and the latest pre-change live capture
+`20260920-231030-28049`. The signed playout-offset parser and direct readiness
+clock audit were corrected without bypassing exactness checks. Evidence is in
+`build/prepared-stage-validation/`. These tests do not exercise the complete
+new GPU path in gameplay or establish lower physical judder; a matched live
+capture is still required. No Windows build or ChaseShare deployment was made.
 
 For performance reporting, the worker keeps the decoder-output timestamp
 unchanged through this sequence. On a successful presentation it records the
@@ -1306,9 +1392,12 @@ delay. Both Linux and Windows use the revision-7 interval policy: client-added
 submission-interval error triggers growth only with attributable late work that
 can fit its intended interval. The older thresholded-event policy is disabled
 with `playout_readiness_hitch_threshold_us=0`. Native-hitch adaptation is disabled.
-Production also selects immutable decoder-output source mapping, a gate that
-checks complete serial service for absorbability, and release governed by recent
-pressure. Their
+Production restores VRR14 timeline mapping anchored to decode completion (`playout_source_mapping_decoder_output=0`),
+absorbing hardware decode duration into the sender offset instead of inflating client buffer delay.
+It pairs this with early preparation on arrival (`playout_prepare_on_arrival=1`, `render_start_after_submission_us=0`),
+spending the existing playout cushion on overlapping GPU preparation so libplacebo rendering finishes well before
+the target presentation boundary.
+A gate checks complete serial service for absorbability, and release is governed by recent pressure. Their
 zero initializer values preserve historical replay when captures omit them.
 The latency presets set independent caps; per-frame native slot protection
 remains enabled.
@@ -1328,7 +1417,7 @@ It also sets `latchedFloorDisabled=1` and disables the extra queue-mode budget.
 | Maximum-period ratio | 0; source-rate reduction cannot expand the absolute ceiling |
 | Initial interval calibration | At least 500 ms and 32 consecutive valid intervals; once per controller reset, not once per FPS change |
 | Interval requalification after a break | One second and at least two valid intervals, after initial calibration has completed |
-| Production source mapping | Immutable decoder output (`playout_source_mapping_decoder_output=1`); worker/backend waits remain local service |
+| Production source mapping | Decode completion (`playout_source_mapping_decoder_output=0`); absorbs hardware decode duration into the timeline offset |
 | Live interval-buffer attack | Request at most 250 us per 250 ms; apply at most 125 us per frame, with current quality pressure, fresh readiness-attributed error, and serial service plus decoder queue each no longer than the actual intended interval |
 | Live interval-buffer release | 125/250/50 us per second after 6/8/10-second clean holds for Low Latency/Balanced Target/Smooth; recent pressure owns the hold, while long score debt remains reporting/attack evidence |
 | Historical readiness attack/release inputs | 500 us attack and 10 us release; not the live revision-7 growth/release rule |
@@ -2032,8 +2121,8 @@ output as proof of GPU completion.
 
 Hardware Vulkan preparation retains the mapped `pl_frame`, including libplacebo's
 AVFrame reference and imported source textures, until their GPU reads finish.
-VAAPI Mailbox output is submitted asynchronously: libplacebo transitions the output
-image, signals a render-complete semaphore, and supplies it to
+Retained hardware output is submitted asynchronously in every presentation mode:
+libplacebo transitions the output image, signals a render-complete semaphore, and supplies it to
 `vkQueuePresentKHR`. CPU completion is not required for this handoff. Preparation,
 presentation and cancellation retire idle source mappings and preparation reports
 `sourceFrameReusable=true` only when no retained mapping remains. This releases
@@ -2051,16 +2140,15 @@ versus 99.67% / 117.37 FPS at 57 Mbps, both Smooth without concurrent capture.
 After 20 seconds from the first arrival, high-bitrate presented frames averaged 9.559 ms of serial
 decode-wait + preparation + submission service against an 8.333 ms period.
 
-The new asynchronous VAAPI path pairs source retention and the corrected stale
-policy with early preparation. It retains at most two source mappings, applies
-bounded retirement backpressure before acquiring another swapchain image, and
+The updated path pairs asynchronous retained-hardware output and the corrected stale
+policy with preparation on arrival. It retains up to four source mappings to
+prevent capacity stalls, applies bounded retirement backpressure before acquiring another swapchain image, and
 never calls an unavailable output-completion sample a zero-duration completion.
-Immediate presentation keeps the CPU completion check because GPU-delayed flips
-could otherwise bunch despite correctly spaced CPU submissions. Other modes,
-software and other imports keep the 50 ms / 100,000-observation output-poll bound.
-D3D11 fence/event fields remain unset on Vulkan rows. The reduced CPU service
-and improved submission score expected from this change do not establish actual
-display cadence; a new high-bitrate live run is required.
+Immediate presentation omits that CPU completion check
+when the source mapping is retained. GPU-delayed flips may still bunch despite
+correctly spaced CPU submissions. Software and unretained imports keep the 50 ms / 100,000-observation output-poll bound.
+D3D11 fence/event fields remain unset on Vulkan rows. Windows explicitly flushes the decoder context
+after signaling its cross-device boundary, so dispatch does not depend on a later input frame.
 
 The selected adaptive mode remains immutable for the lifetime of one persistent
 swapchain. Per-frame controller requests never destroy or recreate that chain.

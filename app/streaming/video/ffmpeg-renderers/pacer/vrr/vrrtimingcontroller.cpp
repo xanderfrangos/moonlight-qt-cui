@@ -169,9 +169,9 @@ VrrTimingParameters vrrTimingParametersForSession(
     // Every normal VRR session uses the interval-quality queue. Historical
     // policies remain selectable only through explicit diagnostic parameters.
     parameters.playoutResponsiveBuffer = config.readinessHitchFeedback ? 0 : 7;
-    // Worker/backend waits are consequences of local execution timing. They
-    // may describe readiness, but must never move the sender-clock mapping.
-    parameters.playoutSourceMappingDecoderOutput = 1;
+    // Timeline mapping anchors to decode completion, absorbing hardware decode
+    // duration into the sender offset instead of inflating client buffer delay.
+    parameters.playoutSourceMappingDecoderOutput = 0;
     // Buffer transient work when measured service fits within intended time
     // over the qualified window. Include decoder waits and raw preparation
     // even when readiness-lead learning excludes them from generic render cost.
