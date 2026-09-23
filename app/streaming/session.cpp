@@ -13,6 +13,8 @@
 #include "SDL_compat.h"
 #include "utils.h"
 
+#include <algorithm>
+
 #ifdef HAVE_FFMPEG
 #include "video/ffmpeg.h"
 #endif
@@ -642,6 +644,7 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_ShouldExit(false),
       m_AsyncConnectionSuccess(false),
       m_PortTestResults(0),
+      m_ConnectionStartedAtTicks(0),
       m_OpusDecoder(nullptr),
       m_AudioRenderer(nullptr),
       m_AudioSampleCount(0),
@@ -2147,6 +2150,7 @@ bool Session::startConnectionAsync()
         return false;
     }
 
+    m_ConnectionStartedAtTicks = SDL_GetTicks();
     emit connectionStarted();
     return true;
 }
@@ -2436,6 +2440,7 @@ void Session::exec()
     // Hijack this thread to be the SDL main thread. We have to do this
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
+    bool streamWindowFocused = false;
     auto notifyDecoderWindowState = [this](uint32_t stateChangeFlags) {
         if (m_VideoDecoder == nullptr) {
             return;
@@ -2452,6 +2457,22 @@ void Session::exec()
 
     for (;;) {
 #if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
+        Uint32 eventWaitTimeoutMs = 1000;
+#endif
+        if (!streamWindowFocused) {
+            const Uint32 elapsedMs = SDL_GetTicks() - m_ConnectionStartedAtTicks;
+            if (elapsedMs >= 2000) {
+                SDL_RaiseWindow(m_Window);
+                streamWindowFocused = true;
+            }
+            else {
+#if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
+                eventWaitTimeoutMs = std::min(eventWaitTimeoutMs, 2000 - elapsedMs);
+#endif
+            }
+        }
+
+#if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
         // SDL 2.0.18 has a proper wait event implementation that uses platform
         // support to block on events rather than polling on Windows, macOS, X11,
         // and Wayland. It will fall back to 1 ms polling if a joystick is
@@ -2461,7 +2482,7 @@ void Session::exec()
         // NB: This behavior was introduced in SDL 2.0.16, but had a few critical
         // issues that could cause indefinite timeouts, delayed joystick detection,
         // and other problems.
-        if (!SDL_WaitEventTimeout(&event, 1000)) {
+        if (!SDL_WaitEventTimeout(&event, static_cast<int>(eventWaitTimeoutMs))) {
             presence.runCallbacks();
             continue;
         }

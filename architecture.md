@@ -5,6 +5,11 @@ of a session working on streaming, decoding, rendering, VRR, latency, or replay.
 It explains the implementation and the reasoning needed to investigate it;
 it does not establish that a particular deployed executable matches the source.
 
+On successful `LiStartConnection()`, the session records the connection start
+time. `Session::exec()` owns the SDL event loop while streaming, so it raises
+the stream window once two seconds have elapsed there; a QML timer would not
+run during that loop.
+
 Reduce judder follow-up (2026-09-22), based on `e053b5cb`: the smoother's
 positive retiming cap rises from 2 ms to 6 ms, a learned readiness reserve
 delays the smoothed schedule by the lateness the smoother itself causes, and
