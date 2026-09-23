@@ -366,6 +366,15 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
     }
     scale = niceCeil(scale);
 
+    // Give frametime plots room below their lowest sample without spending
+    // most of the plot on the unused range down to zero.
+    qreal baseline = 0;
+    if (spec.withFrameRate && !points.empty()) {
+        const qreal lowestVisible = target > 0 ? qMin(windowMin, target) : windowMin;
+        baseline = qMin((qreal)5, qMax((qreal)0, lowestVisible * 0.9));
+    }
+    const qreal plotRange = scale - baseline;
+
     // A midpoint gridline is enough to read the shape against
     painter.setBrush(Qt::NoBrush);
     painter.setPen(QPen(k_GraphGridColor, 1));
@@ -374,7 +383,8 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
 
     // Drawn under the data, so a line sitting on its target hides it
     if (target > 0) {
-        const qreal targetY = plotRect.bottom() - (target * plotRect.height() / scale);
+        const qreal targetY = plotRect.bottom() -
+                ((target - baseline) * plotRect.height() / plotRange);
         painter.setPen(QPen(k_GraphTargetColor, 1, Qt::DashLine));
         painter.drawLine(QPointF(plotRect.left() + 1, targetY),
                          QPointF(plotRect.right() - 1, targetY));
@@ -382,14 +392,16 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
 
     if (!points.empty() && maxPoints > 1) {
         const qreal stepX = plotRect.width() / (maxPoints - 1);
-        const qreal valueToY = plotRect.height() / scale;
+        const qreal valueToY = plotRect.height() / plotRange;
 
         // Anchor the newest sample to the right edge so a history that hasn't
         // filled the window grows leftward instead of stretching.
         auto pointAt = [&](size_t i, float StatsGraphPoint::* member) {
             const qreal x = plotRect.right() - ((points.size() - 1 - i) * stepX);
             const qreal y = plotRect.bottom() -
-                    qBound((qreal)0, (qreal)(points[i].*member) * valueToY, plotRect.height());
+                    qBound((qreal)0,
+                           ((qreal)(points[i].*member) - baseline) * valueToY,
+                           plotRect.height());
             return QPointF(x, y);
         };
 
@@ -496,8 +508,13 @@ QStringList streamInfoChips(const StatsGraphStreamInfo& info)
     }
     if (info.videoFormat != 0) {
         chips.append(QString::fromUtf8(codecName(info.videoFormat)));
-        chips.append((info.videoFormat & VIDEO_FORMAT_MASK_10BIT) ? QStringLiteral("10-bit")
-                                                                  : QStringLiteral("8-bit"));
+        if (info.videoFormat & VIDEO_FORMAT_MASK_10BIT) {
+            chips.append(info.outputBitsPerComponent == 8 ? QStringLiteral("10-bit -> 8-bit")
+                                                          : QStringLiteral("10-bit"));
+        }
+        else {
+            chips.append(QStringLiteral("8-bit"));
+        }
         chips.append(info.hdr ? QStringLiteral("HDR") : QStringLiteral("SDR"));
         chips.append((info.videoFormat & VIDEO_FORMAT_MASK_YUV444) ? QStringLiteral("4:4:4")
                                                                    : QStringLiteral("4:2:0"));

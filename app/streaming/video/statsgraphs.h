@@ -57,6 +57,9 @@ struct StatsGraphStreamInfo {
     int frameRate = 0;
     // A VIDEO_FORMAT_* value
     int videoFormat = 0;
+    // Output bits per color component when the active renderer can report it.
+    // Zero means the renderer doesn't expose the output depth.
+    int outputBitsPerComponent = 0;
     // The host can switch in and out of HDR mid-stream
     bool hdr = false;
     // Static strings from IFFmpegRenderer::getRendererName(). The backend is

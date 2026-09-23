@@ -1198,12 +1198,13 @@ int D3D11VARenderer::queryDisplayBitsPerComponent()
 // presenting to. Safe to call again whenever that display may have changed.
 void D3D11VARenderer::refreshDitherState()
 {
+    const int displayBits = queryDisplayBitsPerComponent();
+    m_OutputBitsPerComponent.store(displayBits, std::memory_order_relaxed);
+
     // Nothing to do if this session never loaded the dithering shaders
     if (!m_VideoDitherPixelShaders[0]) {
         return;
     }
-
-    const int displayBits = queryDisplayBitsPerComponent();
 
     // An unreadable depth is treated as 8-bit: that's the common case, and the
     // user asked for dithering rather than for us to guess conservatively.
@@ -3724,9 +3725,11 @@ bool D3D11VARenderer::setupRenderingResources()
                             "Temporal dithering enabled");
             }
         }
-
-        refreshDitherState();
     }
+
+    // Also publish the display depth for the stream-info overlay when
+    // dithering is disabled.
+    refreshDitherState();
 
     // We use a common sampler for all pixel shaders
     {

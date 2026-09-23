@@ -2880,6 +2880,9 @@ The graphs are a second overlay type, `OverlayDebugGraphs`, anchored top right
 opposite the existing text, and are painted with QPainter by
 `Overlay::Painter::paintStatsGraphs()` at a fixed pixel size, matching the fixed
 font size of the text overlay rather than scaling with the viewport.
+The stream-info chips distinguish a 10-bit source from an 8-bit renderer output
+as `10-bit -> 8-bit` when the active renderer reports that output depth; the
+D3D11, EGL and libplacebo Vulkan renderers provide it.
 
 `Overlay::StatsGraphs` owns a sampling thread that reads cumulative counters
 every 100 ms and keeps the last 10 seconds, plotting the difference between

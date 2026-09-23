@@ -1104,6 +1104,7 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
     // can switch mid-stream
     counters.streamInfo.frameRate = m_StreamFps;
     counters.streamInfo.videoFormat = m_VideoFormat;
+    counters.streamInfo.outputBitsPerComponent = m_FrontendRenderer->getOutputBitsPerComponent();
     // Only a 10-bit stream can carry HDR, matching the text overlay's codec line
     counters.streamInfo.hdr = (m_VideoFormat & VIDEO_FORMAT_MASK_10BIT) &&
                               LiGetCurrentHostDisplayHdrMode();

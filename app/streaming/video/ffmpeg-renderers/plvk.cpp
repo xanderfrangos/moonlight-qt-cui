@@ -1456,6 +1456,10 @@ bool PlVkRenderer::acquirePendingSwapchainFrame(
         return false;
     }
 
+    // libplacebo reports the bit depth the acquired swapchain target will
+    // present with, which may be lower than the decoded stream depth.
+    m_OutputBitsPerComponent.store(m_SwapchainFrame.color_repr.bits.color_depth,
+                                   std::memory_order_relaxed);
     m_HasPendingSwapchainFrame = true;
 #ifdef Q_OS_LINUX
     updatePreparationTarget();

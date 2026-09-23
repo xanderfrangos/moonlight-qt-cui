@@ -9,6 +9,8 @@
 #include <d3dkmthk.h>
 #include <dxgi1_6.h>
 
+#include <atomic>
+
 extern "C" {
 #include <libavutil/hwcontext_d3d11va.h>
 }
@@ -46,6 +48,9 @@ public:
     virtual bool notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO stateInfo) override;
     virtual int getRendererAttributes() override;
     virtual int getDecoderCapabilities() override;
+    virtual int getOutputBitsPerComponent() const override {
+        return m_OutputBitsPerComponent.load(std::memory_order_relaxed);
+    }
     virtual InitFailureReason getInitFailureReason() override;
 
     enum PixelShaders {
@@ -251,6 +256,7 @@ private:
     bool m_DitherActive;
     float m_DitherLevels;
     bool m_DitherStateChanged;
+    std::atomic<int> m_OutputBitsPerComponent{0};
     // Temporal dithering advances a phase every frame, so it needs a buffer
     // that can be rewritten per frame rather than the format-change-driven
     // CSC constant buffer.
