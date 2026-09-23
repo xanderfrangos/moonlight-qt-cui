@@ -1050,12 +1050,8 @@ OS evidence, not optical validation or a full gameplay latency measurement.
 
 Linux AMD decode policy, 2026-09-10: before Qt/SDL can initialize a graphics
 screen, `main()` appends `lowlatencydec` to process-local `AMD_DEBUG` when VAAPI
-support is built and the saved preference is enabled. The setting defaults on
-to preserve the existing behavior, and appears only on Linux VAAPI builds with
-an AMD DRM render node. Changing it requires restarting Moonlight. Existing
-flags are preserved (including the `R600_DEBUG` fallback when `AMD_DEBUG` is
-unset), and Moonlight restores the original `AMD_DEBUG` across its own restart.
-`MOONLIGHT_AMD_LOW_LATENCY_DECODE=0` remains an environment override to disable
+support is built. Existing flags are preserved (including the `R600_DEBUG`
+fallback when `AMD_DEBUG` is unset). `MOONLIGHT_AMD_LOW_LATENCY_DECODE=0` disables
 the automatic addition for diagnosis; it does not erase flags supplied by the
 user. The local moonlight-dev wrapper forwards those variables into Distrobox.
 This requests Mesa's separate hardware decode policy; FFmpeg `LOW_DELAY` was

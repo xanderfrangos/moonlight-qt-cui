@@ -4,7 +4,6 @@
 #include <QGuiApplication>
 #include <QLibraryInfo>
 #include <QDir>
-#include <QFile>
 #include <QProcess>
 
 #include "settings/streamingpreferences.h"
@@ -51,22 +50,6 @@ private:
 
 static bool s_TvMode = false;
 static bool s_TvModeOverridden = false;
-
-#if defined(Q_OS_LINUX) && defined(HAVE_LIBVA)
-static bool hasAmdDrmRenderNode()
-{
-    const QDir drmDirectory(QStringLiteral("/sys/class/drm"));
-    const QStringList renderNodes = drmDirectory.entryList({QStringLiteral("renderD*")},
-                                                           QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const QString& renderNode : renderNodes) {
-        QFile vendorFile(drmDirectory.filePath(renderNode + QStringLiteral("/device/vendor")));
-        if (vendorFile.open(QIODevice::ReadOnly) && vendorFile.readAll().trimmed().toLower() == "0x1002") {
-            return true;
-        }
-    }
-    return false;
-}
-#endif
 
 void SystemProperties::setTvModeState(bool enabled, bool overridden)
 {
@@ -122,13 +105,6 @@ SystemProperties::SystemProperties()
     supportsVideoDebanding = true;
 #else
     supportsVideoDebanding = false;
-#endif
-
-#if defined(Q_OS_LINUX) && defined(HAVE_LIBVA)
-    // Mesa's low-latency decode option is specific to AMD VAAPI hardware.
-    supportsAmdLowLatencyDecode = hasAmdDrmRenderNode();
-#else
-    supportsAmdLowLatencyDecode = false;
 #endif
 
     QString nativeArch = QSysInfo::currentCpuArchitecture();
@@ -297,25 +273,12 @@ void SystemProperties::restartApplication()
     // preferences at startup, so the new process applies the new values.
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     const QStringList injectedEnvVars = env.value("MOONLIGHT_INJECTED_ENV").split(',');
-    const bool injectedAmdDebug = injectedEnvVars.contains(QStringLiteral("AMD_DEBUG"));
-    const bool hadOriginalAmdDebug = env.value(QStringLiteral("MOONLIGHT_AMD_DEBUG_ORIGINAL_SET")) == QStringLiteral("1");
-    const QString originalAmdDebug = env.value(QStringLiteral("MOONLIGHT_AMD_DEBUG_ORIGINAL"));
     for (const QString& var : injectedEnvVars) {
         if (!var.isEmpty()) {
             env.remove(var);
         }
     }
     env.remove("MOONLIGHT_INJECTED_ENV");
-    if (injectedAmdDebug) {
-        // Restore the environment as it was before Moonlight added its Mesa
-        // request. The new process will then apply the currently saved setting.
-        if (hadOriginalAmdDebug) {
-            env.insert(QStringLiteral("AMD_DEBUG"), originalAmdDebug);
-        }
-        else {
-            env.remove(QStringLiteral("AMD_DEBUG"));
-        }
-    }
 
     QProcess process;
     process.setProgram(QCoreApplication::applicationFilePath());

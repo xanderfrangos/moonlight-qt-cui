@@ -25,7 +25,6 @@ public:
     // so they can be read directly from storage without a preferences instance.
     static int loadUiScale();
     static bool loadTvMode();
-    static bool loadAmdLowLatencyDecode();
 
     enum AudioConfig
     {
@@ -257,7 +256,6 @@ public:
     Q_PROPERTY(bool autoAdjustBitrate MEMBER autoAdjustBitrate NOTIFY autoAdjustBitrateChanged)
     Q_PROPERTY(bool enableVsync MEMBER enableVsync NOTIFY enableVsyncChanged)
     Q_PROPERTY(bool enableVrr MEMBER enableVrr NOTIFY enableVrrChanged)
-    Q_PROPERTY(bool amdLowLatencyDecode MEMBER amdLowLatencyDecode NOTIFY amdLowLatencyDecodeChanged)
     Q_PROPERTY(int vrrLatencyMode MEMBER vrrLatencyMode NOTIFY vrrLatencyModeChanged)
     Q_PROPERTY(bool smoothVrrFrameTiming MEMBER smoothVrrFrameTiming NOTIFY smoothVrrFrameTimingChanged)
     Q_PROPERTY(bool traceVrrFrames MEMBER traceVrrFrames NOTIFY traceVrrFramesChanged)
@@ -327,7 +325,6 @@ public:
     bool autoAdjustBitrate;
     bool enableVsync;
     bool enableVrr;
-    bool amdLowLatencyDecode;
     int vrrLatencyMode;
     // Re-present the last frame inside a host gap longer than the panel's
     // adaptive-refresh floor, so the panel never engages its own
@@ -416,7 +413,6 @@ signals:
     void autoAdjustBitrateChanged();
     void enableVsyncChanged();
     void enableVrrChanged();
-    void amdLowLatencyDecodeChanged();
     void vrrLatencyModeChanged();
     void smoothVrrFrameTimingChanged();
     void traceVrrFramesChanged();
