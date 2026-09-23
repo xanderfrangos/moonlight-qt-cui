@@ -16,6 +16,10 @@ class SdlGamepadKeyNavigation : public QObject
     // How the controller last used to navigate labels its face buttons, as a
     // ControllerButtonStyle::Style
     Q_PROPERTY(int buttonStyle READ buttonStyle NOTIFY buttonStyleChanged)
+    // The connected controllers in player order, with their battery levels,
+    // for status displays. This changes more often than controllers does, so
+    // pages that list controllers aren't rebuilt when a battery level moves.
+    Q_PROPERTY(QVariantList controllerStatus READ controllerStatus NOTIFY controllerStatusChanged)
 
 public:
     SdlGamepadKeyNavigation(StreamingPreferences* prefs);
@@ -45,12 +49,16 @@ public:
 
     QVariantList controllers() const;
 
+    QVariantList controllerStatus() const;
+
     int buttonStyle() const;
 
 signals:
     void controllersChanged();
 
     void buttonStyleChanged();
+
+    void controllerStatusChanged();
 
     // A button was pressed on the controller with this ID
     void controllerInput(const QString& id);

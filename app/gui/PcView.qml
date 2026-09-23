@@ -22,11 +22,16 @@ CenteredGridView {
 
     // TV mode cards have room around them to grow when focused, and the grid
     // is shifted so the cards are centered in their cells
-    readonly property int tvCardWidth: 300
-    minMargin: SystemProperties.tvMode ? 40 : 10
+    readonly property int tvCardWidth: 312
+    readonly property int tvCardHeight: 354
+    minMargin: SystemProperties.tvMode ? TvTheme.spacingMediumLarge : 10
     leftInset: SystemProperties.tvMode ? (rowsFilled ? minMargin : 0) + (cellWidth - tvCardWidth) / 2 : 0
-    cellWidth: SystemProperties.tvMode ? tvCardWidth + 40 : 310
-    cellHeight: SystemProperties.tvMode ? 400 : 330
+    // The cards are shifted right within their cells by the left inset, so
+    // take the same amount off the right to leave exactly the room for the
+    // columns that fit
+    rightInset: SystemProperties.tvMode ? (rowsFilled ? minMargin : 0) - (cellWidth - tvCardWidth) / 2 : 0
+    cellWidth: SystemProperties.tvMode ? tvCardWidth + 54 : 310
+    cellHeight: SystemProperties.tvMode ? tvCardHeight + 46 : 330
     objectName: qsTr("Computers")
 
     Component.onCompleted: {
@@ -127,15 +132,16 @@ CenteredGridView {
             width: parent.width
             text: StreamingPreferences.enableMdns ? qsTr("Searching for compatible hosts on your local network...")
                                                   : qsTr("Automatic PC discovery is disabled.")
-            font.pointSize: 24
+            font.pixelSize: TvTheme.fontTitle
+            font.weight: Font.DemiBold
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.Wrap
         }
 
         Label {
             width: parent.width
-            text: qsTr("If your PC doesn't appear, make sure it's on the same network, or add it manually using the button in the top right.")
-            font.pointSize: 16
+            text: qsTr("If your PC doesn't appear, make sure it's on the same network, or add it manually with Add PC at the top.")
+            font.pixelSize: TvTheme.fontBody
             color: TvTheme.textSecondary
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.Wrap
@@ -168,9 +174,13 @@ CenteredGridView {
 
     delegate: NavigableItemDelegate {
         width: SystemProperties.tvMode ? pcGrid.tvCardWidth : 300
-        height: SystemProperties.tvMode ? 360 : 320
+        height: SystemProperties.tvMode ? pcGrid.tvCardHeight : 320
         grid: pcGrid
         tvCardStyle: true
+
+        // TV mode dims PCs that are off instead of marking them with a warning
+        readonly property bool tvOffline: !model.statusUnknown && !model.online
+        cardOpacity: tvCard && tvOffline && !tvSelected ? 0.6 : 1.0
 
         property alias pcContextMenu : pcContextMenuLoader.item
 
@@ -185,12 +195,12 @@ CenteredGridView {
         Rectangle {
             visible: tvCard
             anchors.fill: parent
-            radius: TvTheme.cardRadius
+            radius: TvTheme.tileRadius
             color: tvSelected ? TvTheme.surfaceRaised : TvTheme.surface
             Behavior on color { ColorAnimation { duration: TvTheme.animationNormal } }
         }
 
-        // TV mode: a glow around the focused card
+        // TV mode: the focus ring and its glow around the focused card
         Item {
             visible: tvCard
             anchors.fill: parent
@@ -198,34 +208,35 @@ CenteredGridView {
             Behavior on opacity { NumberAnimation { duration: TvTheme.animationNormal } }
 
             Rectangle {
+                readonly property int outset: TvTheme.focusRingWidth + TvTheme.focusGlowWidth
                 anchors.fill: parent
-                anchors.margins: -9
-                radius: TvTheme.cardRadius + 9
+                anchors.margins: -outset
+                radius: TvTheme.tileRadius + outset
                 color: "transparent"
-                border.width: 6
-                border.color: Material.accent
-                opacity: 0.3
+                border.width: TvTheme.focusGlowWidth
+                border.color: TvTheme.focusGlow
             }
 
             // Overlaps the card by a pixel so no gap shows when it is scaled
             Rectangle {
+                readonly property int outset: TvTheme.focusRingWidth - 1
                 anchors.fill: parent
-                anchors.margins: -3
-                radius: TvTheme.cardRadius + 3
+                anchors.margins: -outset
+                radius: TvTheme.tileRadius + outset
                 color: "transparent"
-                border.width: 4
-                border.color: Material.accent
+                border.width: TvTheme.focusRingWidth
+                border.color: TvTheme.accent
             }
         }
 
         Image {
             id: pcIcon
             anchors.horizontalCenter: parent.horizontalCenter
-            y: SystemProperties.tvMode ? 24 : 0
+            y: SystemProperties.tvMode ? 40 : 0
             source: "qrc:/res/desktop_windows-48px.svg"
             sourceSize {
-                width: SystemProperties.tvMode ? 170 : 200
-                height: SystemProperties.tvMode ? 170 : 200
+                width: SystemProperties.tvMode ? 132 : 200
+                height: SystemProperties.tvMode ? 132 : 200
             }
         }
 
@@ -234,12 +245,15 @@ CenteredGridView {
             id: stateIcon
             anchors.horizontalCenter: pcIcon.horizontalCenter
             anchors.verticalCenter: pcIcon.verticalCenter
-            anchors.verticalCenterOffset: !model.online ? -18 : -16
-            visible: !model.statusUnknown && (!model.online || !model.paired)
+            anchors.verticalCenterOffset: SystemProperties.tvMode ? -10 : !model.online ? -18 : -16
+            // TV mode shows an offline PC by dimming it, and says so in its
+            // status, so only the lock for an unpaired PC is drawn on it
+            visible: !model.statusUnknown && (SystemProperties.tvMode ? model.online && !model.paired
+                                                                      : !model.online || !model.paired)
             source: !model.online ? "qrc:/res/warning_FILL1_wght300_GRAD200_opsz24.svg" : "qrc:/res/baseline-lock-24px.svg"
             sourceSize {
-                width: !model.online ? 75 : 70
-                height: !model.online ? 75 : 70
+                width: SystemProperties.tvMode ? 48 : !model.online ? 75 : 70
+                height: SystemProperties.tvMode ? 48 : !model.online ? 75 : 70
             }
         }
 
@@ -247,84 +261,122 @@ CenteredGridView {
             id: statusUnknownSpinner
             anchors.horizontalCenter: pcIcon.horizontalCenter
             anchors.verticalCenter: pcIcon.verticalCenter
-            anchors.verticalCenterOffset: -15
-            width: 75
-            height: 75
+            anchors.verticalCenterOffset: SystemProperties.tvMode ? -10 : -15
+            width: SystemProperties.tvMode ? 56 : 75
+            height: SystemProperties.tvMode ? 56 : 75
             visible: model.statusUnknown
             running: visible
         }
 
         Label {
             id: pcNameText
+            visible: !tvCard
             text: model.name
 
             width: parent.width
             anchors.top: pcIcon.bottom
-            anchors.bottom: SystemProperties.tvMode ? statusChip.top : parent.bottom
-            leftPadding: SystemProperties.tvMode ? 16 : 0
-            rightPadding: SystemProperties.tvMode ? 16 : 0
-            font.pointSize: SystemProperties.tvMode ? 26 : 36
+            anchors.bottom: parent.bottom
+            font.pointSize: 36
             horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: SystemProperties.tvMode ? Text.AlignVCenter : Text.AlignTop
-            // TV mode keeps names to one line to leave room for the status
-            wrapMode: SystemProperties.tvMode ? Text.NoWrap : Text.Wrap
+            verticalAlignment: Text.AlignTop
+            wrapMode: Text.Wrap
             elide: Text.ElideRight
         }
 
-        // TV mode: the PC's status in words, with a colored dot
-        Rectangle {
-            id: statusChip
+        // TV mode: the PC's name, its address when another PC has the same
+        // name, and its status
+        Column {
+            visible: tvCard
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: TvTheme.spacingLarge
+            spacing: TvTheme.spacingSmall
 
-            readonly property color dotColor: {
-                if (model.statusUnknown || !model.online) {
-                    return "#8A90A0"
-                }
-                else if (!model.paired || !model.serverSupported) {
-                    return "#FFB300"
-                }
-                return "#4CAF50"
+            Label {
+                width: parent.width
+                leftPadding: TvTheme.spacingMedium
+                rightPadding: TvTheme.spacingMedium
+                text: model.name
+                color: TvTheme.textPrimary
+                font.pixelSize: TvTheme.fontBody
+                font.weight: Font.DemiBold
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
             }
 
-            visible: tvCard
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: 24
-            width: statusRow.implicitWidth + 32
-            height: statusRow.implicitHeight + 12
-            radius: height / 2
-            color: tvSelected ? TvTheme.surface : TvTheme.surfaceRaised
+            Label {
+                width: parent.width
+                visible: text !== ""
+                leftPadding: TvTheme.spacingMedium
+                rightPadding: TvTheme.spacingMedium
+                text: model.duplicateNameAddress
+                color: TvTheme.textSecondary
+                font.pixelSize: TvTheme.fontCaption
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
+            }
 
-            Row {
-                id: statusRow
-                anchors.centerIn: parent
-                spacing: 10
+            // Space between the name and the status
+            Item {
+                width: 1
+                height: TvTheme.spacingSmall
+            }
 
-                Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 12
-                    height: 12
-                    radius: 6
-                    color: statusChip.dotColor
-                    Behavior on color { ColorAnimation { duration: TvTheme.animationNormal } }
+            // The PC's status in words, with a colored dot
+            Rectangle {
+                id: statusChip
+
+                readonly property color dotColor: {
+                    if (model.statusUnknown || !model.online) {
+                        return TvTheme.statusInactive
+                    }
+                    else if (!model.paired || !model.serverSupported) {
+                        return TvTheme.statusAttention
+                    }
+                    return TvTheme.statusOnline
                 }
 
-                Label {
-                    anchors.verticalCenter: parent.verticalCenter
-                    font.pointSize: 14
-                    text: {
-                        if (model.statusUnknown) {
-                            return qsTr("Checking...")
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: statusRow.implicitWidth + 2 * TvTheme.spacingMediumLarge
+                height: 42
+                radius: height / 2
+                color: tvSelected ? TvTheme.background : TvTheme.surfaceRaised
+
+                Row {
+                    id: statusRow
+                    anchors.centerIn: parent
+                    spacing: 10
+
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 12
+                        height: 12
+                        radius: 6
+                        color: statusChip.dotColor
+                        Behavior on color { ColorAnimation { duration: TvTheme.animationNormal } }
+                    }
+
+                    Label {
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: TvTheme.textPrimary
+                        font.pixelSize: TvTheme.fontCaption
+                        font.weight: Font.DemiBold
+                        text: {
+                            if (model.statusUnknown) {
+                                return qsTr("Checking...")
+                            }
+                            else if (!model.online) {
+                                return qsTr("Offline")
+                            }
+                            else if (!model.serverSupported) {
+                                return qsTr("Update required")
+                            }
+                            else if (!model.paired) {
+                                return qsTr("Not paired")
+                            }
+                            return qsTr("Online")
                         }
-                        else if (!model.online) {
-                            return qsTr("Offline")
-                        }
-                        else if (!model.serverSupported) {
-                            return qsTr("Update required")
-                        }
-                        else if (!model.paired) {
-                            return qsTr("Not paired")
-                        }
-                        return qsTr("Online")
                     }
                 }
             }

@@ -19,6 +19,9 @@ Item {
     property bool canOpenSettings: true
     // The control with focus, which decides what the select button says
     property Item focusItem: null
+    // How far to stay in from the window's right and bottom edges
+    property int safeX: 0
+    property int safeY: 0
 
     // Face button positions, matching ControllerButtonStyle::FacePosition
     readonly property int south: 0
@@ -56,13 +59,14 @@ Item {
         return qsTr("Select")
     }
 
-    implicitHeight: 64
+    implicitHeight: 72 + safeY
 
     Row {
         anchors.right: parent.right
-        anchors.rightMargin: 32
+        anchors.rightMargin: safeX
         anchors.verticalCenter: parent.verticalCenter
-        spacing: 36
+        anchors.verticalCenterOffset: -safeY / 2
+        spacing: TvTheme.spacingXLarge
 
         opacity: active && InputModeTracker.gamepadActive ? 1.0 : 0.0
         Behavior on opacity { NumberAnimation { duration: TvTheme.animationNormal } }

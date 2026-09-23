@@ -24,6 +24,11 @@ ApplicationWindow {
     width: 1280
     height: 600
 
+    // TV mode keeps everything this far in from the window edges, so TVs
+    // that overscan don't crop it
+    readonly property int tvSafeX: SystemProperties.tvMode ? Math.round(width * TvTheme.safeAreaHorizontal) : 0
+    readonly property int tvSafeY: SystemProperties.tvMode ? Math.round(height * TvTheme.safeAreaVertical) : 0
+
     // This function runs prior to creation of the initial StackView item
     function doEarlyInit() {
         // Override the background color to Material 2 colors for Qt 6.5+
@@ -31,6 +36,7 @@ ApplicationWindow {
         // and the background of the app grid.
         if (SystemProperties.tvMode) {
             Material.background = TvTheme.background
+            Material.accent = TvTheme.accent
         }
         else if (SystemProperties.usesMaterial3Theme) {
             Material.background = "#303030"
@@ -233,6 +239,8 @@ ApplicationWindow {
     StackView {
         id: stackView
         anchors.fill: parent
+        anchors.leftMargin: tvSafeX
+        anchors.rightMargin: tvSafeX
         focus: true
 
         // What had focus on each page in the stack when we navigated away from
@@ -386,9 +394,112 @@ ApplicationWindow {
 
     header: ToolBar {
         id: toolBar
-        height: SystemProperties.tvMode ? 72 : 60
+        height: SystemProperties.tvMode ? tvSafeY + TvTheme.pillHeight + TvTheme.spacingMedium : 60
         anchors.topMargin: 5
         anchors.bottomMargin: 5
+
+        // TV mode: how far the top bar is condensed to fit beside the page
+        // title when the window is narrow. 0 shows everything. 1 shows only
+        // the icons in the buttons, except for the focused one. 2 also
+        // summarizes the controllers in one chip. 3 also hides the clock. 4
+        // also hides the controllers.
+        readonly property int tvBarLevel: {
+            if (!SystemProperties.tvMode) {
+                return 0
+            }
+
+            // Leave the title some room. Past this it elides.
+            var available = width - 2 * tvSafeX - Math.min(titleRowLabel.implicitWidth, 420) - barRow.spacing
+            if (backButton.visible) {
+                available -= TvTheme.pillHeight + barRow.spacing
+            }
+
+            for (var level = 0; level < 4; level++) {
+                if (tvBarWidth(level) <= available) {
+                    return level
+                }
+            }
+            return 4
+        }
+
+        // The width of everything right of the title at a condensing level.
+        // This is worked out from sizes and text metrics rather than from the
+        // laid out items, whose widths depend on the level.
+        function tvBarWidth(level) {
+            var labelled = [[addPcButton, addPcLabelMetrics], [controllersButton, controllersLabelMetrics],
+                            [settingsButton, settingsLabelMetrics]]
+            var iconOnly = [discordButton, updateButton, helpButton]
+            var width = 0
+            var items = 0
+            var widestLabel = 0
+
+            for (var i = 0; i < labelled.length; i++) {
+                if (!labelled[i][0].visible) {
+                    continue
+                }
+                var labelWidth = labelled[i][1].width
+                widestLabel = Math.max(widestLabel, labelWidth)
+                width += level === 0 ? TvTheme.pillPadding * 2 + TvTheme.pillIconSize + 12 + labelWidth
+                                     : TvTheme.pillHeight
+                items++
+            }
+
+            // Condensed buttons still show the focused one's label
+            if (level >= 1 && widestLabel > 0) {
+                width += TvTheme.pillPadding * 2 + TvTheme.pillIconSize + 12 + widestLabel - TvTheme.pillHeight
+            }
+
+            for (i = 0; i < iconOnly.length; i++) {
+                if (iconOnly[i].visible) {
+                    width += TvTheme.pillHeight
+                    items++
+                }
+            }
+
+            if (versionLabel.visible) {
+                width += versionLabel.implicitWidth
+                items++
+            }
+
+            if (level < 4 && controllerStatus.count > 0) {
+                width += barDivider.Layout.preferredWidth + barDivider.Layout.leftMargin + barDivider.Layout.rightMargin + (level <= 1 ? controllerStatus.fullWidth : controllerStatus.condensedWidth)
+                items += 2
+            }
+
+            if (level < 3) {
+                width += clockMetrics.width + clockLabel.Layout.leftMargin
+                items++
+            }
+
+            return width + Math.max(items - 1, 0) * barRow.spacing
+        }
+
+        TextMetrics {
+            id: addPcLabelMetrics
+            font.pixelSize: TvTheme.fontLabel
+            font.weight: Font.DemiBold
+            text: addPcButton.tvLabel
+        }
+
+        TextMetrics {
+            id: controllersLabelMetrics
+            font.pixelSize: TvTheme.fontLabel
+            font.weight: Font.DemiBold
+            text: controllersButton.tvLabel
+        }
+
+        TextMetrics {
+            id: settingsLabelMetrics
+            font.pixelSize: TvTheme.fontLabel
+            font.weight: Font.DemiBold
+            text: settingsButton.tvLabel
+        }
+
+        TextMetrics {
+            id: clockMetrics
+            font: clockLabel.font
+            text: clockLabel.text
+        }
 
         // TV mode shows the window's background through the toolbar. This is
         // a Binding rather than an assignment in Component.onCompleted, which
@@ -421,12 +532,16 @@ ApplicationWindow {
         }
 
         RowLayout {
-            spacing: 10
-            anchors.leftMargin: SystemProperties.tvMode ? 24 : 10
-            anchors.rightMargin: SystemProperties.tvMode ? 24 : 10
+            id: barRow
+            spacing: SystemProperties.tvMode ? 12 : 10
+            anchors.leftMargin: SystemProperties.tvMode ? tvSafeX : 10
+            anchors.rightMargin: SystemProperties.tvMode ? tvSafeX : 10
+            anchors.topMargin: tvSafeY
             anchors.fill: parent
 
             NavigableToolButton {
+                id: backButton
+
                 // Only make the button visible if the user has navigated somewhere.
                 visible: stackView.depth > 1
 
@@ -449,6 +564,21 @@ ApplicationWindow {
                 verticalAlignment: Qt.AlignVCenter
                 Layout.fillWidth: true
                 Layout.leftMargin: SystemProperties.tvMode ? 8 : 0
+
+                // The TV mode type scale overrides the point size above
+                Binding {
+                    target: titleRowLabel
+                    property: "font.pixelSize"
+                    value: TvTheme.fontTitle
+                    when: SystemProperties.tvMode
+                }
+
+                Binding {
+                    target: titleRowLabel
+                    property: "font.weight"
+                    value: Font.DemiBold
+                    when: SystemProperties.tvMode
+                }
                 textFormat: SystemProperties.tvMode ? Text.StyledText : Text.PlainText
 
                 // We need this label to always be visible so it can occupy
@@ -463,6 +593,14 @@ ApplicationWindow {
                 visible: stackView.currentItem instanceof SettingsView
                 text: qsTr("Version %1").arg(SystemProperties.versionString)
                 font.pointSize: 12
+                color: SystemProperties.tvMode ? TvTheme.textSecondary : Material.foreground
+
+                Binding {
+                    target: versionLabel
+                    property: "font.pixelSize"
+                    value: TvTheme.fontCaption
+                    when: SystemProperties.tvMode
+                }
                 horizontalAlignment: Qt.AlignRight
                 verticalAlignment: Qt.AlignVCenter
             }
@@ -488,10 +626,37 @@ ApplicationWindow {
             }
 
             NavigableToolButton {
+                id: helpButton
+                visible: SystemProperties.hasBrowser
+
+                iconSource: "qrc:/res/question_mark.svg"
+
+                ToolTip.delay: 1000
+                ToolTip.timeout: 3000
+                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                ToolTip.text: qsTr("Help") + (helpShortcut.nativeText ? (" ("+helpShortcut.nativeText+")") : "")
+
+                Shortcut {
+                    id: helpShortcut
+                    sequence: StandardKey.HelpContents
+                    onActivated: helpButton.clicked()
+                }
+
+                // TODO need to make sure browser is brought to foreground.
+                onClicked: Qt.openUrlExternally("https://github.com/moonlight-stream/moonlight-docs/wiki/Setup-Guide");
+
+                Keys.onDownPressed: {
+                    stackView.currentItem.forceActiveFocus(Qt.TabFocus)
+                }
+            }
+
+            NavigableToolButton {
                 id: addPcButton
                 visible: stackView.currentItem instanceof PcView
 
                 iconSource:  "qrc:/res/ic_add_to_queue_white_48px.svg"
+                tvLabel: qsTr("Add PC")
+                tvShowLabel: toolBar.tvBarLevel < 1
 
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
@@ -552,31 +717,6 @@ ApplicationWindow {
             }
 
             NavigableToolButton {
-                id: helpButton
-                visible: SystemProperties.hasBrowser
-
-                iconSource: "qrc:/res/question_mark.svg"
-
-                ToolTip.delay: 1000
-                ToolTip.timeout: 3000
-                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                ToolTip.text: qsTr("Help") + (helpShortcut.nativeText ? (" ("+helpShortcut.nativeText+")") : "")
-
-                Shortcut {
-                    id: helpShortcut
-                    sequence: StandardKey.HelpContents
-                    onActivated: helpButton.clicked()
-                }
-
-                // TODO need to make sure browser is brought to foreground.
-                onClicked: Qt.openUrlExternally("https://github.com/moonlight-stream/moonlight-docs/wiki/Setup-Guide");
-
-                Keys.onDownPressed: {
-                    stackView.currentItem.forceActiveFocus(Qt.TabFocus)
-                }
-            }
-
-            NavigableToolButton {
                 // TODO: Implement gamepad mapping then unhide this button
                 visible: false
 
@@ -598,6 +738,8 @@ ApplicationWindow {
                 id: controllersButton
 
                 iconSource: "qrc:/res/ic_videogame_asset_white_48px.svg"
+                tvLabel: qsTr("Controllers")
+                tvShowLabel: toolBar.tvBarLevel < 1
 
                 onClicked: navigateTo("qrc:/gui/ControllerView.qml", ControllerView)
 
@@ -615,6 +757,8 @@ ApplicationWindow {
                 id: settingsButton
 
                 iconSource:  "qrc:/res/settings.svg"
+                tvLabel: qsTr("Settings")
+                tvShowLabel: toolBar.tvBarLevel < 1
 
                 onClicked: navigateTo("qrc:/gui/SettingsView.qml", SettingsView)
 
@@ -634,12 +778,31 @@ ApplicationWindow {
                 ToolTip.text: qsTr("Settings") + (settingsShortcut.nativeText ? (" ("+settingsShortcut.nativeText+")") : "")
             }
 
+            // TV mode: the connected controllers, with their player numbers
+            // and batteries
+            Rectangle {
+                id: barDivider
+                visible: controllerStatus.visible
+                Layout.preferredWidth: 2
+                Layout.preferredHeight: 36
+                Layout.leftMargin: 4
+                Layout.rightMargin: 4
+                color: TvTheme.stroke
+            }
+
+            TvControllerStatus {
+                id: controllerStatus
+                visible: SystemProperties.tvMode && count > 0 && toolBar.tvBarLevel < 4
+                condensed: toolBar.tvBarLevel >= 2
+            }
+
             // TV mode: a clock, since the app usually runs fullscreen
             Label {
                 id: clockLabel
-                visible: SystemProperties.tvMode
-                Layout.leftMargin: 16
-                font.pointSize: 18
+                visible: SystemProperties.tvMode && toolBar.tvBarLevel < 3
+                Layout.leftMargin: 8
+                font.pixelSize: TvTheme.fontBody
+                font.weight: Font.DemiBold
 
                 Timer {
                     interval: 1000
@@ -774,6 +937,8 @@ ApplicationWindow {
         canGoBack: stackView.depth > 1
         canOpenSettings: !(stackView.currentItem instanceof SettingsView)
         focusItem: window.activeFocusItem
+        safeX: tvSafeX
+        safeY: tvSafeY
     }
 
     // A clearly visible indicator around the focused control while navigating
@@ -810,7 +975,7 @@ ApplicationWindow {
         visible: target !== null && target.visible && targetOnScreen
         color: "transparent"
         radius: SystemProperties.tvMode ? TvTheme.focusRingRadius : 6
-        border.width: 3
+        border.width: SystemProperties.tvMode ? TvTheme.focusRingWidth : 3
         border.color: Material.accent
 
         Behavior on x { enabled: focusRing.gliding; NumberAnimation { duration: TvTheme.animationFast; easing.type: Easing.OutCubic } }
@@ -822,12 +987,11 @@ ApplicationWindow {
         Rectangle {
             visible: SystemProperties.tvMode
             anchors.fill: parent
-            anchors.margins: -4
+            anchors.margins: -TvTheme.focusGlowWidth
             color: "transparent"
-            radius: parent.radius + 4
-            border.width: 4
-            border.color: Material.accent
-            opacity: 0.35
+            radius: parent.radius + TvTheme.focusGlowWidth
+            border.width: TvTheme.focusGlowWidth
+            border.color: TvTheme.focusGlow
         }
 
         // Stops the glide once the ring has reached its new target

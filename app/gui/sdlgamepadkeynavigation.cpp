@@ -51,6 +51,8 @@ SdlGamepadKeyNavigation::SdlGamepadKeyNavigation(StreamingPreferences* prefs)
     connect(m_PollingTimer, &QTimer::timeout, this, &SdlGamepadKeyNavigation::onPollingTimerFired);
     connect(m_Prefs, &StreamingPreferences::multiControllerChanged,
             this, &SdlGamepadKeyNavigation::controllersChanged);
+    connect(this, &SdlGamepadKeyNavigation::controllersChanged,
+            this, &SdlGamepadKeyNavigation::controllerStatusChanged);
 }
 
 SdlGamepadKeyNavigation::~SdlGamepadKeyNavigation()
@@ -266,6 +268,13 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
             }
             break;
         }
+#if SDL_VERSION_ATLEAST(2, 24, 0)
+        case SDL_JOYBATTERYUPDATED:
+            if (findGamepad(event.jbattery.which) != nullptr) {
+                emit controllerStatusChanged();
+            }
+            break;
+#endif
         case SDL_CONTROLLERDEVICEREMOVED:
             for (int i = 0; i < m_Gamepads.size(); i++) {
                 SDL_Joystick* joystick = SDL_GameControllerGetJoystick(m_Gamepads[i].controller);
@@ -564,6 +573,25 @@ QVariantList SdlGamepadKeyNavigation::controllers() const
         result.append(item);
     }
 
+    return result;
+}
+
+QVariantList SdlGamepadKeyNavigation::controllerStatus() const
+{
+    QVariantList result = controllers();
+    for (QVariant& entry : result) {
+        QVariantMap item = entry.toMap();
+        const UiGamepad* gamepad = findGamepad(item.value(QStringLiteral("id")).toString());
+
+        // An SDL_JoystickPowerLevel: -1 unknown, 0 empty, 1 low, 2 medium,
+        // 3 full, 4 wired
+        int battery = SDL_JOYSTICK_POWER_UNKNOWN;
+        if (gamepad != nullptr) {
+            battery = SDL_JoystickCurrentPowerLevel(SDL_GameControllerGetJoystick(gamepad->controller));
+        }
+        item.insert(QStringLiteral("battery"), battery);
+        entry = item;
+    }
     return result;
 }
 

@@ -6,6 +6,7 @@ import QtQuick.Layouts 1.3
 import SdlGamepadKeyNavigation 1.0
 import InputModeTracker 1.0
 import StreamingPreferences 1.0
+import SystemProperties 1.0
 import TvTheme 1.0
 
 Item {
@@ -204,6 +205,16 @@ Item {
                         id: enabledButton
                         text: modelData.enabled ? qsTr("Enabled") : qsTr("Disabled")
                         highlighted: modelData.enabled
+
+                        // Material draws highlighted text in white, which
+                        // doesn't contrast with the TV mode accent
+                        Binding {
+                            target: enabledButton.contentItem
+                            property: "color"
+                            value: TvTheme.accentText
+                            when: enabledButton.highlighted && SystemProperties.tvMode
+                        }
+
                         onClicked: {
                             controllerPage.rememberFocus(modelData.id, 0)
                             SdlGamepadKeyNavigation.setControllerEnabled(modelData.id, !modelData.enabled)

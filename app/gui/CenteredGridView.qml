@@ -10,12 +10,14 @@ GridView {
     readonly property bool rowsFilled: itemsPerRow < count && availableWidth >= cellWidth
     property real horizontalMargin: rowsFilled ? (availableWidth % cellWidth) / 2 : minMargin
 
-    // Extra space before the first column. The margins leave room for it.
+    // Extra space before the first column, and after the last. The margins
+    // leave room for them.
     property real leftInset: 0
+    property real rightInset: 0
 
     function updateMargins() {
         leftMargin = horizontalMargin + leftInset
-        rightMargin = horizontalMargin
+        rightMargin = horizontalMargin + rightInset
 
         // Changing a margin doesn't move the content, so the grid would stay
         // at its old horizontal position until it was scrolled. This grid only
@@ -31,6 +33,10 @@ GridView {
     }
 
     onLeftInsetChanged: {
+        updateMargins()
+    }
+
+    onRightInsetChanged: {
         updateMargins()
     }
 

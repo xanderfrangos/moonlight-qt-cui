@@ -25,6 +25,10 @@ CenteredGridView {
     // the unused cell width to center the cards.
     minMargin: SystemProperties.tvMode ? 40 : 10
     leftInset: SystemProperties.tvMode ? (rowsFilled ? minMargin : 0) + (cellWidth - tvCardWidth) / 2 : 0
+    // The cards are shifted right within their cells by the left inset, so
+    // take the same amount off the right to leave exactly the room for the
+    // columns that fit
+    rightInset: SystemProperties.tvMode ? (rowsFilled ? minMargin : 0) - (cellWidth - tvCardWidth) / 2 : 0
     topMargin: SystemProperties.tvMode ? 30 : 20
     bottomMargin: 5
     // TV mode uses bigger box art with more room around each card, since
@@ -274,6 +278,7 @@ import AppModel 1.0; AppModel {}', parent, '')
                 id: runningLabel
                 anchors.centerIn: parent
                 text: qsTr("Running")
+                color: TvTheme.accentText
                 font.pointSize: 11
                 font.bold: true
             }

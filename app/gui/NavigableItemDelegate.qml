@@ -42,7 +42,7 @@ ItemDelegate {
 
     // Draw the focused card above its neighbors so it can grow over them
     z: tvSelected ? 1 : 0
-    scale: tvCard && tvSelected ? 1.08 : 1.0
+    scale: tvCard && tvSelected ? TvTheme.focusScale : 1.0
     Behavior on scale {
         enabled: tvCard
         NumberAnimation { duration: TvTheme.animationNormal; easing.type: Easing.OutCubic }

@@ -3,6 +3,7 @@ import QtQuick.Controls 2.2
 import QtQuick.Layouts 1.2
 
 import SystemProperties 1.0
+import TvTheme 1.0
 
 NavigableDialog {
     id: dialog
@@ -64,12 +65,23 @@ NavigableDialog {
         standardButtons: dialog.standardButtons
 
         delegate: Button {
+            id: dialogButton
+
             // In TV mode the focused button is filled with the accent color, so
             // it's always clear what pressing A will do. This follows focus
             // itself rather than the focus ring, which only appears for focus
             // gained through keyboard or gamepad navigation.
             flat: !(SystemProperties.tvMode && activeFocus)
             highlighted: SystemProperties.tvMode && activeFocus
+
+            // Material draws highlighted text in white, which doesn't
+            // contrast with the TV mode accent
+            Binding {
+                target: dialogButton.contentItem
+                property: "color"
+                value: TvTheme.accentText
+                when: dialogButton.highlighted
+            }
 
             Keys.onReturnPressed: clicked()
             Keys.onEnterPressed: clicked()

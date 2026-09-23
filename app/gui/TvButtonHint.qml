@@ -15,22 +15,22 @@ Row {
 
     readonly property color glyphColor: SdlGamepadKeyNavigation.faceButtonColor(SdlGamepadKeyNavigation.buttonStyle, position)
 
-    spacing: 10
+    spacing: 14
 
     Rectangle {
         anchors.verticalCenter: parent.verticalCenter
-        width: 34
-        height: 34
+        width: 44
+        height: 44
         radius: width / 2
         color: TvTheme.surfaceRaised
-        border.width: 2
+        border.width: 3
         border.color: glyphColor
 
         Label {
             id: glyphLabel
             anchors.centerIn: parent
             text: SdlGamepadKeyNavigation.faceButtonGlyph(SdlGamepadKeyNavigation.buttonStyle, position)
-            font.pointSize: 13
+            font.pixelSize: 20
             font.bold: true
             color: glyphColor
         }
@@ -39,6 +39,7 @@ Row {
     Label {
         anchors.verticalCenter: parent.verticalCenter
         text: parent.text
-        font.pointSize: 15
+        color: TvTheme.textPrimary
+        font.pixelSize: TvTheme.fontLabel
     }
 }
