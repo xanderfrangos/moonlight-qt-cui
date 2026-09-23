@@ -6,6 +6,7 @@
 #include <climits>
 #include "SDL_compat.h"
 #include "settings/controlleridentity.h"
+#include "settings/controllerbuttonstyle.h"
 #include "settings/mappingmanager.h"
 #include "streaming/input/dualsensehaptics.h"
 
@@ -30,6 +31,18 @@
 // press tends to be swallowed somewhere between the host's virtual pad and
 // whatever is listening for it.
 #define GUIDE_BUTTON_HOLD_DURATION 100
+
+// How long Select or Start must be held on its own to open the gamepad menu,
+// when that is how the menu is opened
+#define GAMEPAD_MENU_LONG_PRESS_TIME 750
+
+// How soon after Start or Select the other one must be pressed for the pair
+// to open the gamepad menu, when that is how the menu is opened. The first
+// button reaches the host this much later than it otherwise would.
+#define GAMEPAD_MENU_CHORD_WINDOW 120
+
+// How long a quick tap of a held back button is reported to the host
+#define HELD_BACK_TAP_DURATION 60
 
 // Haptic capabilities (in addition to those from SDL_HapticQuery())
 #define ML_HAPTIC_GC_RUMBLE         (1U << 16)
@@ -68,9 +81,7 @@ void SdlInputHandler::sendGamepadState(GamepadState* state)
 {
     SDL_assert(m_GamepadMask == 0x1 || m_MultiController);
 
-    // Buttons left over from working the gamepad menu are hidden from the host
-    // until they're released, so they never reach the game underneath it.
-    int buttons = state->buttons & ~state->suppressedButtons;
+    int buttons = hostButtons(state);
 
     // Handle Select+PS as the clickpad button on PS4/5 controllers without a clickpad mapping
     if (state->clickpadButtonEmulationEnabled) {
@@ -95,7 +106,7 @@ void SdlInputHandler::sendGamepadState(GamepadState* state)
     if (!m_MultiController) {
         for (int i = 0; i < MAX_GAMEPADS; i++) {
             if (m_GamepadState[i].index == state->index) {
-                buttons |= m_GamepadState[i].buttons & ~m_GamepadState[i].suppressedButtons;
+                buttons |= hostButtons(&m_GamepadState[i]);
                 if (lt < m_GamepadState[i].lt) {
                     lt = m_GamepadState[i].lt;
                 }
@@ -310,6 +321,7 @@ void SdlInputHandler::notifyGamepadMenuClosed()
         GamepadState* state = &m_GamepadState[i];
         if (state->controller != nullptr) {
             state->suppressedButtons |= state->buttons;
+            state->heldBackButtons = 0;
         }
     }
 
@@ -345,6 +357,202 @@ void SdlInputHandler::sendGuideButtonPress(short gamepadIndex)
     m_GuideButtonTimer = SDL_AddTimer(GUIDE_BUTTON_HOLD_DURATION,
                                       releaseGuideButtonTimerCallback,
                                       this);
+}
+
+int SdlInputHandler::hostButtons(const GamepadState* state)
+{
+    // Buttons left over from working the gamepad menu are hidden from the host
+    // until they're released, so they never reach the game underneath it.
+    // Buttons that might be opening the menu are hidden until we know.
+    return (state->buttons | state->tapButtons) & ~state->suppressedButtons & ~state->heldBackButtons;
+}
+
+int SdlInputHandler::gamepadMenuTriggerButtons() const
+{
+    // NO_GAMEPAD_QUIT turns off every gamepad shortcut for the menu
+    if (qgetenv("NO_GAMEPAD_QUIT") == "1") {
+        return 0;
+    }
+
+    switch (m_GamepadMenuTrigger) {
+    case StreamingPreferences::GMT_START_SELECT:
+        return PLAY_FLAG | BACK_FLAG;
+    case StreamingPreferences::GMT_HOLD_SELECT:
+        return BACK_FLAG;
+    case StreamingPreferences::GMT_HOLD_START:
+        return PLAY_FLAG;
+    default:
+        return 0;
+    }
+}
+
+// A trigger button pressed on its own is held back from the host. Holding it
+// long enough (or pressing the other half of Start+Select in time) opens the
+// menu, and the host never sees it. Anything else passes it on: another button
+// pressed alongside it, a quick tap, or the Start+Select window running out.
+bool SdlInputHandler::handleGamepadMenuTriggerButton(GamepadState* state, int buttonFlag, bool pressed)
+{
+    const int triggerButtons = gamepadMenuTriggerButtons();
+    if (triggerButtons == 0) {
+        return false;
+    }
+
+    if (pressed) {
+        if (state->heldBackButtons != 0) {
+            if ((triggerButtons & buttonFlag) && !(state->heldBackButtons & buttonFlag)) {
+                // The second half of Start+Select. Neither reaches the host.
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "Detected Start+Select gamepad menu trigger");
+                state->buttons |= buttonFlag;
+                state->suppressedButtons |= state->buttons;
+                openGamepadMenu(state);
+                return true;
+            }
+
+            // Pressed with another button, so the held button is part of a
+            // chord meant for the game. Release it to the host ahead of this one.
+            state->heldBackButtons = 0;
+            return false;
+        }
+
+        if ((triggerButtons & buttonFlag) && (state->buttons & ~state->suppressedButtons) == 0) {
+            const Uint32 delay = m_GamepadMenuTrigger == StreamingPreferences::GMT_START_SELECT ?
+                                     GAMEPAD_MENU_CHORD_WINDOW : GAMEPAD_MENU_LONG_PRESS_TIME;
+
+            state->buttons |= buttonFlag;
+            state->heldBackButtons = buttonFlag;
+            state->heldBackDeadline = SDL_GetTicks() + delay;
+            if (buttonFlag == PLAY_FLAG) {
+                state->lastStartDownTime = SDL_GetTicks();
+            }
+            SDL_AddTimer(delay, gamepadMenuTriggerTimerCallback, nullptr);
+            return true;
+        }
+
+        return false;
+    }
+    else if (state->heldBackButtons & buttonFlag) {
+        // A quick tap meant for the game. Send the press now and the release a
+        // moment later, so the game doesn't miss it.
+        state->heldBackButtons &= ~buttonFlag;
+        state->buttons &= ~buttonFlag;
+        state->suppressedButtons &= ~buttonFlag;
+        state->tapButtons |= buttonFlag;
+        state->tapDeadline = SDL_GetTicks() + HELD_BACK_TAP_DURATION;
+        SDL_AddTimer(HELD_BACK_TAP_DURATION, gamepadMenuTriggerTimerCallback, nullptr);
+
+        if (state->mouseEmulationTimer == 0) {
+            sendGamepadState(state);
+        }
+        return true;
+    }
+
+    return false;
+}
+
+Uint32 SdlInputHandler::gamepadMenuTriggerTimerCallback(Uint32, void*)
+{
+    // Timers run on their own thread, so let the main thread do the work. It
+    // checks every gamepad's deadlines, so the event carries no data.
+    SDL_Event event;
+    SDL_zero(event);
+    event.type = SDL_USEREVENT;
+    event.user.code = SDL_CODE_GAMEPAD_MENU_TRIGGER_TIMER;
+    SDL_PushEvent(&event);
+
+    return 0;
+}
+
+void SdlInputHandler::handleGamepadMenuTriggerTimers()
+{
+    const Uint32 now = SDL_GetTicks();
+
+    for (int i = 0; i < MAX_GAMEPADS; i++) {
+        GamepadState* state = &m_GamepadState[i];
+        if (state->controller == nullptr) {
+            continue;
+        }
+
+        if (state->heldBackButtons != 0 && SDL_TICKS_PASSED(now, state->heldBackDeadline)) {
+            if (m_GamepadMenuTrigger == StreamingPreferences::GMT_START_SELECT) {
+                // The other button didn't follow in time, so this press is for the game
+                state->heldBackButtons = 0;
+                if (state->mouseEmulationTimer == 0 && !Session::get()->isGamepadMenuOpen()) {
+                    sendGamepadState(state);
+                }
+            }
+            else {
+                // Held long enough to open the menu. It stays hidden from the
+                // host until it's released.
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "Detected long press gamepad menu trigger");
+                state->suppressedButtons |= state->buttons;
+                openGamepadMenu(state);
+            }
+        }
+
+        if (state->tapButtons != 0 && SDL_TICKS_PASSED(now, state->tapDeadline)) {
+            state->tapButtons = 0;
+            if (state->mouseEmulationTimer == 0 && !Session::get()->isGamepadMenuOpen()) {
+                sendGamepadState(state);
+            }
+        }
+    }
+}
+
+void SdlInputHandler::openGamepadMenu(GamepadState* state)
+{
+    // The menu takes over all gamepad input, and whatever is still held when it
+    // closes stays hidden from the host (see notifyGamepadMenuClosed()), so
+    // nothing held back is waiting to be passed on any more
+    for (int i = 0; i < MAX_GAMEPADS; i++) {
+        m_GamepadState[i].heldBackButtons = 0;
+    }
+
+    Session::get()->openGamepadMenu(state->index, state->jsId);
+}
+
+void SdlInputHandler::setMouseEmulation(GamepadState* state, bool enabled)
+{
+    if (enabled == (state->mouseEmulationTimer != 0)) {
+        return;
+    }
+
+    if (enabled) {
+        state->mouseEmulationTimer = SDL_AddTimer(MOUSE_EMULATION_POLLING_INTERVAL, SdlInputHandler::mouseEmulationTimerCallback, state);
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Mouse emulation active");
+        Session::get()->notifyMouseEmulationMode(true);
+    }
+    else {
+        SDL_RemoveTimer(state->mouseEmulationTimer);
+        state->mouseEmulationTimer = 0;
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Mouse emulation deactivated");
+        Session::get()->notifyMouseEmulationMode(false);
+    }
+}
+
+int SdlInputHandler::getButtonStyle(SDL_JoystickID jsId)
+{
+    GamepadState* state = findStateForGamepad(jsId);
+    return ControllerButtonStyle::fromController(state != nullptr ? state->controller : nullptr);
+}
+
+bool SdlInputHandler::isMouseEmulationActive(SDL_JoystickID jsId)
+{
+    GamepadState* state = findStateForGamepad(jsId);
+    return state != nullptr && state->mouseEmulationTimer != 0;
+}
+
+void SdlInputHandler::toggleMouseEmulation(SDL_JoystickID jsId)
+{
+    GamepadState* state = findStateForGamepad(jsId);
+    if (state != nullptr) {
+        setMouseEmulation(state, state->mouseEmulationTimer == 0);
+    }
 }
 
 void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* event)
@@ -407,6 +615,10 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         return;
     }
 
+    if (handleGamepadMenuTriggerButton(state, k_ButtonMap[event->button], event->state == SDL_PRESSED)) {
+        return;
+    }
+
     if (event->state == SDL_PRESSED) {
         state->buttons |= k_ButtonMap[event->button];
 
@@ -450,24 +662,18 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         state->suppressedButtons &= ~k_ButtonMap[event->button];
 
         if (event->button == SDL_CONTROLLER_BUTTON_START) {
-            if (SDL_GetTicks() - state->lastStartDownTime > MOUSE_EMULATION_LONG_PRESS_TIME) {
+            // Holding Start opens the gamepad menu instead when it's set up
+            // that way. Mouse mode is then toggled from the menu.
+            if (m_GamepadMenuTrigger != StreamingPreferences::GMT_HOLD_START &&
+                    SDL_GetTicks() - state->lastStartDownTime > MOUSE_EMULATION_LONG_PRESS_TIME) {
                 if (state->mouseEmulationTimer != 0) {
-                    SDL_RemoveTimer(state->mouseEmulationTimer);
-                    state->mouseEmulationTimer = 0;
-
-                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                                "Mouse emulation deactivated");
-                    Session::get()->notifyMouseEmulationMode(false);
+                    setMouseEmulation(state, false);
                 }
                 else if (m_GamepadMouse) {
                     // Send the start button up event to the host, since we won't do it below
                     sendGamepadState(state);
 
-                    state->mouseEmulationTimer = SDL_AddTimer(MOUSE_EMULATION_POLLING_INTERVAL, SdlInputHandler::mouseEmulationTimerCallback, state);
-
-                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                                "Mouse emulation active");
-                    Session::get()->notifyMouseEmulationMode(true);
+                    setMouseEmulation(state, true);
                 }
             }
         }
@@ -496,7 +702,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
                     "Detected menu gamepad button combo");
 
         // Bring up the menu rather than disconnecting outright
-        Session::get()->openGamepadMenu(state->index);
+        openGamepadMenu(state);
 
         // Clear buttons down on this gamepad and keep the combo itself hidden
         // from the host until the user lets go of it

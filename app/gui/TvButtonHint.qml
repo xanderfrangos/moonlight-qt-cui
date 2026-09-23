@@ -1,13 +1,19 @@
 import QtQuick 2.9
 import QtQuick.Controls 2.2
 
+import SdlGamepadKeyNavigation 1.0
 import TvTheme 1.0
 
-// A gamepad face button glyph followed by what the button does
+// A gamepad face button glyph followed by what the button does. The glyph is
+// drawn the way the controller in use labels that button: A/B/X/Y on Xbox,
+// the shapes on PlayStation, and Nintendo's swapped letters.
 Row {
-    // The face button letter: A, B, X, or Y
-    property string button
+    // The face button's position, as a ControllerButtonStyle::FacePosition:
+    // 0 bottom, 1 right, 2 left, 3 top
+    property int position: 0
     property string text
+
+    readonly property color glyphColor: SdlGamepadKeyNavigation.faceButtonColor(SdlGamepadKeyNavigation.buttonStyle, position)
 
     spacing: 10
 
@@ -18,23 +24,15 @@ Row {
         radius: width / 2
         color: TvTheme.surfaceRaised
         border.width: 2
-        border.color: glyphLabel.color
+        border.color: glyphColor
 
         Label {
             id: glyphLabel
             anchors.centerIn: parent
-            text: button
+            text: SdlGamepadKeyNavigation.faceButtonGlyph(SdlGamepadKeyNavigation.buttonStyle, position)
             font.pointSize: 13
             font.bold: true
-            color: {
-                switch (button) {
-                case "A": return "#6CC24A"
-                case "B": return "#E5534B"
-                case "X": return "#4C9AE8"
-                case "Y": return "#F2C14E"
-                }
-                return "white"
-            }
+            color: glyphColor
         }
     }
 

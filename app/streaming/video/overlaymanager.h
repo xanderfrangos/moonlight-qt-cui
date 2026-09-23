@@ -121,6 +121,10 @@ public:
 
 private:
     void run();
+    // Shows the combined status messages in OverlayStatusUpdate, or turns it
+    // off if there are none. Returns whether anything changed. Requires
+    // m_StateLock.
+    bool publishStatusMessagesLocked();
     SDL_Surface* RenderTextOutlinedWrapped(TTF_Font* font, const char* text, SDL_Color textColor, SDL_Color outlineColor, int outlineWidth, int wrapWidth);
     static SDL_Surface* AddBackground(SDL_Surface* textSurface, SDL_Color background, int padding);
 
@@ -160,6 +164,10 @@ private:
     QByteArray m_FontData;
     std::mutex m_StateLock;
     std::string m_StatusMessages[static_cast<int>(StatusSource::Count)];
+    // Whether setOverlaySurface() has given OverlayStatusUpdate a pre-rendered
+    // surface (the gamepad menu), which takes priority over the status
+    // messages until it's removed. Guarded by m_StateLock.
+    bool m_StatusOverlayPainted = false;
     std::condition_variable m_WorkReady;
     // Only renderer attachment and callbacks take this lock. Producers never
     // wait for rasterization, texture upload or renderer destruction.

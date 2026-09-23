@@ -17,13 +17,21 @@ namespace Overlay {
 // running while the SDL stream window owns the main thread.
 namespace Painter {
 
+// A button prompt along the bottom of the gamepad menu: the button's label
+// drawn in a circle, followed by what the button does
+struct ButtonHint {
+    QString glyph;
+    QColor color;
+    QString text;
+};
+
 // Draws the in-stream gamepad menu as a Material card. The layout scales with
 // the viewport height so it reads the same at 720p and 4K. Returns an ARGB8888
 // surface owned by the caller, or nullptr on failure.
 SDL_Surface* paintGamepadMenu(const QString& title,
                               const QStringList& items,
                               int selectedIndex,
-                              const QString& hint,
+                              const QList<ButtonHint>& hints,
                               int viewportHeight);
 
 // Draws the stats history graphs as a Material card. Points run oldest to

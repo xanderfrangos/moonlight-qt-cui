@@ -579,10 +579,12 @@ class PendingPairingTask : public QObject, public QRunnable
     Q_OBJECT
 
 public:
-    PendingPairingTask(ComputerManager* computerManager, NvComputer* computer, QString pin)
+    PendingPairingTask(ComputerManager* computerManager, NvComputer* computer, QString pin,
+                       std::shared_ptr<std::atomic_bool> abortFlag)
         : m_ComputerManager(computerManager),
           m_Computer(computer),
-          m_Pin(pin)
+          m_Pin(pin),
+          m_AbortFlag(abortFlag)
     {
         connect(this, &PendingPairingTask::pairingCompleted,
                 computerManager, &ComputerManager::pairingCompleted);
@@ -594,10 +596,18 @@ signals:
 private:
     void run()
     {
-        NvPairingManager pairingManager(m_Computer);
+        NvPairingManager pairingManager(m_Computer, m_AbortFlag);
 
         try {
            NvPairingManager::PairState result = pairingManager.pair(m_Computer->appVersion, m_Pin, m_Computer->serverCert);
+
+           // The user has already dismissed the pairing dialog, so only report
+           // a pairing that made it all the way through
+           if (*m_AbortFlag && result != NvPairingManager::PairState::PAIRED) {
+               qInfo() << "Pairing was cancelled";
+               return;
+           }
+
            switch (result)
            {
            case NvPairingManager::PairState::PIN_WRONG:
@@ -622,8 +632,18 @@ private:
                break;
            }
         } catch (const GfeHttpResponseException& e) {
+            if (*m_AbortFlag) {
+                qInfo() << "Pairing was cancelled";
+                pairingManager.cleanUpAbortedPairing();
+                return;
+            }
             emit pairingCompleted(m_Computer, tr("GeForce Experience returned error: %1").arg(e.toQString()));
         } catch (const QtNetworkReplyException& e) {
+            if (*m_AbortFlag) {
+                qInfo() << "Pairing was cancelled";
+                pairingManager.cleanUpAbortedPairing();
+                return;
+            }
             emit pairingCompleted(m_Computer, e.toQString());
         }
     }
@@ -631,14 +651,26 @@ private:
     ComputerManager* m_ComputerManager;
     NvComputer* m_Computer;
     QString m_Pin;
+    std::shared_ptr<std::atomic_bool> m_AbortFlag;
 };
 
 void ComputerManager::pairHost(NvComputer* computer, QString pin)
 {
     // Punt to a worker thread to avoid stalling the
     // UI while waiting for pairing to complete
-    PendingPairingTask* pairing = new PendingPairingTask(this, computer, pin);
+    auto abortFlag = std::make_shared<std::atomic_bool>(false);
+    m_PairingAbortFlags.insert(computer, abortFlag);
+
+    PendingPairingTask* pairing = new PendingPairingTask(this, computer, pin, abortFlag);
     QThreadPool::globalInstance()->start(pairing);
+}
+
+void ComputerManager::cancelPairing(NvComputer* computer)
+{
+    std::shared_ptr<std::atomic_bool> abortFlag = m_PairingAbortFlags.take(computer);
+    if (abortFlag) {
+        *abortFlag = true;
+    }
 }
 
 class PendingQuitTask : public QObject, public QRunnable

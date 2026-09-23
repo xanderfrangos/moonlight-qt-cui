@@ -37,6 +37,9 @@ public:
 
     Q_INVOKABLE void pairComputer(int computerIndex, QString pin);
 
+    // Cancels the pairing attempt started by pairComputer()
+    Q_INVOKABLE void cancelPairing();
+
     Q_INVOKABLE void testConnectionForComputer(int computerIndex);
 
     Q_INVOKABLE void wakeComputer(int computerIndex);
@@ -57,4 +60,6 @@ private slots:
 private:
     QVector<NvComputer*> m_Computers;
     ComputerManager* m_ComputerManager;
+    // The computer with a pairing attempt in progress, if any
+    NvComputer* m_PairingComputer = nullptr;
 };

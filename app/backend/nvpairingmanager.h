@@ -17,12 +17,19 @@ public:
         ALREADY_IN_PROGRESS
     };
 
-    explicit NvPairingManager(NvComputer* computer);
+    // Setting abortFlag from another thread makes pair() throw a
+    // QtNetworkReplyException with OperationCanceledError
+    explicit NvPairingManager(NvComputer* computer, std::shared_ptr<std::atomic_bool> abortFlag = nullptr);
 
     ~NvPairingManager();
 
     PairState
     pair(QString appVersion, QString pin, QSslCertificate& serverCert);
+
+    // Tells the host to forget an aborted pairing attempt, so it doesn't
+    // keep waiting for a PIN that will never be used
+    void
+    cleanUpAbortedPairing();
 
 private:
     QByteArray

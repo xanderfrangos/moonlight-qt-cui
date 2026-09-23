@@ -8,6 +8,7 @@
 
 #include "settings/mappingmanager.h"
 #include "settings/controlleridentity.h"
+#include "settings/controllerbuttonstyle.h"
 #include "inputmodetracker.h"
 
 // Holding a D-pad direction or the left stick repeats navigation after an
@@ -23,12 +24,23 @@
 #define STICK_PRESS_THRESHOLD 20000
 #define STICK_RELEASE_THRESHOLD 12000
 
+// How often we poll for gamepad input while the window has focus. Anything
+// longer adds noticeable delay between a D-pad press and the focus moving.
+#define POLLING_INTERVAL_MS 16
+
+// Identify rumbles the controller twice, so it stands out from game rumble
+#define IDENTIFY_RUMBLE_STRENGTH 0xC000
+#define IDENTIFY_RUMBLE_DURATION_MS 200
+#define IDENTIFY_RUMBLE_GAP_MS 150
+
 SdlGamepadKeyNavigation::SdlGamepadKeyNavigation(StreamingPreferences* prefs)
     : m_Prefs(prefs),
       m_Enabled(false),
       m_UiNavMode(false),
       m_FirstPoll(false),
       m_HasFocus(false),
+      m_ButtonStyle(ControllerButtonStyle::Xbox),
+      m_ButtonStyleFromInput(false),
       m_HeldDirection(ND_NONE),
       m_HeldDirectionFromDpad(false),
       m_HeldDirectionStartTime(0),
@@ -150,6 +162,17 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
             QEvent::Type type =
                     event.type == SDL_CONTROLLERBUTTONDOWN ?
                         QEvent::Type::KeyPress : QEvent::Type::KeyRelease;
+
+            if (type == QEvent::Type::KeyPress) {
+                const UiGamepad* gamepad = findGamepad(event.cbutton.which);
+                if (gamepad != nullptr) {
+                    // Button prompts follow the controller that's being used
+                    setButtonStyle(ControllerButtonStyle::fromController(gamepad->controller));
+                    m_ButtonStyleFromInput = true;
+
+                    emit controllerInput(gamepad->id);
+                }
+            }
 
             // Swap face buttons if needed
             if (m_Prefs->swapFaceButtons) {
@@ -440,8 +463,7 @@ void SdlGamepadKeyNavigation::updateTimerState()
         // Don't resume repeating a direction held before we lost focus
         m_HeldDirection = ND_NONE;
 
-        // Poll every 50 ms for a new joystick event
-        m_PollingTimer->start(50);
+        m_PollingTimer->start(POLLING_INTERVAL_MS);
     }
 }
 
@@ -473,6 +495,11 @@ void SdlGamepadKeyNavigation::addGamepad(SDL_GameController* controller)
     gamepad.name = ControllerIdentity::displayName(controller);
     gamepad.metadata = ControllerIdentity::displayMetadata(controller);
     m_Gamepads.append(gamepad);
+
+    // Until a button is pressed, show prompts for the first controller we find
+    if (!m_ButtonStyleFromInput && m_Gamepads.size() == 1) {
+        setButtonStyle(ControllerButtonStyle::fromController(controller));
+    }
 
     if (!m_Prefs->controllerOrder.contains(gamepad.id)) {
         m_Prefs->controllerOrder.append(gamepad.id);
@@ -529,6 +556,11 @@ QVariantList SdlGamepadKeyNavigation::controllers() const
         item.insert(QStringLiteral("playerNumber"), enabled ? (m_Prefs->multiController ? playerNumber : 1) : 0);
         item.insert(QStringLiteral("canMoveUp"), i > 0);
         item.insert(QStringLiteral("canMoveDown"), i + 1 < orderedIds.size());
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+        item.insert(QStringLiteral("canIdentify"), (bool)SDL_GameControllerHasRumble(gamepad->controller));
+#else
+        item.insert(QStringLiteral("canIdentify"), true);
+#endif
         result.append(item);
     }
 
@@ -565,4 +597,69 @@ void SdlGamepadKeyNavigation::moveController(const QString& id, int direction)
     m_Prefs->controllerOrder.swapItemsAt(index, otherIndex);
     m_Prefs->save();
     emit controllersChanged();
+}
+
+const SdlGamepadKeyNavigation::UiGamepad* SdlGamepadKeyNavigation::findGamepad(SDL_JoystickID instanceId) const
+{
+    for (const UiGamepad& gamepad : m_Gamepads) {
+        if (SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gamepad.controller)) == instanceId) {
+            return &gamepad;
+        }
+    }
+    return nullptr;
+}
+
+const SdlGamepadKeyNavigation::UiGamepad* SdlGamepadKeyNavigation::findGamepad(const QString& id) const
+{
+    for (const UiGamepad& gamepad : m_Gamepads) {
+        if (gamepad.id == id) {
+            return &gamepad;
+        }
+    }
+    return nullptr;
+}
+
+int SdlGamepadKeyNavigation::buttonStyle() const
+{
+    return m_ButtonStyle;
+}
+
+void SdlGamepadKeyNavigation::setButtonStyle(int buttonStyle)
+{
+    if (m_ButtonStyle != buttonStyle) {
+        m_ButtonStyle = buttonStyle;
+        emit buttonStyleChanged();
+    }
+}
+
+QString SdlGamepadKeyNavigation::faceButtonGlyph(int style, int position) const
+{
+    return ControllerButtonStyle::glyph((ControllerButtonStyle::Style)style,
+                                        (ControllerButtonStyle::FacePosition)position);
+}
+
+QColor SdlGamepadKeyNavigation::faceButtonColor(int style, int position) const
+{
+    return ControllerButtonStyle::color((ControllerButtonStyle::Style)style,
+                                        (ControllerButtonStyle::FacePosition)position);
+}
+
+void SdlGamepadKeyNavigation::rumbleForIdentify(const QString& id)
+{
+    // Look the controller up again each time, since it may have been
+    // disconnected between pulses
+    const UiGamepad* gamepad = findGamepad(id);
+    if (gamepad != nullptr) {
+        SDL_GameControllerRumble(gamepad->controller,
+                                 IDENTIFY_RUMBLE_STRENGTH, IDENTIFY_RUMBLE_STRENGTH,
+                                 IDENTIFY_RUMBLE_DURATION_MS);
+    }
+}
+
+void SdlGamepadKeyNavigation::identifyController(const QString& id)
+{
+    rumbleForIdentify(id);
+    QTimer::singleShot(IDENTIFY_RUMBLE_DURATION_MS + IDENTIFY_RUMBLE_GAP_MS, this, [this, id]() {
+        rumbleForIdentify(id);
+    });
 }

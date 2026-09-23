@@ -4,6 +4,7 @@ import QtQuick.Controls.Material 2.2
 import QtQuick.Layouts 1.3
 
 import SdlGamepadKeyNavigation 1.0
+import InputModeTracker 1.0
 import StreamingPreferences 1.0
 import TvTheme 1.0
 
@@ -69,9 +70,10 @@ Item {
 
         Label {
             Layout.fillWidth: true
-            text: StreamingPreferences.multiController ?
-                      qsTr("Enabled controllers are passed to the host in this player order.") :
-                      qsTr("Enabled controllers are combined as Player 1 because Force gamepad #1 always connected is enabled.")
+            text: (StreamingPreferences.multiController ?
+                       qsTr("Enabled controllers are passed to the host in this player order.") :
+                       qsTr("Enabled controllers are combined as Player 1 because Force gamepad #1 always connected is enabled.")) +
+                  " " + qsTr("Press a button on a controller to light up its row.")
             color: TvTheme.textSecondary
             font.pointSize: 14
             wrapMode: Text.WordWrap
@@ -111,7 +113,44 @@ Item {
                 property alias firstControl: enabledButton
                 property alias upControl: upButton
                 property alias downControl: downButton
-                readonly property bool rowFocus: enabledButton.activeFocus || upButton.activeFocus || downButton.activeFocus
+                readonly property bool rowFocus: identifyButton.activeFocus || enabledButton.activeFocus ||
+                                                 upButton.activeFocus || downButton.activeFocus
+
+                // Lights up whenever a button is pressed on this controller, so
+                // the user can match the rows to the controllers in their hands
+                Rectangle {
+                    id: activityLight
+                    anchors.left: parent.left
+                    anchors.leftMargin: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 6
+                    height: parent.height - 40
+                    radius: width / 2
+                    color: Material.accent
+                    opacity: 0.12
+
+                    SequentialAnimation {
+                        id: activityAnimation
+                        PropertyAction { target: activityLight; property: "opacity"; value: 1.0 }
+                        PauseAnimation { duration: 150 }
+                        NumberAnimation {
+                            target: activityLight
+                            property: "opacity"
+                            to: 0.12
+                            duration: 600
+                            easing.type: Easing.InQuad
+                        }
+                    }
+                }
+
+                Connections {
+                    target: SdlGamepadKeyNavigation
+                    function onControllerInput(id) {
+                        if (id === modelData.id) {
+                            activityAnimation.restart()
+                        }
+                    }
+                }
 
                 RowLayout {
                     anchors.fill: parent
@@ -145,6 +184,20 @@ Item {
                             color: TvTheme.textSecondary
                             font.pointSize: 12
                         }
+                    }
+
+                    Button {
+                        id: identifyButton
+                        text: qsTr("Identify")
+                        enabled: modelData.canIdentify
+                        onClicked: SdlGamepadKeyNavigation.identifyController(modelData.id)
+                        onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
+
+                        ToolTip.delay: 1000
+                        ToolTip.timeout: 3000
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                        ToolTip.text: modelData.canIdentify ? qsTr("Rumble this controller") :
+                                                              qsTr("This controller can't rumble")
                     }
 
                     Button {

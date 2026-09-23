@@ -196,16 +196,22 @@ private:
         GamepadMenuDisconnect,
         GamepadMenuEndSession,
         GamepadMenuToggleStats,
+        GamepadMenuToggleMouse,
         GamepadMenuPressGuide,
-        GamepadMenuItemMax
     };
+
+    // The items the gamepad menu shows, in order
+    QVector<GamepadMenuItem> gamepadMenuItems() const;
+
+    QString gamepadMenuItemLabel(GamepadMenuItem item) const;
 
     bool isGamepadMenuOpen() const
     {
         return m_GamepadMenuOpen;
     }
 
-    void openGamepadMenu(short gamepadIndex);
+    // jsId is the gamepad that opened the menu, whose button labels it shows
+    void openGamepadMenu(short gamepadIndex, SDL_JoystickID jsId);
 
     void closeGamepadMenu();
 
@@ -333,6 +339,7 @@ private:
     bool m_GamepadMenuOpen;
     int m_GamepadMenuIndex;
     short m_GamepadMenuGamepadIndex;
+    SDL_JoystickID m_GamepadMenuJsId;
     int m_FlushingWindowEventsRef;
     QStringList m_LaunchWarnings;
     bool m_ShouldExit;

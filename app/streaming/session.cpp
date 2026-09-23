@@ -4,6 +4,7 @@
 #include <QDir>
 #include "session.h"
 #include "settings/streamingpreferences.h"
+#include "settings/controllerbuttonstyle.h"
 #include "streaming/streamutils.h"
 #include "streaming/vrrratepolicy.h"
 #include "backend/richpresencemanager.h"
@@ -636,6 +637,7 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_GamepadMenuOpen(false),
       m_GamepadMenuIndex(0),
       m_GamepadMenuGamepadIndex(0),
+      m_GamepadMenuJsId(-1),
       m_FlushingWindowEventsRef(0),
       m_ShouldExit(false),
       m_AsyncConnectionSuccess(false),
@@ -1727,16 +1729,6 @@ void Session::notifyMouseEmulationMode(bool enabled)
     refreshStatusOverlay();
 }
 
-static const char* k_GamepadMenuItems[] = {
-    "Disconnect",
-    "End Session",
-    "Toggle Stream Statistics",
-    "Press Guide Button",
-};
-
-// Prompts for the buttons that gamepad.cpp handles while the menu is up
-static const char* k_GamepadMenuHint = "A   Select          B   Back";
-
 static const SDL_Color k_StatusColor = {0xCC, 0x00, 0x00, 0xFF};
 static const SDL_Color k_MenuColor = {0xFF, 0xFF, 0xFF, 0xFF};
 static const SDL_Color k_NoBackground = {0x00, 0x00, 0x00, 0x00};
@@ -1806,16 +1798,30 @@ void Session::setStatsOverlayEnabled(bool enabled)
 
 void Session::refreshStatusOverlay()
 {
-    static_assert(SDL_arraysize(k_GamepadMenuItems) == GamepadMenuItemMax,
-                  "Gamepad menu item labels must match GamepadMenuItem");
-
     // The status update overlay is shared between the gamepad menu, gamepad mouse
     // mode, and connection warnings. The menu takes priority while it's up.
     if (m_GamepadMenuOpen) {
         QStringList items;
-        for (int i = 0; i < GamepadMenuItemMax; i++) {
-            items.append(QString::fromUtf8(k_GamepadMenuItems[i]));
+        for (GamepadMenuItem item : gamepadMenuItems()) {
+            items.append(gamepadMenuItemLabel(item));
         }
+
+        // Prompts for the buttons that gamepad.cpp handles while the menu is
+        // up, labeled the way the gamepad that opened the menu labels them.
+        // Swapped face buttons are swapped before the menu sees them.
+        const auto style = (ControllerButtonStyle::Style)(m_InputHandler != nullptr ?
+                                                              m_InputHandler->getButtonStyle(m_GamepadMenuJsId) :
+                                                              ControllerButtonStyle::Xbox);
+        const bool swapped = m_Preferences->swapFaceButtons;
+        const ControllerButtonStyle::FacePosition selectPosition = swapped ? ControllerButtonStyle::East : ControllerButtonStyle::South;
+        const ControllerButtonStyle::FacePosition backPosition = swapped ? ControllerButtonStyle::South : ControllerButtonStyle::East;
+        QList<Overlay::Painter::ButtonHint> hints;
+        hints.append({ ControllerButtonStyle::glyph(style, selectPosition),
+                       ControllerButtonStyle::color(style, selectPosition),
+                       tr("Select") });
+        hints.append({ ControllerButtonStyle::glyph(style, backPosition),
+                       ControllerButtonStyle::color(style, backPosition),
+                       tr("Back") });
 
         int windowWidth, windowHeight;
         getWindowPixelSize(m_Window, windowWidth, windowHeight);
@@ -1827,7 +1833,7 @@ void Session::refreshStatusOverlay()
                                            Overlay::Painter::paintGamepadMenu(QStringLiteral("Moonlight"),
                                                                               items,
                                                                               m_GamepadMenuIndex,
-                                                                              QString::fromUtf8(k_GamepadMenuHint),
+                                                                              hints,
                                                                               windowHeight));
         m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
 
@@ -1848,15 +1854,56 @@ void Session::refreshStatusOverlay()
     m_OverlayManager.setOverlaySurface(Overlay::OverlayStatusUpdate, nullptr);
 
     if (m_MouseEmulationRefCount > 0) {
+        // Holding Start opens the gamepad menu instead when it's set up that way
         m_OverlayManager.setStatusMessage(Overlay::StatusSource::Mouse,
-                                         "Gamepad mouse mode active\nLong press Start to deactivate");
+                                          m_Preferences->gamepadMenuTrigger == StreamingPreferences::GMT_HOLD_START ?
+                                              "Gamepad mouse mode active\nTurn it off from the Moonlight menu" :
+                                              "Gamepad mouse mode active\nLong press Start to deactivate");
     }
     else {
         m_OverlayManager.setStatusMessage(Overlay::StatusSource::Mouse, "");
     }
 }
 
-void Session::openGamepadMenu(short gamepadIndex)
+QVector<Session::GamepadMenuItem> Session::gamepadMenuItems() const
+{
+    QVector<GamepadMenuItem> items = {
+        GamepadMenuDisconnect,
+        GamepadMenuEndSession,
+        GamepadMenuToggleStats,
+    };
+
+    // Mouse mode is normally toggled by holding Start, but holding Start may
+    // open this menu instead, so offer it here too
+    if (m_Preferences->gamepadMouse) {
+        items.append(GamepadMenuToggleMouse);
+    }
+
+    items.append(GamepadMenuPressGuide);
+    return items;
+}
+
+QString Session::gamepadMenuItemLabel(GamepadMenuItem item) const
+{
+    switch (item) {
+    case GamepadMenuDisconnect:
+        return tr("Disconnect");
+    case GamepadMenuEndSession:
+        return tr("End Session");
+    case GamepadMenuToggleStats:
+        return tr("Toggle Stream Statistics");
+    case GamepadMenuToggleMouse:
+        return m_InputHandler != nullptr && m_InputHandler->isMouseEmulationActive(m_GamepadMenuJsId) ?
+                   tr("Turn Off Gamepad Mouse Mode") : tr("Turn On Gamepad Mouse Mode");
+    case GamepadMenuPressGuide:
+        return tr("Press Guide Button");
+    }
+
+    SDL_assert(false);
+    return QString();
+}
+
+void Session::openGamepadMenu(short gamepadIndex, SDL_JoystickID jsId)
 {
     if (m_GamepadMenuOpen) {
         return;
@@ -1864,6 +1911,7 @@ void Session::openGamepadMenu(short gamepadIndex)
 
     // Actions that talk back to the host go to the gamepad that opened the menu
     m_GamepadMenuGamepadIndex = gamepadIndex;
+    m_GamepadMenuJsId = jsId;
     m_GamepadMenuOpen = true;
     m_GamepadMenuIndex = 0;
     refreshStatusOverlay();
@@ -1889,7 +1937,8 @@ void Session::moveGamepadMenuSelection(int delta)
 {
     SDL_assert(m_GamepadMenuOpen);
 
-    m_GamepadMenuIndex = (m_GamepadMenuIndex + delta + GamepadMenuItemMax) % GamepadMenuItemMax;
+    const int itemCount = gamepadMenuItems().size();
+    m_GamepadMenuIndex = (m_GamepadMenuIndex + delta + itemCount) % itemCount;
     refreshStatusOverlay();
 }
 
@@ -1897,7 +1946,9 @@ void Session::activateGamepadMenuSelection()
 {
     SDL_assert(m_GamepadMenuOpen);
 
-    int selection = m_GamepadMenuIndex;
+    const QVector<GamepadMenuItem> items = gamepadMenuItems();
+    SDL_assert(m_GamepadMenuIndex >= 0 && m_GamepadMenuIndex < items.size());
+    GamepadMenuItem selection = items.value(m_GamepadMenuIndex, GamepadMenuDisconnect);
     closeGamepadMenu();
 
     switch (selection) {
@@ -1912,6 +1963,12 @@ void Session::activateGamepadMenuSelection()
 
     case GamepadMenuToggleStats:
         toggleStatsOverlay();
+        return;
+
+    case GamepadMenuToggleMouse:
+        if (m_InputHandler != nullptr) {
+            m_InputHandler->toggleMouseEmulation(m_GamepadMenuJsId);
+        }
         return;
 
     case GamepadMenuEndSession:
@@ -2472,6 +2529,9 @@ void Session::exec()
             case SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS:
                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
                                                     (DualSenseOutputReport *)event.user.data2);
+                break;
+            case SDL_CODE_GAMEPAD_MENU_TRIGGER_TIMER:
+                m_InputHandler->handleGamepadMenuTriggerTimers();
                 break;
             default:
                 SDL_assert(false);

@@ -10,6 +10,9 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 
+#include <atomic>
+#include <memory>
+
 class NvComputer;
 
 class NvDisplayMode
@@ -142,6 +145,10 @@ public:
                            NvLogLevel logLevel = NvLogLevel::NVLL_VERBOSE);
 
     void setServerCert(QSslCertificate serverCert);
+
+    // Setting the flag from any thread ends the request in progress, and any
+    // later ones, with an OperationCanceledError exception
+    void setAbortFlag(std::shared_ptr<std::atomic_bool> abortFlag);
     void setAddress(NvAddress address);
     void setHttpsPort(uint16_t port);
     void setTrueUid(bool useTrueUid);
@@ -200,4 +207,5 @@ private:
     QNetworkAccessManager* m_Nam;
     QSslCertificate m_ServerCert;
     bool m_UseTrueUid;
+    std::shared_ptr<std::atomic_bool> m_AbortFlag;
 };

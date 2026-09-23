@@ -82,25 +82,43 @@ void OverlayManager::setStatusMessage(StatusSource source, const std::string& te
 {
     {
         std::lock_guard<std::mutex> lock(m_StateLock);
-        auto& message = m_StatusMessages[static_cast<int>(source)];
-        if (message == text) return;
-        message = text;
-        std::string combined = m_StatusMessages[static_cast<int>(StatusSource::Mouse)];
-        if (combined.empty()) {
-            combined = m_StatusMessages[static_cast<int>(StatusSource::Network)];
-            const auto& client = m_StatusMessages[static_cast<int>(StatusSource::ClientPacing)];
-            if (!combined.empty() && !client.empty()) combined += "\n\n";
-            combined += client;
+        m_StatusMessages[static_cast<int>(source)] = text;
+
+        // While a pre-rendered surface (the gamepad menu) owns the overlay, the
+        // messages wait. They're published when the surface is removed.
+        if (m_StatusOverlayPainted || !publishStatusMessagesLocked()) {
+            return;
         }
-        auto& overlay = m_Overlays[OverlayStatusUpdate];
-        if (combined == overlay.text && overlay.enabled == !combined.empty()) return;
-        SDL_utf8strlcpy(overlay.text, combined.c_str(), sizeof(overlay.text));
-        overlay.enabled = !combined.empty();
-        ++overlay.revision;
-        overlay.dirty = true;
-        overlay.queued = std::chrono::steady_clock::now();
     }
     m_WorkReady.notify_one();
+}
+
+bool OverlayManager::publishStatusMessagesLocked()
+{
+    std::string combined = m_StatusMessages[static_cast<int>(StatusSource::Mouse)];
+    if (combined.empty()) {
+        combined = m_StatusMessages[static_cast<int>(StatusSource::Network)];
+        const auto& client = m_StatusMessages[static_cast<int>(StatusSource::ClientPacing)];
+        if (!combined.empty() && !client.empty()) combined += "\n\n";
+        combined += client;
+    }
+
+    auto& overlay = m_Overlays[OverlayStatusUpdate];
+    const bool enabled = !combined.empty();
+    if (combined == overlay.text && overlay.enabled == enabled &&
+            (SDL_AtomicGet(&overlay.enabledForReaders) != 0) == enabled) {
+        return false;
+    }
+
+    SDL_utf8strlcpy(overlay.text, combined.c_str(), sizeof(overlay.text));
+    overlay.enabled = enabled;
+    // Renderers keep drawing their last texture while this says the overlay
+    // is enabled, so it must follow 'enabled'
+    SDL_AtomicSet(&overlay.enabledForReaders, enabled);
+    ++overlay.revision;
+    overlay.dirty = true;
+    overlay.queued = std::chrono::steady_clock::now();
+    return true;
 }
 
 std::string OverlayManager::getOverlayText(OverlayType type)
@@ -169,6 +187,17 @@ void OverlayManager::setOverlaySurface(OverlayType type, SDL_Surface* surface, b
         ++overlay.revision;
         overlay.dirty = overlay.dirty || overlay.enabled;
         overlay.queued = std::chrono::steady_clock::now();
+
+        // The status messages share this overlay. Hand it back to them once
+        // the surface that took it over is gone, turning the overlay off if
+        // there are none.
+        if (type == OverlayStatusUpdate) {
+            const bool wasPainted = m_StatusOverlayPainted;
+            m_StatusOverlayPainted = surface != nullptr;
+            if (wasPainted && !m_StatusOverlayPainted) {
+                publishStatusMessagesLocked();
+            }
+        }
     }
     m_WorkReady.notify_one();
 }

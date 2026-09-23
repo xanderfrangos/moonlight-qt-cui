@@ -176,6 +176,11 @@ CenteredGridView {
 
         popupOpen: pcContextMenu !== null && pcContextMenu.visible
 
+        // Matches what onClicked does below
+        tvHintSelect: !model.online ? qsTr("Options") :
+                      !model.serverSupported ? qsTr("Select") :
+                      model.paired ? qsTr("Open") : qsTr("Pair")
+
         // TV mode: the card surface
         Rectangle {
             visible: tvCard
@@ -405,6 +410,7 @@ CenteredGridView {
 
                     // Display the pairing dialog
                     pairDialog.pin = pin
+                    pairDialog.pcName = model.name
                     pairDialog.open()
                 }
             } else if (!model.online) {
@@ -453,17 +459,78 @@ CenteredGridView {
         helpUrl: "https://github.com/moonlight-stream/moonlight-docs/wiki/Setup-Guide"
     }
 
-    NavigableMessageDialog {
+    NavigableDialog {
         id: pairDialog
         closePolicy: Popup.CloseOnEscape
 
         // don't allow edits to the rest of the window while open
         property string pin : "0000"
-        text:qsTr("Please enter %1 on your host PC. This dialog will close when pairing is completed.").arg(pin)+"\n\n"+
-             qsTr("If your host PC is running Sunshine, navigate to the Sunshine web UI to enter the PIN.")
+        property string pcName : ""
         standardButtons: Dialog.Cancel
-        onRejected: {
-            // FIXME: We should interrupt pairing here
+
+        onOpened: {
+            // Focus the button so the gamepad and keyboard can reach it
+            if (footer && footer.count > 0) {
+                footer.itemAt(0).forceActiveFocus(Qt.TabFocus)
+            }
+        }
+
+        // Cancel, Escape, and the gamepad's back button all reject. Closing the
+        // dialog because pairing finished doesn't.
+        onRejected: computerModel.cancelPairing()
+
+        ColumnLayout {
+            spacing: SystemProperties.tvMode ? 24 : 16
+
+            Label {
+                Layout.maximumWidth: SystemProperties.tvMode ? 640 : 420
+                text: qsTr("Enter this PIN on %1:").arg(pairDialog.pcName)
+                font.bold: true
+                wrapMode: Text.Wrap
+            }
+
+            // The PIN in large digits, so it can be read from across the room
+            Row {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: SystemProperties.tvMode ? 16 : 10
+
+                Repeater {
+                    model: pairDialog.pin.split("")
+
+                    Rectangle {
+                        width: SystemProperties.tvMode ? 80 : 56
+                        height: SystemProperties.tvMode ? 104 : 72
+                        radius: SystemProperties.tvMode ? TvTheme.cardRadius : 8
+                        color: SystemProperties.tvMode ? TvTheme.surface : Qt.rgba(1, 1, 1, 0.08)
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: modelData
+                            font.pointSize: SystemProperties.tvMode ? 44 : 30
+                            font.bold: true
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                spacing: 12
+
+                BusyIndicator {
+                    Layout.preferredWidth: 40
+                    Layout.preferredHeight: 40
+                    running: pairDialog.visible
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: SystemProperties.tvMode ? 580 : 370
+                    text: qsTr("If your host PC is running Sunshine, navigate to the Sunshine web UI to enter the PIN.") + " " +
+                          qsTr("This dialog will close when pairing is completed.")
+                    color: SystemProperties.tvMode ? TvTheme.textSecondary : Material.foreground
+                    wrapMode: Text.Wrap
+                }
+            }
         }
     }
 

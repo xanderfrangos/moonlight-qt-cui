@@ -140,6 +140,10 @@ void ComputerModel::deleteComputer(int computerIndex)
 
     beginRemoveRows(QModelIndex(), computerIndex, computerIndex);
 
+    if (m_Computers[computerIndex] == m_PairingComputer) {
+        m_PairingComputer = nullptr;
+    }
+
     // m_Computer[computerIndex] will be deleted by this call
     m_ComputerManager->deleteHost(m_Computers[computerIndex]);
 
@@ -217,11 +221,26 @@ void ComputerModel::pairComputer(int computerIndex, QString pin)
 {
     Q_ASSERT(computerIndex < m_Computers.count());
 
-    m_ComputerManager->pairHost(m_Computers[computerIndex], pin);
+    m_PairingComputer = m_Computers[computerIndex];
+    m_ComputerManager->pairHost(m_PairingComputer, pin);
 }
 
-void ComputerModel::handlePairingCompleted(NvComputer*, QString error)
+void ComputerModel::cancelPairing()
 {
+    // Remember the computer rather than its index, which can change while the
+    // pairing dialog is up if another PC is discovered
+    if (m_PairingComputer != nullptr) {
+        m_ComputerManager->cancelPairing(m_PairingComputer);
+        m_PairingComputer = nullptr;
+    }
+}
+
+void ComputerModel::handlePairingCompleted(NvComputer* computer, QString error)
+{
+    if (computer == m_PairingComputer) {
+        m_PairingComputer = nullptr;
+    }
+
     emit pairingCompleted(error.isEmpty() ? QVariant() : error);
 }
 

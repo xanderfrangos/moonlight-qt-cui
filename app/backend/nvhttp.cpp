@@ -18,6 +18,9 @@
 #define RESUME_TIMEOUT_MS 30000
 #define QUIT_TIMEOUT_MS 30000
 
+// How often a request checks whether it has been aborted
+#define ABORT_POLL_INTERVAL_MS 100
+
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #define XML_NAME_EQUALS(x, y) ((x) == (y))
 #else
@@ -48,6 +51,11 @@ NvHTTP::NvHTTP(NvComputer* computer, QNetworkAccessManager* nam) :
 void NvHTTP::setServerCert(QSslCertificate serverCert)
 {
     m_ServerCert = serverCert;
+}
+
+void NvHTTP::setAbortFlag(std::shared_ptr<std::atomic_bool> abortFlag)
+{
+    m_AbortFlag = abortFlag;
 }
 
 void NvHTTP::setAddress(NvAddress address)
@@ -526,10 +534,26 @@ NvHTTP::openConnection(QUrl baseUrl,
     if (timeoutMs) {
         QTimer::singleShot(timeoutMs, &loop, &QEventLoop::quit);
     }
+
+    // The flag is set from another thread, so poll it rather than wait on a signal
+    std::shared_ptr<std::atomic_bool> abortFlag = m_AbortFlag;
+    QTimer abortPollTimer;
+    if (abortFlag) {
+        connect(&abortPollTimer, &QTimer::timeout, &loop, [&loop, abortFlag]() {
+            if (*abortFlag) {
+                loop.quit();
+            }
+        });
+        abortPollTimer.start(ABORT_POLL_INTERVAL_MS);
+    }
+
     if (logLevel >= NvLogLevel::NVLL_VERBOSE) {
         qInfo() << "Executing request:" << url.toString();
     }
-    loop.exec(QEventLoop::ExcludeUserInputEvents);
+    if (!abortFlag || !*abortFlag) {
+        loop.exec(QEventLoop::ExcludeUserInputEvents);
+    }
+    abortPollTimer.stop();
 
     // Abort the request if it timed out
     if (!reply->isFinished())
@@ -557,6 +581,11 @@ NvHTTP::openConnection(QUrl baseUrl,
             // This will trigger falling back to HTTP for the serverinfo query
             // then pairing again to get the updated certificate.
             GfeHttpResponseException exception(401, "Server certificate mismatch");
+            delete reply;
+            throw exception;
+        }
+        else if (reply->error() == QNetworkReply::OperationCanceledError && abortFlag && *abortFlag) {
+            QtNetworkReplyException exception(QNetworkReply::OperationCanceledError, "Request aborted");
             delete reply;
             throw exception;
         }

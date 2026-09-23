@@ -4,6 +4,7 @@ import QtQuick.Window 2.2
 
 import SdlGamepadKeyNavigation 1.0
 import Session 1.0
+import StreamingPreferences 1.0
 import SystemProperties 1.0
 import TvTheme 1.0
 
@@ -170,8 +171,27 @@ Item {
             // in the hintText control itself to synchronize
             // with Session.exec() which requires no concurrent
             // gamepad usage.
-            hintText.text = qsTr("Tip:") + " " + qsTr("Press %1 to disconnect your session").arg(SdlGamepadKeyNavigation.getConnectedGamepads() > 0 ?
-                                                  qsTr("Start+Select+L1+R1") : qsTr("Ctrl+Alt+Shift+Q"))
+            var tip
+            if (SdlGamepadKeyNavigation.getConnectedGamepads() === 0) {
+                tip = qsTr("Press %1 to disconnect your session").arg(qsTr("Ctrl+Alt+Shift+Q"))
+            }
+            else {
+                switch (StreamingPreferences.gamepadMenuTrigger) {
+                case StreamingPreferences.GMT_START_SELECT:
+                    tip = qsTr("Press %1 to open the Moonlight menu").arg(qsTr("Start+Select"))
+                    break
+                case StreamingPreferences.GMT_HOLD_SELECT:
+                    tip = qsTr("Hold %1 to open the Moonlight menu").arg(qsTr("Select"))
+                    break
+                case StreamingPreferences.GMT_HOLD_START:
+                    tip = qsTr("Hold %1 to open the Moonlight menu").arg(qsTr("Start"))
+                    break
+                default:
+                    tip = qsTr("Press %1 to open the Moonlight menu").arg(qsTr("Start+Select+L1+R1"))
+                    break
+                }
+            }
+            hintText.text = qsTr("Tip:") + " " + tip
 
             // Stop GUI gamepad usage now
             SdlGamepadKeyNavigation.disable()

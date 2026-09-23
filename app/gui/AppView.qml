@@ -98,6 +98,9 @@ import AppModel 1.0; AppModel {}', parent, '')
 
         popupOpen: appContextMenu !== null && appContextMenu.visible
 
+        // A running game opens its menu to resume or quit (see Keys.onReturnPressed)
+        tvHintSelect: model.running ? qsTr("Resume or quit") : qsTr("Play")
+
         readonly property int artWidth: SystemProperties.tvMode ? 240 : 200
         readonly property int artHeight: SystemProperties.tvMode ? 320 : 267
 

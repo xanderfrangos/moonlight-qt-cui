@@ -15,6 +15,9 @@ ItemDelegate {
     property bool tvCardStyle: false
     readonly property bool tvCard: SystemProperties.tvMode && tvCardStyle
 
+    // What the TV mode hint bar says the select button does on this card
+    property string tvHintSelect: ""
+
     // Opacity for dimming and hiding, which delegates may lower further
     property real cardOpacity: 1.0
 

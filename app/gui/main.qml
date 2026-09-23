@@ -773,6 +773,7 @@ ApplicationWindow {
                 (window.activeFocusItem instanceof GridView || window.activeFocusItem.grid !== undefined)
         canGoBack: stackView.depth > 1
         canOpenSettings: !(stackView.currentItem instanceof SettingsView)
+        focusItem: window.activeFocusItem
     }
 
     // A clearly visible indicator around the focused control while navigating

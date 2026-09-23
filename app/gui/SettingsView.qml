@@ -2036,6 +2036,65 @@ Flickable {
                     ToolTip.text: qsTr("This switches gamepads into a Nintendo-style button layout")
                 }
 
+                Label {
+                    width: parent.width
+                    id: gamepadMenuTriggerTitle
+                    text: qsTr("Open the Moonlight menu while streaming with")
+                    font.pointSize: 12
+                    wrapMode: Text.Wrap
+                }
+
+                AutoResizingComboBox {
+                    id: gamepadMenuTriggerComboBox
+                    textRole: "text"
+                    model: ListModel {
+                        id: gamepadMenuTriggerListModel
+                        ListElement {
+                            text: qsTr("Start+Select+L1+R1")
+                            val: StreamingPreferences.GMT_COMBO
+                        }
+                        ListElement {
+                            text: qsTr("Start+Select")
+                            val: StreamingPreferences.GMT_START_SELECT
+                        }
+                        ListElement {
+                            text: qsTr("Hold Select")
+                            val: StreamingPreferences.GMT_HOLD_SELECT
+                        }
+                        ListElement {
+                            text: qsTr("Hold Start")
+                            val: StreamingPreferences.GMT_HOLD_START
+                        }
+                    }
+
+                    // ignore setting the index at first, and actually set it when the component is loaded
+                    Component.onCompleted: {
+                        var savedTrigger = StreamingPreferences.gamepadMenuTrigger
+                        currentIndex = 0
+                        for (var i = 0; i < gamepadMenuTriggerListModel.count; i++) {
+                            if (gamepadMenuTriggerListModel.get(i).val === savedTrigger) {
+                                currentIndex = i
+                                break
+                            }
+                        }
+
+                        activated(currentIndex)
+                    }
+
+                    // ::onActivated must be used, as it only listens for when the index is changed by a human
+                    onActivated: {
+                        StreamingPreferences.gamepadMenuTrigger = gamepadMenuTriggerListModel.get(currentIndex).val
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 10000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("The Moonlight menu lets you disconnect, end the session, show stream statistics, and more.") + "\n\n" +
+                                  qsTr("Start+Select+L1+R1 always opens it too.") + " " +
+                                  qsTr("With the other choices, Start and Select still reach the game when tapped or pressed together with other buttons.") + "\n\n" +
+                                  qsTr("Hold Start replaces holding Start for gamepad mouse mode, which can then be turned on from the menu instead.")
+                }
+
                 CheckBox {
                     id: singleControllerCheck
                     width: parent.width
@@ -2057,7 +2116,10 @@ Flickable {
                     id: gamepadMouseCheck
                     hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     width: parent.width
-                    text: qsTr("Enable mouse control with gamepads by holding the 'Start' button")
+                    // Holding Start opens the menu instead when it's set up that way
+                    text: StreamingPreferences.gamepadMenuTrigger === StreamingPreferences.GMT_HOLD_START ?
+                              qsTr("Enable mouse control with gamepads from the Moonlight menu") :
+                              qsTr("Enable mouse control with gamepads by holding the 'Start' button")
                     font.pointSize: 12
                     checked: StreamingPreferences.gamepadMouse
                     onCheckedChanged: {

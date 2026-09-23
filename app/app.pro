@@ -191,6 +191,7 @@ SOURCES += \
     settings/compatfetcher.cpp \
     settings/mappingfetcher.cpp \
     settings/controlleridentity.cpp \
+    settings/controllerbuttonstyle.cpp \
     settings/streamingpreferences.cpp \
     diagnostics/diagnosticcapture.cpp \
     diagnostics/gputrace.cpp \
@@ -238,6 +239,7 @@ HEADERS += \
     settings/compatfetcher.h \
     settings/mappingfetcher.h \
     settings/controlleridentity.h \
+    settings/controllerbuttonstyle.h \
     utils.h \
     backend/computerseeker.h \
     backend/identitymanager.h \

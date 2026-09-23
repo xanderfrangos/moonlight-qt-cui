@@ -43,6 +43,18 @@ struct GamepadState {
     // worked the menu don't leak into the game underneath it.
     int suppressedButtons;
 
+    // A button that can open the gamepad menu, held back from the host until
+    // we know whether it's opening the menu or meant for the game. The menu
+    // opens, or the button is passed on, once heldBackDeadline passes.
+    int heldBackButtons;
+    uint32_t heldBackDeadline;
+
+    // Buttons still reported as down for a moment after a quick tap of a
+    // held back button, since a press and release sent together is too
+    // short for some games to notice. Released at tapDeadline.
+    int tapButtons;
+    uint32_t tapDeadline;
+
     int buttons;
     short lsX, lsY;
     short rsX, rsY;
@@ -54,6 +66,11 @@ struct GamepadState {
 #define MAX_GAMEPADS 16
 
 #define MAX_FINGERS 2
+
+// Pushed by SdlInputHandler's timers for the Session event loop, which calls
+// SdlInputHandler::handleGamepadMenuTriggerTimers() on the main thread. This
+// shares the SDL_USEREVENT code space with the codes in session.cpp.
+#define SDL_CODE_GAMEPAD_MENU_TRIGGER_TIMER 106
 
 #define GAMEPAD_HAPTIC_METHOD_NONE 0
 #define GAMEPAD_HAPTIC_METHOD_LEFTRIGHT 1
@@ -121,6 +138,17 @@ public:
 
     void notifyGamepadMenuClosed();
 
+    // Opens the gamepad menu or passes held back buttons on to the host once
+    // their deadlines pass
+    void handleGamepadMenuTriggerTimers();
+
+    // How the gamepad labels its face buttons, as a ControllerButtonStyle::Style
+    int getButtonStyle(SDL_JoystickID jsId);
+
+    bool isMouseEmulationActive(SDL_JoystickID jsId);
+
+    void toggleMouseEmulation(SDL_JoystickID jsId);
+
     void sendGuideButtonPress(short gamepadIndex);
     int getAttachedPlayStationGamepadMask();
 
@@ -175,6 +203,21 @@ private:
 
     void sendGamepadState(GamepadState* state);
 
+    // The buttons a gamepad reports to the host, leaving out any that are
+    // hidden because they worked the gamepad menu or might be opening it
+    static int hostButtons(const GamepadState* state);
+
+    // Buttons that open the gamepad menu under the current trigger setting,
+    // either pressed together or held on their own
+    int gamepadMenuTriggerButtons() const;
+
+    // Returns true if the button event was consumed by the gamepad menu trigger
+    bool handleGamepadMenuTriggerButton(GamepadState* state, int buttonFlag, bool pressed);
+
+    void openGamepadMenu(GamepadState* state);
+
+    void setMouseEmulation(GamepadState* state, bool enabled);
+
     void sendGamepadBatteryState(GamepadState* state, SDL_JoystickPowerLevel level);
 
     void handleAbsoluteFingerEvent(SDL_TouchFingerEvent* event);
@@ -197,6 +240,9 @@ private:
     Uint32 releaseGuideButtonTimerCallback(Uint32 interval, void* param);
 
     static
+    Uint32 gamepadMenuTriggerTimerCallback(Uint32 interval, void* param);
+
+    static
     Uint32 releaseLeftButtonTimerCallback(Uint32 interval, void* param);
 
     static
@@ -211,6 +257,7 @@ private:
     bool m_SwapMouseButtons;
     bool m_ReverseScrollDirection;
     bool m_SwapFaceButtons;
+    StreamingPreferences::GamepadMenuTrigger m_GamepadMenuTrigger;
     QStringList m_ControllerOrder;
     QStringList m_DisabledControllers;
 

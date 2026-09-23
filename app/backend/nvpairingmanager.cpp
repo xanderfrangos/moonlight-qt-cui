@@ -11,9 +11,11 @@
 
 #define REQUEST_TIMEOUT_MS 5000
 
-NvPairingManager::NvPairingManager(NvComputer* computer) :
+NvPairingManager::NvPairingManager(NvComputer* computer, std::shared_ptr<std::atomic_bool> abortFlag) :
     m_Http(computer)
 {
+    m_Http.setAbortFlag(abortFlag);
+
     QByteArray cert = IdentityManager::get()->getCertificate();
     BIO *bio = BIO_new_mem_buf(cert.data(), -1);
     THROW_BAD_ALLOC_IF_NULL(bio);
@@ -369,4 +371,17 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
 
     serverCert = std::move(unverifiedServerCert);
     return PairState::PAIRED;
+}
+
+void
+NvPairingManager::cleanUpAbortedPairing()
+{
+    // The abort flag would cut this request short too
+    m_Http.setAbortFlag(nullptr);
+
+    try {
+        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp, "unpair", nullptr, REQUEST_TIMEOUT_MS);
+    } catch (const GfeHttpResponseException&) {
+    } catch (const QtNetworkReplyException&) {
+    }
 }

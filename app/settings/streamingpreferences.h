@@ -166,6 +166,17 @@ public:
     };
     Q_ENUM(CaptureSysKeysMode);
 
+    // What opens the in-stream gamepad menu. Start+Select+L1+R1 always works
+    // as well. Persisted IDs must stay stable.
+    enum GamepadMenuTrigger
+    {
+        GMT_COMBO = 0,
+        GMT_START_SELECT = 1,
+        GMT_HOLD_SELECT = 2,
+        GMT_HOLD_START = 3,
+    };
+    Q_ENUM(GamepadMenuTrigger);
+
     // Persisted IDs must stay stable when changing the user-facing names.
     enum PerformanceOverlayMode
     {
@@ -291,6 +302,7 @@ public:
     Q_PROPERTY(bool backgroundGamepad MEMBER backgroundGamepad NOTIFY backgroundGamepadChanged)
     Q_PROPERTY(bool reverseScrollDirection MEMBER reverseScrollDirection NOTIFY reverseScrollDirectionChanged)
     Q_PROPERTY(bool swapFaceButtons MEMBER swapFaceButtons NOTIFY swapFaceButtonsChanged)
+    Q_PROPERTY(GamepadMenuTrigger gamepadMenuTrigger MEMBER gamepadMenuTrigger NOTIFY gamepadMenuTriggerChanged)
     Q_PROPERTY(bool keepAwake MEMBER keepAwake NOTIFY keepAwakeChanged)
     Q_PROPERTY(CaptureSysKeysMode captureSysKeysMode MEMBER captureSysKeysMode NOTIFY captureSysKeysModeChanged)
     Q_PROPERTY(Language language MEMBER language NOTIFY languageChanged);
@@ -363,6 +375,7 @@ public:
     bool backgroundGamepad;
     bool reverseScrollDirection;
     bool swapFaceButtons;
+    GamepadMenuTrigger gamepadMenuTrigger;
     bool keepAwake;
     int packetSize;
     AudioConfig audioConfig;
@@ -443,6 +456,7 @@ signals:
     void backgroundGamepadChanged();
     void reverseScrollDirectionChanged();
     void swapFaceButtonsChanged();
+    void gamepadMenuTriggerChanged();
     void captureSysKeysModeChanged();
     void keepAwakeChanged();
     void languageChanged();

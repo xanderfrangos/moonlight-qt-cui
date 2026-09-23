@@ -1,4 +1,5 @@
 import QtQuick 2.9
+import QtQuick.Controls 2.2
 
 import StreamingPreferences 1.0
 import InputModeTracker 1.0
@@ -16,10 +17,44 @@ Item {
     property bool inGrid: false
     property bool canGoBack: false
     property bool canOpenSettings: true
+    // The control with focus, which decides what the select button says
+    property Item focusItem: null
+
+    // Face button positions, matching ControllerButtonStyle::FacePosition
+    readonly property int south: 0
+    readonly property int east: 1
+    readonly property int west: 2
+    readonly property int north: 3
 
     // Face buttons can be swapped in settings. SdlGamepadKeyNavigation swaps
     // A with B and X with Y, so the hints show the button that is pressed.
     readonly property bool swapped: StreamingPreferences.swapFaceButtons
+
+    // A slider being adjusted takes the select and back buttons for itself
+    readonly property bool editingSlider: focusItem !== null && focusItem instanceof NavigableSlider && focusItem.editing
+
+    // What pressing select does to the focused control. Controls can say for
+    // themselves by providing tvHintSelect.
+    readonly property string selectText: {
+        // A grid passes select on to its current card
+        var item = focusItem instanceof GridView ? focusItem.currentItem : focusItem
+        if (item === null) {
+            return qsTr("Select")
+        }
+        if (item.tvHintSelect !== undefined && item.tvHintSelect !== "") {
+            return item.tvHintSelect
+        }
+        if (focusItem instanceof NavigableSlider) {
+            return focusItem.editing ? qsTr("Done") : qsTr("Adjust")
+        }
+        if (focusItem instanceof ComboBox) {
+            return qsTr("Change")
+        }
+        if (focusItem instanceof CheckBox || focusItem instanceof Switch) {
+            return focusItem.checked ? qsTr("Turn off") : qsTr("Turn on")
+        }
+        return qsTr("Select")
+    }
 
     implicitHeight: 64
 
@@ -33,24 +68,25 @@ Item {
         Behavior on opacity { NumberAnimation { duration: TvTheme.animationNormal } }
 
         TvButtonHint {
-            button: swapped ? "B" : "A"
-            text: qsTr("Select")
+            position: swapped ? east : south
+            text: selectText
         }
 
         TvButtonHint {
             visible: inGrid && !inPopup
-            button: swapped ? "Y" : "X"
+            position: swapped ? north : west
             text: qsTr("Options")
         }
 
         TvButtonHint {
-            visible: canOpenSettings && !inPopup
-            button: swapped ? "X" : "Y"
+            visible: canOpenSettings && !inPopup && !editingSlider
+            position: swapped ? west : north
             text: qsTr("Settings")
         }
 
         TvButtonHint {
-            button: swapped ? "A" : "B"
+            visible: !editingSlider
+            position: swapped ? south : east
             text: inPopup ? qsTr("Close") : canGoBack ? qsTr("Back") : qsTr("Exit")
         }
     }

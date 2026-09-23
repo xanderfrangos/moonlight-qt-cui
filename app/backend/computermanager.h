@@ -233,6 +233,10 @@ public:
 
     void pairHost(NvComputer* computer, QString pin);
 
+    // Stops a pairing attempt started by pairHost(). pairingCompleted is not
+    // emitted for it unless it had already succeeded.
+    void cancelPairing(NvComputer* computer);
+
     void quitRunningApp(NvComputer* computer);
 
     QVector<NvComputer*> getComputers();
@@ -273,6 +277,8 @@ private:
     int m_PollingRef;
     QReadWriteLock m_Lock;
     QMap<QString, NvComputer*> m_KnownHosts;
+    // Abort flags for the pairing attempt most recently started with each host
+    QHash<NvComputer*, std::shared_ptr<std::atomic_bool>> m_PairingAbortFlags;
     QMap<QString, ComputerPollingEntry*> m_PollEntries;
     QHash<QString, NvComputer> m_LastSerializedHosts; // Protected by m_DelayedFlushMutex
     QSharedPointer<QMdnsEngine::Server> m_MdnsServer;
