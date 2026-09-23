@@ -2205,6 +2205,23 @@ Flickable {
                     }
                 }
 
+                CheckBox {
+                    width: parent.width
+                    text: qsTr("Request low-latency AMD VAAPI decoding")
+                    font.pointSize: 12
+                    visible: SystemProperties.supportsAmdLowLatencyDecode
+                    checked: StreamingPreferences.amdLowLatencyDecode
+                    onToggled: {
+                        StreamingPreferences.amdLowLatencyDecode = checked
+                        restartDialog.open()
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Requests Mesa's low-latency decoding mode for AMD VAAPI hardware. Requires restarting Moonlight.")
+                }
+
                 Label {
                     width: parent.width
                     id: resVCCTitle

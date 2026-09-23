@@ -29,6 +29,7 @@
 #define SER_FULLSCREEN "fullscreen"
 #define SER_VSYNC "vsync"
 #define SER_ENABLEVRR "enablevrr"
+#define SER_AMDLOWLATENCYDECODE "amdlowlatencydecode"
 #define SER_VRRLATENCYFIX "vrrlatencyfix"
 #define SER_VRRLATENCYMODE "vrrlatencymode"
 #define SER_SMOOTHVRRFRAMETIMING "smoothvrrframetiming"
@@ -182,6 +183,7 @@ void StreamingPreferences::reload()
     autoAdjustBitrate = settings.value(SER_AUTOADJUSTBITRATE, true).toBool();
     enableVsync = settings.value(SER_VSYNC, true).toBool();
     enableVrr = settings.value(SER_ENABLEVRR, false).toBool();
+    amdLowLatencyDecode = settings.value(SER_AMDLOWLATENCYDECODE, true).toBool();
     // VRR adaptive presentation always requires tearing permission. Remove
     // the retired override so stale profiles cannot disable native VRR.
     settings.remove(QStringLiteral("allowvrrtearing"));
@@ -468,6 +470,12 @@ bool StreamingPreferences::loadTvMode()
     return settings.value(SER_TVMODE, false).toBool();
 }
 
+bool StreamingPreferences::loadAmdLowLatencyDecode()
+{
+    QSettings settings;
+    return settings.value(SER_AMDLOWLATENCYDECODE, true).toBool();
+}
+
 const QVector<StreamingPreferences::PerformanceGraphInfo>& StreamingPreferences::performanceGraphs()
 {
     static const QVector<PerformanceGraphInfo> k_Graphs = {
@@ -534,6 +542,7 @@ void StreamingPreferences::save()
     settings.setValue(SER_AUTOADJUSTBITRATE, autoAdjustBitrate);
     settings.setValue(SER_VSYNC, enableVsync);
     settings.setValue(SER_ENABLEVRR, enableVrr);
+    settings.setValue(SER_AMDLOWLATENCYDECODE, amdLowLatencyDecode);
     settings.setValue(SER_VRRLATENCYMODE, vrrLatencyMode);
     settings.remove("vrrlatencyoscillation");
     settings.remove("gamescopemailbox"); // Retired Mailbox A/B experiment.

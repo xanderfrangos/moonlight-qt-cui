@@ -575,10 +575,21 @@ int main(int argc, char *argv[])
     // may happen in Qt/SDL before VAAPI decoder probing. Request low-latency
     // VCN decode here, before any graphics initialization. This changes only
     // this process; it neither modifies system power policy nor skips fences.
-    if (qgetenv("MOONLIGHT_AMD_LOW_LATENCY_DECODE") != "0") {
+    if (StreamingPreferences::loadAmdLowLatencyDecode() &&
+            qgetenv("MOONLIGHT_AMD_LOW_LATENCY_DECODE") != "0") {
         const QByteArray flags = qEnvironmentVariableIsSet("AMD_DEBUG") ?
             qgetenv("AMD_DEBUG") : qgetenv("R600_DEBUG");
-        qputenv("AMD_DEBUG", withAmdLowLatencyDecode(flags));
+        // Preserve the user's original value so a restart after disabling this
+        // preference can remove our injected flag without discarding user flags.
+        if (!qEnvironmentVariableIsSet("MOONLIGHT_AMD_DEBUG_ORIGINAL_SET")) {
+            const bool hadOriginalValue = qEnvironmentVariableIsSet("AMD_DEBUG");
+            setInjectedEnvironmentVariable("MOONLIGHT_AMD_DEBUG_ORIGINAL_SET",
+                                           hadOriginalValue ? QByteArrayLiteral("1") : QByteArrayLiteral("0"));
+            if (hadOriginalValue) {
+                setInjectedEnvironmentVariable("MOONLIGHT_AMD_DEBUG_ORIGINAL", qgetenv("AMD_DEBUG"));
+            }
+        }
+        setInjectedEnvironmentVariable("AMD_DEBUG", withAmdLowLatencyDecode(flags));
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "AMD VAAPI: requested Mesa low-latency decode (driver support required)");
     }
