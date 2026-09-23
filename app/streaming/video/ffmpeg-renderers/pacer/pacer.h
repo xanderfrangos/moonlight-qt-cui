@@ -55,7 +55,8 @@ public:
     // paths split theirs between pacing and rendering, so this is their sum.
     uint32_t queueDepth();
 
-    // Presented-frame intervals since the last call. Resets on read.
+    // Presented-frame intervals and rendering times since the last call.
+    // Resets on read.
     PacerFrametimeStats takeFrametimeStats();
 
     // Only the active VRR worker consumes the decoder-facing pacing metadata.

@@ -174,6 +174,42 @@ public:
     };
     Q_ENUM(PerformanceOverlayMode)
 
+    // Bit positions in performanceGraphsToggled. These are persisted, so they
+    // must stay stable when graphs are renamed or reordered on screen.
+    enum PerformanceGraph
+    {
+        PG_INCOMING_FRAMETIME = 0,
+        PG_BANDWIDTH = 1,
+        PG_NETWORK_LATENCY = 2,
+        PG_NETWORK_JITTER = 3,
+        PG_NETWORK_DROPS = 4,
+        PG_RENDERING_FRAMETIME = 5,
+        PG_HOST_PROCESSING_LATENCY = 6,
+        PG_REASSEMBLY = 7,
+        PG_QUEUE_DEPTH = 8,
+        PG_JITTER_DROPS = 9,
+        PG_DECODING_FRAMERATE = 10,
+        PG_DECODING_TIME = 11,
+        PG_RENDERING_TIME = 12,
+    };
+    Q_ENUM(PerformanceGraph)
+
+    // Any other value of performanceGraphSize is a fixed scale in percent.
+    enum PerformanceGraphSize
+    {
+        PGS_AUTO = 0,
+    };
+    Q_ENUM(PerformanceGraphSize)
+
+    // Persisted IDs must stay stable when changing the user-facing names.
+    enum PerformanceGraphHeight
+    {
+        PGH_COMPACT = 0,
+        PGH_NORMAL = 1,
+        PGH_TALL = 2,
+    };
+    Q_ENUM(PerformanceGraphHeight)
+
     Q_PROPERTY(int width MEMBER width NOTIFY displayModeChanged)
     Q_PROPERTY(int height MEMBER height NOTIFY displayModeChanged)
     Q_PROPERTY(int fps MEMBER fps NOTIFY displayModeChanged)
@@ -202,6 +238,10 @@ public:
     Q_PROPERTY(bool detectNetworkBlocking MEMBER detectNetworkBlocking NOTIFY detectNetworkBlockingChanged)
     Q_PROPERTY(bool showPerformanceOverlay MEMBER showPerformanceOverlay NOTIFY showPerformanceOverlayChanged)
     Q_PROPERTY(int performanceOverlayMode MEMBER performanceOverlayMode NOTIFY performanceOverlayModeChanged)
+    Q_PROPERTY(int performanceGraphsToggled MEMBER performanceGraphsToggled NOTIFY performanceGraphsToggledChanged)
+    Q_PROPERTY(int performanceGraphsDefault READ getPerformanceGraphsDefault CONSTANT)
+    Q_PROPERTY(int performanceGraphSize MEMBER performanceGraphSize NOTIFY performanceGraphSizeChanged)
+    Q_PROPERTY(int performanceGraphHeight MEMBER performanceGraphHeight NOTIFY performanceGraphHeightChanged)
     Q_PROPERTY(AudioConfig audioConfig MEMBER audioConfig NOTIFY audioConfigChanged)
     Q_PROPERTY(VideoCodecConfig videoCodecConfig MEMBER videoCodecConfig NOTIFY videoCodecConfigChanged)
     Q_PROPERTY(bool enableHdr MEMBER enableHdr NOTIFY enableHdrChanged)
@@ -270,6 +310,19 @@ public:
     bool detectNetworkBlocking;
     bool showPerformanceOverlay;
     int performanceOverlayMode;
+    // Graphs the user has flipped from their default visibility, rather than
+    // the graphs shown, so a graph added later gets its own default for users
+    // who already saved their selection.
+    int performanceGraphsToggled;
+
+    // Graphs shown unless the user hides them. The rest are opt-in.
+    static int getPerformanceGraphsDefault();
+    int visiblePerformanceGraphs() const
+    {
+        return getPerformanceGraphsDefault() ^ performanceGraphsToggled;
+    }
+    int performanceGraphSize;
+    int performanceGraphHeight;
     bool swapMouseButtons;
     bool muteOnFocusLoss;
     bool backgroundGamepad;
@@ -344,6 +397,9 @@ signals:
     void detectNetworkBlockingChanged();
     void showPerformanceOverlayChanged();
     void performanceOverlayModeChanged();
+    void performanceGraphsToggledChanged();
+    void performanceGraphSizeChanged();
+    void performanceGraphHeightChanged();
     void mouseButtonsChanged();
     void muteOnFocusLossChanged();
     void backgroundGamepadChanged();

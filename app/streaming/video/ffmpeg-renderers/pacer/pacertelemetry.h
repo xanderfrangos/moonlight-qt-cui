@@ -86,6 +86,13 @@ struct PacerFrametimeStats {
     uint64_t sumUs = 0;
     uint64_t minUs = 0;
     uint64_t maxUs = 0;
+
+    // Rendering time of each presented frame over the same window, bounded
+    // the same way as the overlay's average rendering time
+    uint32_t renderingCount = 0;
+    uint64_t renderingSumUs = 0;
+    uint64_t renderingMinUs = 0;
+    uint64_t renderingMaxUs = 0;
 };
 
 struct VrrTelemetrySample {
@@ -343,6 +350,15 @@ private:
             renderingTimeUs, clientProcessingTimeUs);
         m_Snapshot.totalClientProcessingTimeUs += clientProcessingTimeUs;
         m_Snapshot.totalRenderingTimeUs += boundedRenderingTimeUs;
+        if (m_Frametime.renderingCount == 0 ||
+                boundedRenderingTimeUs < m_Frametime.renderingMinUs) {
+            m_Frametime.renderingMinUs = boundedRenderingTimeUs;
+        }
+        if (boundedRenderingTimeUs > m_Frametime.renderingMaxUs) {
+            m_Frametime.renderingMaxUs = boundedRenderingTimeUs;
+        }
+        m_Frametime.renderingSumUs += boundedRenderingTimeUs;
+        m_Frametime.renderingCount++;
         m_Snapshot.totalQueuePacingTimeUs +=
             clientProcessingTimeUs - boundedRenderingTimeUs -
             std::min(decodeWaitUs, clientProcessingTimeUs - boundedRenderingTimeUs);

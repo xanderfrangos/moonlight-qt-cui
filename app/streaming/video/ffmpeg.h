@@ -142,6 +142,9 @@ private:
     // of the same bytes to difference per interval instead.
     uint64_t m_StatsGraphVideoBytes;
     uint64_t m_StatsGraphLastFrameUs;
+    // Decoder thread only, like the decoded-frame counters it sits beside
+    uint64_t m_StatsGraphLastDecodeUs;
+    Overlay::StatsGraphSyncMode m_StatsGraphSyncMode;
     // Fixed once the connection has negotiated it, so it's worked out when
     // sampling starts rather than on every sample.
     uint32_t m_StatsGraphPacketWireBytes;

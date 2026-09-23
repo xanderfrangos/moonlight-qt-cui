@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -37,6 +38,35 @@ struct StatsGraphAccumulator {
     float average() const { return count != 0 ? (float)(sum / count) : 0; }
 };
 
+// How presentation is synchronized to the display
+enum class StatsGraphSyncMode {
+    None,
+    VSync,
+    Vrr,
+};
+
+// What is being streamed, for the summary the graph card shows in place of the
+// text overlay when that is hidden. Plain values only, so it can ride along in
+// the counters without allocating under their lock.
+struct StatsGraphStreamInfo {
+    // Decoded size, which can change mid-stream. Zero until the first frame.
+    int width = 0;
+    int height = 0;
+    // Negotiated frame rate, not the measured one
+    int frameRate = 0;
+    // A VIDEO_FORMAT_* value
+    int videoFormat = 0;
+    // The host can switch in and out of HDR mid-stream
+    bool hdr = false;
+    // Static strings from IFFmpegRenderer::getRendererName(). The backend is
+    // null unless it differs from the frontend.
+    const char* renderer = nullptr;
+    const char* backendRenderer = nullptr;
+    // What the pacer actually runs, which is fixed V-sync when VRR was
+    // requested but isn't available
+    StatsGraphSyncMode syncMode = StatsGraphSyncMode::None;
+};
+
 // Cumulative counters read once per sampling interval. The graphs plot the
 // difference between consecutive reads, so producers only have to keep
 // monotonic totals instead of maintaining a second set of short windows
@@ -65,6 +95,22 @@ struct StatsGraphCounters {
     StatsGraphAccumulator renderingFrametime;
     StatsGraphAccumulator hostProcessingLatency;
     StatsGraphAccumulator reassembly;
+    // Interval between frames leaving the decoder, plotted as a frame rate
+    StatsGraphAccumulator decodingFrametime;
+    StatsGraphAccumulator decodingTime;
+    StatsGraphAccumulator renderingTime;
+
+    StatsGraphStreamInfo streamInfo;
+};
+
+// Which graphs to draw and how big, fixed for the session.
+struct StatsGraphConfig {
+    // Bit n shows the graph with StreamingPreferences::PerformanceGraph ID n
+    uint32_t visibleGraphs = 0;
+    // Scale in percent, or 0 to follow the stream window's height
+    int sizePercent = 100;
+    // Height of each plot at 100% scale, in pixels
+    int plotHeight = 40;
 };
 
 // One sampling interval's worth of plotted values.
@@ -86,6 +132,17 @@ struct StatsGraphPoint {
     float reassemblyMs = 0;
     float reassemblyMinMs = 0;
     float reassemblyMaxMs = 0;
+    // Frames per second rather than milliseconds, with the spread inverted
+    // from the decoder's frametime: the slowest frame sets the minimum.
+    float decodingFps = 0;
+    float decodingFpsMin = 0;
+    float decodingFpsMax = 0;
+    float decodingTimeMs = 0;
+    float decodingTimeMinMs = 0;
+    float decodingTimeMaxMs = 0;
+    float renderingTimeMs = 0;
+    float renderingTimeMinMs = 0;
+    float renderingTimeMaxMs = 0;
     float videoMbps = 0;
     // Everything the video stream puts on the network: payload, FEC parity,
     // shard padding and packet headers
@@ -98,7 +155,8 @@ struct StatsGraphPoint {
 };
 
 // Samples stream statistics on a fixed interval and publishes a painted plot of
-// the last few seconds to the debug graph overlay. Sampling runs whether or not
+// the last few seconds to the debug graph overlay. While the debug text overlay
+// is hidden, the card also summarizes the stream it would otherwise describe. Sampling runs whether or not
 // the overlay is visible, so the graphs already cover a full window when the
 // user brings them up. Painting only happens while they're on screen.
 class StatsGraphs
@@ -122,11 +180,17 @@ public:
     // fill in the counters it owns. stop() joins that thread, so it has to be
     // called before anything the sampler touches is torn down.
     void start(OverlayManager* overlayManager,
+               const StatsGraphConfig& config,
                std::function<void(StatsGraphCounters&)> sampler);
     void stop();
 
+    // The stream window's height in pixels, which an automatic size scales
+    // against. Safe to call from any thread.
+    void setViewportHeight(int height);
+
 private:
     void run();
+    float scale() const;
     void appendSample(const StatsGraphCounters& counters, double intervalSecs);
 
     // Owned exclusively by the sampling thread
@@ -135,6 +199,8 @@ private:
     bool m_HaveLastCounters = false;
 
     OverlayManager* m_OverlayManager = nullptr;
+    StatsGraphConfig m_Config;
+    std::atomic<int> m_ViewportHeight{0};
     std::function<void(StatsGraphCounters&)> m_Sampler;
     std::mutex m_Lock;
     std::condition_variable m_Wake;

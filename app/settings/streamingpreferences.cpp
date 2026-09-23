@@ -66,6 +66,9 @@
 #define SER_DETECTNETBLOCKING "detectnetblocking"
 #define SER_SHOWPERFOVERLAY "showperfoverlay"
 #define SER_PERFOVERLAYMODE "performanceoverlaymode"
+#define SER_PERFGRAPHSTOGGLED "performancegraphstoggled"
+#define SER_PERFGRAPHSIZE "performancegraphsize"
+#define SER_PERFGRAPHHEIGHT "performancegraphheight"
 #define SER_SWAPMOUSEBUTTONS "swapmousebuttons"
 #define SER_MUTEONFOCUSLOSS "muteonfocusloss"
 #define SER_BACKGROUNDGAMEPAD "backgroundgamepad"
@@ -216,6 +219,24 @@ void StreamingPreferences::reload()
         if (validMode && savedMode >= POM_TEXT_ONLY && savedMode <= POM_GRAPHS_ONLY) {
             performanceOverlayMode = savedMode;
         }
+    }
+    performanceGraphsToggled = settings.value(SER_PERFGRAPHSTOGGLED, 0).toInt();
+    performanceGraphSize = settings.value(SER_PERFGRAPHSIZE, 100).toInt();
+    switch (performanceGraphSize) {
+    case PGS_AUTO:
+    case 75:
+    case 100:
+    case 125:
+    case 150:
+    case 200:
+        break;
+    default:
+        performanceGraphSize = 100;
+        break;
+    }
+    performanceGraphHeight = settings.value(SER_PERFGRAPHHEIGHT, PGH_NORMAL).toInt();
+    if (performanceGraphHeight < PGH_COMPACT || performanceGraphHeight > PGH_TALL) {
+        performanceGraphHeight = PGH_NORMAL;
     }
     packetSize = settings.value(SER_PACKETSIZE, 0).toInt();
     swapMouseButtons = settings.value(SER_SWAPMOUSEBUTTONS, false).toBool();
@@ -416,6 +437,20 @@ bool StreamingPreferences::loadTvMode()
     return settings.value(SER_TVMODE, false).toBool();
 }
 
+int StreamingPreferences::getPerformanceGraphsDefault()
+{
+    return (1 << PG_INCOMING_FRAMETIME) |
+           (1 << PG_BANDWIDTH) |
+           (1 << PG_NETWORK_LATENCY) |
+           (1 << PG_NETWORK_JITTER) |
+           (1 << PG_NETWORK_DROPS) |
+           (1 << PG_RENDERING_FRAMETIME) |
+           (1 << PG_HOST_PROCESSING_LATENCY) |
+           (1 << PG_REASSEMBLY) |
+           (1 << PG_QUEUE_DEPTH) |
+           (1 << PG_JITTER_DROPS);
+}
+
 void StreamingPreferences::save()
 {
     QSettings settings;
@@ -454,6 +489,9 @@ void StreamingPreferences::save()
     settings.setValue(SER_DETECTNETBLOCKING, detectNetworkBlocking);
     settings.setValue(SER_SHOWPERFOVERLAY, showPerformanceOverlay);
     settings.setValue(SER_PERFOVERLAYMODE, performanceOverlayMode);
+    settings.setValue(SER_PERFGRAPHSTOGGLED, performanceGraphsToggled);
+    settings.setValue(SER_PERFGRAPHSIZE, performanceGraphSize);
+    settings.setValue(SER_PERFGRAPHHEIGHT, performanceGraphHeight);
     settings.setValue(SER_AUDIOCFG, static_cast<int>(audioConfig));
     settings.setValue(SER_HDR, enableHdr);
     settings.setValue(SER_YUV444, enableYUV444);

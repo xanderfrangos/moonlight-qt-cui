@@ -2336,6 +2336,19 @@ Flickable {
                         StreamingPreferences.detectNetworkBlocking = checked
                     }
                 }
+            }
+        }
+
+        SettingsGroupBox {
+            id: statisticsSettingsGroupBox
+            width: (parent.width - (parent.leftPadding + parent.rightPadding))
+            padding: 12
+            title: "<font color=\"skyblue\">" + qsTr("Statistics") + "</font>"
+            font.pointSize: 12
+
+            Column {
+                anchors.fill: parent
+                spacing: 5
 
                 CheckBox {
                     id: showPerformanceOverlay
@@ -2399,6 +2412,225 @@ Flickable {
                             recalculateWidth()
                             languageChanged.connect(recalculateWidth)
                         }
+                    }
+                }
+                Column {
+                    width: parent.width
+                    spacing: 5
+                    visible: StreamingPreferences.performanceOverlayMode !== StreamingPreferences.POM_TEXT_ONLY
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("Graph size")
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                    }
+
+                    AutoResizingComboBox {
+                        id: performanceGraphSizeComboBox
+                        textRole: "text"
+                        model: ListModel {
+                            id: performanceGraphSizeListModel
+                            ListElement {
+                                text: qsTr("Automatic (match stream window)")
+                                val: StreamingPreferences.PGS_AUTO
+                            }
+                            ListElement {
+                                text: qsTr("75%")
+                                val: 75
+                            }
+                            ListElement {
+                                text: qsTr("100%")
+                                val: 100
+                            }
+                            ListElement {
+                                text: qsTr("125%")
+                                val: 125
+                            }
+                            ListElement {
+                                text: qsTr("150%")
+                                val: 150
+                            }
+                            ListElement {
+                                text: qsTr("200%")
+                                val: 200
+                            }
+                        }
+                        currentIndex: {
+                            for (var i = 0; i < performanceGraphSizeListModel.count; i++) {
+                                if (performanceGraphSizeListModel.get(i).val === StreamingPreferences.performanceGraphSize) {
+                                    return i
+                                }
+                            }
+                            return 2
+                        }
+                        onActivated: {
+                            StreamingPreferences.performanceGraphSize = performanceGraphSizeListModel.get(currentIndex).val
+                        }
+                        Component.onCompleted: {
+                            recalculateWidth()
+                            languageChanged.connect(recalculateWidth)
+                        }
+
+                        ToolTip.delay: 1000
+                        ToolTip.timeout: 5000
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                        ToolTip.text: qsTr("Automatic sizes the graphs for the stream window, the way 100% looks at 1080p.")
+                    }
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("Graph height")
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                    }
+
+                    AutoResizingComboBox {
+                        id: performanceGraphHeightComboBox
+                        textRole: "text"
+                        model: ListModel {
+                            id: performanceGraphHeightListModel
+                            ListElement {
+                                text: qsTr("Compact")
+                                val: StreamingPreferences.PGH_COMPACT
+                            }
+                            ListElement {
+                                text: qsTr("Normal")
+                                val: StreamingPreferences.PGH_NORMAL
+                            }
+                            ListElement {
+                                text: qsTr("Tall")
+                                val: StreamingPreferences.PGH_TALL
+                            }
+                        }
+                        currentIndex: {
+                            for (var i = 0; i < performanceGraphHeightListModel.count; i++) {
+                                if (performanceGraphHeightListModel.get(i).val === StreamingPreferences.performanceGraphHeight) {
+                                    return i
+                                }
+                            }
+                            return 1
+                        }
+                        onActivated: {
+                            StreamingPreferences.performanceGraphHeight = performanceGraphHeightListModel.get(currentIndex).val
+                        }
+                        Component.onCompleted: {
+                            recalculateWidth()
+                            languageChanged.connect(recalculateWidth)
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("Graphs to show")
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                    }
+
+                    Repeater {
+                        // Grouped by where each measurement comes from. The
+                        // stream lays them out in its own order.
+                        model: ListModel {
+                            ListElement {
+                                text: qsTr("Incoming frametime")
+                                bit: StreamingPreferences.PG_INCOMING_FRAMETIME
+                                section: qsTr("Network")
+                            }
+                            ListElement {
+                                text: qsTr("Bandwidth")
+                                bit: StreamingPreferences.PG_BANDWIDTH
+                                section: ""
+                            }
+                            ListElement {
+                                text: qsTr("Network latency")
+                                bit: StreamingPreferences.PG_NETWORK_LATENCY
+                                section: ""
+                            }
+                            ListElement {
+                                text: qsTr("Network jitter")
+                                bit: StreamingPreferences.PG_NETWORK_JITTER
+                                section: ""
+                            }
+                            ListElement {
+                                text: qsTr("Dropped by network")
+                                bit: StreamingPreferences.PG_NETWORK_DROPS
+                                section: ""
+                            }
+                            ListElement {
+                                text: qsTr("Rendering frametime")
+                                bit: StreamingPreferences.PG_RENDERING_FRAMETIME
+                                section: qsTr("Client")
+                            }
+                            ListElement {
+                                text: qsTr("Host processing latency")
+                                bit: StreamingPreferences.PG_HOST_PROCESSING_LATENCY
+                                section: ""
+                            }
+                            ListElement {
+                                text: qsTr("Reassembly time")
+                                bit: StreamingPreferences.PG_REASSEMBLY
+                                section: ""
+                            }
+                            ListElement {
+                                text: qsTr("Decoding frame rate")
+                                bit: StreamingPreferences.PG_DECODING_FRAMERATE
+                                section: ""
+                            }
+                            ListElement {
+                                text: qsTr("Decoding time")
+                                bit: StreamingPreferences.PG_DECODING_TIME
+                                section: ""
+                            }
+                            ListElement {
+                                text: qsTr("Frame queue depth")
+                                bit: StreamingPreferences.PG_QUEUE_DEPTH
+                                section: ""
+                            }
+                            ListElement {
+                                text: qsTr("Rendering time")
+                                bit: StreamingPreferences.PG_RENDERING_TIME
+                                section: ""
+                            }
+                            ListElement {
+                                text: qsTr("Dropped by client pacer")
+                                bit: StreamingPreferences.PG_JITTER_DROPS
+                                section: ""
+                            }
+                        }
+
+                        delegate: Column {
+                            width: parent.width
+                            spacing: 0
+
+                            Label {
+                                visible: model.section !== ""
+                                topPadding: 5
+                                leftPadding: 5
+                                text: model.section
+                                font.pointSize: 10
+                                font.bold: true
+                                opacity: 0.7
+                            }
+
+                            CheckBox {
+                                width: parent.width
+                                text: model.text
+                                font.pointSize: 12
+                                // The preference records changes from each
+                                // graph's default, so a click just flips its bit
+                                checked: ((StreamingPreferences.performanceGraphsDefault ^
+                                           StreamingPreferences.performanceGraphsToggled) & (1 << model.bit)) !== 0
+                                onToggled: {
+                                    StreamingPreferences.performanceGraphsToggled ^= (1 << model.bit)
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: qsTr("While the text stats are hidden, the graphs also show the stream's resolution, frame rate, VRR or V-Sync, codec, bit depth, HDR, chroma subsampling and renderer.")
                     }
                 }
             }

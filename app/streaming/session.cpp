@@ -1765,6 +1765,33 @@ static void getWindowPixelSize(SDL_Window* window, int& width, int& height)
     }
 }
 
+int Session::getWindowPixelHeight(SDL_Window* window)
+{
+    int width, height;
+    getWindowPixelSize(window, width, height);
+    return height;
+}
+
+Overlay::StatsGraphConfig Session::getStatsGraphConfig() const
+{
+    Overlay::StatsGraphConfig config;
+    config.visibleGraphs = (uint32_t)m_Preferences->visiblePerformanceGraphs();
+    config.sizePercent = m_Preferences->performanceGraphSize;
+    switch (m_Preferences->performanceGraphHeight) {
+    case StreamingPreferences::PGH_COMPACT:
+        config.plotHeight = 28;
+        break;
+    case StreamingPreferences::PGH_TALL:
+        config.plotHeight = 64;
+        break;
+    case StreamingPreferences::PGH_NORMAL:
+    default:
+        config.plotHeight = 40;
+        break;
+    }
+    return config;
+}
+
 void Session::toggleStatsOverlay()
 {
     const bool enabled = !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug) &&

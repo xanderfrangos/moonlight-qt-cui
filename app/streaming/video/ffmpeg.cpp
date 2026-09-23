@@ -111,6 +111,12 @@ bool FFmpegVideoDecoder::notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info)
         m_Pacer->notifyWindowChanged(&pacingInfo);
     }
 
+    if (originalInfo.stateChangeFlags & WINDOW_STATE_CHANGE_SIZE) {
+        // The event carries the size in window units, not the pixels the
+        // renderers draw the overlays in
+        m_StatsGraphs.setViewportHeight(Session::getWindowPixelHeight(originalInfo.window));
+    }
+
     const bool handled =
         m_FrontendRenderer->notifyWindowChanged(info);
     if (m_Pacer != nullptr && handled &&
@@ -267,6 +273,8 @@ FFmpegVideoDecoder::FFmpegVideoDecoder(bool testOnly)
       m_BwTracker(10, 250),
       m_StatsGraphVideoBytes(0),
       m_StatsGraphLastFrameUs(0),
+      m_StatsGraphLastDecodeUs(0),
+      m_StatsGraphSyncMode(Overlay::StatsGraphSyncMode::None),
       m_StatsGraphPacketWireBytes(0),
       m_FramesIn(0),
       m_FramesOut(0),
@@ -323,6 +331,8 @@ void FFmpegVideoDecoder::reset()
     m_FramesIn = m_FramesOut = 0;
     m_StatsGraphVideoBytes = 0;
     m_StatsGraphLastFrameUs = 0;
+    m_StatsGraphLastDecodeUs = 0;
+    m_StatsGraphSyncMode = Overlay::StatsGraphSyncMode::None;
     m_FrameInfoQueue.clear();
     m_FrameSubmitTimeQueue.clear();
 
@@ -604,6 +614,12 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
                                  params->vrrLatencyMode)) {
             return false;
         }
+
+        // VRR can fall back to fixed V-sync, so ask the pacer what it chose
+        // rather than trusting the request
+        m_StatsGraphSyncMode = m_Pacer->isVrrActive() ? Overlay::StatsGraphSyncMode::Vrr :
+                               params->enableVsync ? Overlay::StatsGraphSyncMode::VSync :
+                                                     Overlay::StatsGraphSyncMode::None;
     }
 
     m_VideoDecoderCtx = avcodec_alloc_context3(decoder);
@@ -837,7 +853,9 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
         // Sampling runs whether or not the graphs are visible, so they already
         // cover a full window by the time the user brings them up.
         m_StatsGraphPacketWireBytes = getVideoPacketWireBytes();
+        m_StatsGraphs.setViewportHeight(Session::getWindowPixelHeight(params->window));
         m_StatsGraphs.start(&Session::get()->getOverlayManager(),
+                            Session::get()->getStatsGraphConfig(),
                             [this](Overlay::StatsGraphCounters& counters) {
                                 sampleStatsGraphCounters(counters);
                             });
@@ -1009,6 +1027,10 @@ void FFmpegVideoDecoder::publishStatsGraphSample(PDECODE_UNIT du)
             (uint64_t)m_GlobalVideoStats.networkDroppedFrames +
             m_ActiveWndVideoStats.networkDroppedFrames;
     m_StatsGraphCounters.videoBytes = m_StatsGraphVideoBytes;
+    if (m_VideoDecoderCtx != nullptr) {
+        m_StatsGraphCounters.streamInfo.width = m_VideoDecoderCtx->width;
+        m_StatsGraphCounters.streamInfo.height = m_VideoDecoderCtx->height;
+    }
 
     if (frametimeMs > 0) {
         m_StatsGraphCounters.incomingFrametime.add(frametimeMs);
@@ -1033,6 +1055,8 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
         m_StatsGraphCounters.incomingFrametime = {};
         m_StatsGraphCounters.hostProcessingLatency = {};
         m_StatsGraphCounters.reassembly = {};
+        m_StatsGraphCounters.decodingFrametime = {};
+        m_StatsGraphCounters.decodingTime = {};
     }
 
     // Pacer-side values are produced on the render threads, so they come from
@@ -1050,6 +1074,12 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
             counters.renderingFrametime.min = (float)(frametime.minUs / 1000.0);
             counters.renderingFrametime.max = (float)(frametime.maxUs / 1000.0);
         }
+        if (frametime.renderingCount != 0) {
+            counters.renderingTime.count = frametime.renderingCount;
+            counters.renderingTime.sum = frametime.renderingSumUs / 1000.0;
+            counters.renderingTime.min = (float)(frametime.renderingMinUs / 1000.0);
+            counters.renderingTime.max = (float)(frametime.renderingMaxUs / 1000.0);
+        }
     }
 
     // Written by the video receive thread. Each field is a single aligned
@@ -1059,6 +1089,19 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
     counters.videoDataPackets = rtpStats->packetCountVideo;
     counters.videoFecPackets = rtpStats->packetCountFec;
     counters.videoPacketWireBytes = m_StatsGraphPacketWireBytes;
+
+    // Fixed for the lifetime of this decoder, apart from HDR, which the host
+    // can switch mid-stream
+    counters.streamInfo.frameRate = m_StreamFps;
+    counters.streamInfo.videoFormat = m_VideoFormat;
+    // Only a 10-bit stream can carry HDR, matching the text overlay's codec line
+    counters.streamInfo.hdr = (m_VideoFormat & VIDEO_FORMAT_MASK_10BIT) &&
+                              LiGetCurrentHostDisplayHdrMode();
+    counters.streamInfo.syncMode = m_StatsGraphSyncMode;
+    counters.streamInfo.renderer = m_FrontendRenderer->getRendererName();
+    counters.streamInfo.backendRenderer =
+            m_BackendRenderer->getRendererType() != m_FrontendRenderer->getRendererType()
+            ? m_BackendRenderer->getRendererName() : nullptr;
 
     uint32_t rtt, rttVariance;
     counters.networkLatencyValid = LiGetEstimatedRttInfo(&rtt, &rttVariance);
@@ -2607,12 +2650,14 @@ void FFmpegVideoDecoder::decoderThreadProc()
                     // origin in pkt_dts. VRR keeps it in PacedFrame.
                     frame->pkt_dts = static_cast<int64_t>(decoderOutputUs);
 
+                    float statsGraphDecodeMs = -1;
                     if (!m_FrameInfoQueue.isEmpty()) {
                         // Data buffers in the DU are not valid here!
                         DECODE_UNIT du = m_FrameInfoQueue.dequeue();
 
-                        m_ActiveWndVideoStats.totalDecodeTimeUs +=
-                            (LiGetMicroseconds() - du.enqueueTimeUs);
+                        const uint64_t decodeTimeUs = LiGetMicroseconds() - du.enqueueTimeUs;
+                        m_ActiveWndVideoStats.totalDecodeTimeUs += decodeTimeUs;
+                        statsGraphDecodeMs = (float)(decodeTimeUs / 1000.0);
 
                         // Store the presentation time (90 kHz timebase) for
                         // existing renderers. VRR uses PacedFrame instead.
@@ -2623,6 +2668,21 @@ void FFmpegVideoDecoder::decoderThreadProc()
                     }
 
                     m_ActiveWndVideoStats.decodedFrames++;
+
+                    {
+                        const float decodeIntervalMs =
+                                m_StatsGraphLastDecodeUs != 0 && decoderOutputUs > m_StatsGraphLastDecodeUs ?
+                                (float)((decoderOutputUs - m_StatsGraphLastDecodeUs) / 1000.0) : 0;
+                        m_StatsGraphLastDecodeUs = decoderOutputUs;
+
+                        std::lock_guard<std::mutex> lock(m_StatsGraphCountersLock);
+                        if (decodeIntervalMs > 0) {
+                            m_StatsGraphCounters.decodingFrametime.add(decodeIntervalMs);
+                        }
+                        if (statsGraphDecodeMs >= 0) {
+                            m_StatsGraphCounters.decodingTime.add(statsGraphDecodeMs);
+                        }
+                    }
 
                     // Queue the frame for rendering (or render now if pacer is disabled)
                     if (vrrActive) {

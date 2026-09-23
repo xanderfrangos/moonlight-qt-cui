@@ -7,8 +7,13 @@
 #include <QPainter>
 #include <QPolygonF>
 #include <QRectF>
+#include <QtMath>
+
+#include <Limelight.h>
 
 #include <cmath>
+
+#include "settings/streamingpreferences.h"
 
 using namespace Overlay;
 
@@ -221,12 +226,15 @@ namespace {
 
 // The graph card is authored at a fixed pixel size to match the debug text
 // overlay it sits beside, which uses a fixed font size rather than scaling with
-// the viewport.
+// the viewport. The user can scale it from there, or have it follow the
+// viewport like the gamepad menu does.
 const QColor k_GraphPlotColor(0x00, 0x00, 0x00, 0x66);
 const QColor k_GraphGridColor(0xFF, 0xFF, 0xFF, 0x1F);
 const QColor k_GraphValueColor(0xFF, 0xFF, 0xFF);
 
 struct GraphSpec {
+    // A StreamingPreferences::PerformanceGraph, so it can be hidden
+    int id;
     const char* title;
     float StatsGraphPoint::* field;
     // Per-interval spread, where the value is measured per frame. Null for
@@ -376,65 +384,176 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
                                         .arg(windowMax, 0, 'f', spec.decimals));
 }
 
+// The codec family, without the bit depth and chroma the other chips show
+const char* codecName(int videoFormat)
+{
+    if (videoFormat & VIDEO_FORMAT_MASK_H264) {
+        return "H.264";
+    }
+    else if (videoFormat & VIDEO_FORMAT_MASK_H265) {
+        return "HEVC";
+    }
+    else if (videoFormat & VIDEO_FORMAT_MASK_AV1) {
+        return "AV1";
+    }
+    return "Unknown codec";
+}
+
+// Everything the text overlay's first line says about the stream, split into
+// chips. SDR and 4:2:0 are shown rather than left out, so each fact is always
+// in the same place and a missing chip never has to be interpreted.
+QStringList streamInfoChips(const StatsGraphStreamInfo& info)
+{
+    QStringList chips;
+
+    if (info.width > 0 && info.height > 0) {
+        chips.append(QStringLiteral("%1×%2").arg(info.width).arg(info.height));
+    }
+    if (info.frameRate > 0) {
+        chips.append(QStringLiteral("%1 FPS").arg(info.frameRate));
+    }
+    // Nothing is shown when presentation isn't synchronized at all
+    if (info.syncMode == StatsGraphSyncMode::Vrr) {
+        chips.append(QStringLiteral("VRR"));
+    }
+    else if (info.syncMode == StatsGraphSyncMode::VSync) {
+        chips.append(QStringLiteral("V-Sync"));
+    }
+    if (info.videoFormat != 0) {
+        chips.append(QString::fromUtf8(codecName(info.videoFormat)));
+        chips.append((info.videoFormat & VIDEO_FORMAT_MASK_10BIT) ? QStringLiteral("10-bit")
+                                                                  : QStringLiteral("8-bit"));
+        chips.append(info.hdr ? QStringLiteral("HDR") : QStringLiteral("SDR"));
+        chips.append((info.videoFormat & VIDEO_FORMAT_MASK_YUV444) ? QStringLiteral("4:4:4")
+                                                                   : QStringLiteral("4:2:0"));
+    }
+    if (info.renderer != nullptr) {
+        chips.append(info.backendRenderer != nullptr
+                             ? QStringLiteral("%1 + %2").arg(QString::fromUtf8(info.renderer),
+                                                             QString::fromUtf8(info.backendRenderer))
+                             : QString::fromUtf8(info.renderer));
+    }
+
+    return chips;
+}
+
 }
 
 SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& points,
                                        int maxPoints,
-                                       int windowSeconds)
+                                       int windowSeconds,
+                                       const StatsGraphConfig& config,
+                                       qreal scale,
+                                       const StatsGraphStreamInfo* streamInfo)
 {
-    // Filled column-major: the left column follows the network path in, the
-    // right column follows the client pipeline through to display.
+    // Graphs are dealt into the two columns in turn, so this order reads
+    // across each row. The default graphs pair the network path in on the
+    // left with the client pipeline on the right. The opt-in graphs come
+    // last, so turning them on never shifts a default graph across.
     static const GraphSpec k_Graphs[] = {
-        { "Incoming frametime", &StatsGraphPoint::incomingFrametimeMs,
+        { StreamingPreferences::PG_INCOMING_FRAMETIME,
+          "Incoming frametime", &StatsGraphPoint::incomingFrametimeMs,
           &StatsGraphPoint::incomingFrametimeMinMs, &StatsGraphPoint::incomingFrametimeMaxMs,
           QColor(0x26, 0xA6, 0x9A), " ms", 1, 20, true },
+        { StreamingPreferences::PG_RENDERING_FRAMETIME,
+          "Rendering frametime", &StatsGraphPoint::renderingFrametimeMs,
+          &StatsGraphPoint::renderingFrametimeMinMs, &StatsGraphPoint::renderingFrametimeMaxMs,
+          QColor(0x4C, 0xAF, 0x50), " ms", 1, 20, true },
         // Everything on the wire, with the video payload inside it drawn over
         // the top, so the gap between the two is the FEC and packet overhead.
-        { "Bandwidth", &StatsGraphPoint::networkMbps,
+        { StreamingPreferences::PG_BANDWIDTH,
+          "Bandwidth", &StatsGraphPoint::networkMbps,
           nullptr, nullptr,
           QColor(0xEC, 0x40, 0x7A), " Mbps", 1, 5, false,
           &StatsGraphPoint::videoMbps, "video", QColor(0xF8, 0xBB, 0xD0) },
-        { "Network latency", &StatsGraphPoint::networkLatencyMs,
-          nullptr, nullptr,
-          QColor(0xAB, 0x47, 0xBC), " ms", 0, 20 },
-        { "Network jitter", &StatsGraphPoint::networkJitterMs,
-          nullptr, nullptr,
-          QColor(0x7E, 0x57, 0xC2), " ms", 1, 5 },
-        { "Dropped by network", &StatsGraphPoint::networkDroppedFrames,
-          nullptr, nullptr,
-          QColor(0xEF, 0x53, 0x50), "", 0, 4 },
-
-        { "Rendering frametime", &StatsGraphPoint::renderingFrametimeMs,
-          &StatsGraphPoint::renderingFrametimeMinMs, &StatsGraphPoint::renderingFrametimeMaxMs,
-          QColor(0x4C, 0xAF, 0x50), " ms", 1, 20, true },
-        { "Host processing latency", &StatsGraphPoint::hostProcessingLatencyMs,
+        { StreamingPreferences::PG_HOST_PROCESSING_LATENCY,
+          "Host processing latency", &StatsGraphPoint::hostProcessingLatencyMs,
           &StatsGraphPoint::hostProcessingLatencyMinMs, &StatsGraphPoint::hostProcessingLatencyMaxMs,
           QColor(0x42, 0xA5, 0xF5), " ms", 1, 10 },
-        { "Reassembly time", &StatsGraphPoint::reassemblyMs,
+        { StreamingPreferences::PG_NETWORK_LATENCY,
+          "Network latency", &StatsGraphPoint::networkLatencyMs,
+          nullptr, nullptr,
+          QColor(0xAB, 0x47, 0xBC), " ms", 0, 20 },
+        { StreamingPreferences::PG_REASSEMBLY,
+          "Reassembly time", &StatsGraphPoint::reassemblyMs,
           &StatsGraphPoint::reassemblyMinMs, &StatsGraphPoint::reassemblyMaxMs,
           QColor(0x26, 0xC6, 0xDA), " ms", 1, 5 },
-        { "Frame queue depth", &StatsGraphPoint::queueDepth,
+        { StreamingPreferences::PG_NETWORK_JITTER,
+          "Network jitter", &StatsGraphPoint::networkJitterMs,
+          nullptr, nullptr,
+          QColor(0x7E, 0x57, 0xC2), " ms", 1, 5 },
+        { StreamingPreferences::PG_QUEUE_DEPTH,
+          "Frame queue depth", &StatsGraphPoint::queueDepth,
           nullptr, nullptr,
           QColor(0x9C, 0xCC, 0x65), "", 0, 3 },
-        { "Dropped by jitter or late", &StatsGraphPoint::jitterDroppedFrames,
+        { StreamingPreferences::PG_NETWORK_DROPS,
+          "Dropped by network", &StatsGraphPoint::networkDroppedFrames,
+          nullptr, nullptr,
+          QColor(0xEF, 0x53, 0x50), "", 0, 4 },
+        { StreamingPreferences::PG_JITTER_DROPS,
+          "Dropped by client pacer", &StatsGraphPoint::jitterDroppedFrames,
           nullptr, nullptr,
           QColor(0xFF, 0xA7, 0x26), "", 0, 4 },
-    };
-    const int graphCount = (int)SDL_arraysize(k_Graphs);
-    const int graphColumns = 2;
-    const int graphRows = (graphCount + graphColumns - 1) / graphColumns;
 
+        // Opt-in, in the order a frame passes through them
+        { StreamingPreferences::PG_DECODING_FRAMERATE,
+          "Decoding frame rate", &StatsGraphPoint::decodingFps,
+          &StatsGraphPoint::decodingFpsMin, &StatsGraphPoint::decodingFpsMax,
+          QColor(0x5C, 0x6B, 0xC0), " FPS", 0, 60 },
+        { StreamingPreferences::PG_DECODING_TIME,
+          "Decoding time", &StatsGraphPoint::decodingTimeMs,
+          &StatsGraphPoint::decodingTimeMinMs, &StatsGraphPoint::decodingTimeMaxMs,
+          QColor(0x8D, 0x6E, 0x63), " ms", 1, 5 },
+        { StreamingPreferences::PG_RENDERING_TIME,
+          "Rendering time", &StatsGraphPoint::renderingTimeMs,
+          &StatsGraphPoint::renderingTimeMinMs, &StatsGraphPoint::renderingTimeMaxMs,
+          QColor(0xD4, 0xE1, 0x57), " ms", 1, 10 },
+    };
+
+    // Dealing one graph to each column in turn keeps the columns within one
+    // graph of each other, whichever graphs are hidden. A lone graph gets the
+    // card to itself.
+    std::vector<std::vector<const GraphSpec*>> columns;
+    int visibleCount = 0;
+    for (const GraphSpec& spec : k_Graphs) {
+        if (config.visibleGraphs & (1u << spec.id)) {
+            if (columns.size() <= (size_t)(visibleCount % 2)) {
+                columns.emplace_back();
+            }
+            columns[visibleCount % 2].push_back(&spec);
+            visibleCount++;
+        }
+    }
+
+    const QStringList chips = streamInfo != nullptr ? streamInfoChips(*streamInfo)
+                                                    : QStringList();
+    if (columns.empty() && chips.isEmpty()) {
+        return nullptr;
+    }
+
+    const int graphColumns = (int)columns.size();
+    int graphRows = 0;
+    for (const auto& column : columns) {
+        graphRows = qMax(graphRows, (int)column.size());
+    }
+
+    // Laid out at 100% and drawn through a scaled painter, so text and lines
+    // are rasterized at the final size rather than stretched.
     const qreal cardRadius = 12;
     const qreal cardPadding = 14;
     const qreal columnWidth = 264;
     const qreal columnGap = 16;
-    const qreal cardWidth = (cardPadding * 2) + (columnWidth * graphColumns) +
-                            (columnGap * (graphColumns - 1));
+    const qreal contentWidth = qMax(1, graphColumns) * columnWidth +
+                               qMax(0, graphColumns - 1) * columnGap;
+    const qreal cardWidth = (cardPadding * 2) + contentWidth;
     const qreal labelHeight = 18;
     const qreal labelGap = 3;
-    const qreal plotHeight = 40;
+    const qreal plotHeight = qMax(config.plotHeight, 16);
     const qreal graphGap = 10;
     const qreal shadowSpread = 14;
+    const qreal chipPaddingX = 7;
+    const qreal chipHeight = 20;
+    const qreal chipGap = 6;
 
     QFont headerFont = menuFont(13, QFont::DemiBold);
     headerFont.setCapitalization(QFont::AllUppercase);
@@ -442,20 +561,51 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
     QFont labelFont = menuFont(13, QFont::Normal);
     QFont valueFont = menuFont(14, QFont::DemiBold);
     QFont scaleFont = menuFont(11, QFont::Normal);
+    QFont chipFont = menuFont(12, QFont::DemiBold);
 
     QFontMetricsF headerMetrics(headerFont);
+    QFontMetricsF chipMetrics(chipFont);
+
+    // Chips flow left to right and wrap within the width the graphs set
+    std::vector<QRectF> chipRects;
+    qreal chipsHeight = 0;
+    {
+        qreal x = 0, y = 0;
+        for (const QString& chip : chips) {
+            const qreal width = qMin(chipMetrics.horizontalAdvance(chip) + (chipPaddingX * 2),
+                                     contentWidth);
+            if (x > 0 && x + width > contentWidth) {
+                x = 0;
+                y += chipHeight + chipGap;
+            }
+            chipRects.emplace_back(x, y, width, chipHeight);
+            x += width + chipGap;
+        }
+        if (!chipRects.empty()) {
+            chipsHeight = chipRects.back().bottom();
+        }
+    }
 
     const qreal graphHeight = labelHeight + labelGap + plotHeight;
-    const qreal cardHeight = (cardPadding * 2) + headerMetrics.height() + graphGap +
-                             (graphHeight * graphRows) + (graphGap * (graphRows - 1));
+    qreal cardHeight = cardPadding * 2;
+    if (!chipRects.empty()) {
+        cardHeight += chipsHeight;
+        if (graphRows > 0) {
+            cardHeight += graphGap;
+        }
+    }
+    if (graphRows > 0) {
+        cardHeight += headerMetrics.height() + graphGap +
+                      (graphHeight * graphRows) + (graphGap * (graphRows - 1));
+    }
 
     // Reused across repaints. This card republishes for as long as it is on
     // screen, and reallocating a megabyte of pixels every time churns the
     // allocator to no purpose. Only the stats graph sampling thread paints
     // here, so a thread-local canvas needs no additional synchronization.
     static thread_local QImage image;
-    const QSize cardSize(qRound(cardWidth + (shadowSpread * 2)),
-                         qRound(cardHeight + (shadowSpread * 2)));
+    const QSize cardSize(qCeil((cardWidth + (shadowSpread * 2)) * scale),
+                         qCeil((cardHeight + (shadowSpread * 2)) * scale));
     if (image.size() != cardSize) {
         image = QImage(cardSize, QImage::Format_ARGB32_Premultiplied);
         if (image.isNull()) {
@@ -467,6 +617,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
     QPainter painter(&image);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setRenderHint(QPainter::TextAntialiasing);
+    painter.scale(scale, scale);
 
     const QRectF cardRect(shadowSpread, shadowSpread, cardWidth, cardHeight);
 
@@ -484,65 +635,90 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
     const qreal contentRight = cardRect.right() - cardPadding;
     qreal y = cardRect.top() + cardPadding;
 
-    painter.setFont(headerFont);
-    painter.setPen(k_TitleColor);
-    painter.drawText(QRectF(contentLeft, y, contentRight - contentLeft, headerMetrics.height()),
-                     Qt::AlignLeft | Qt::AlignVCenter,
-                     QStringLiteral("Last %1 seconds").arg(windowSeconds));
-    y += headerMetrics.height() + graphGap;
+    if (!chipRects.empty()) {
+        painter.setFont(chipFont);
+        for (int i = 0; i < chips.size(); i++) {
+            const QRectF chipRect = chipRects[i].translated(contentLeft, y);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(0xFF, 0xFF, 0xFF, 0x1A));
+            painter.drawRoundedRect(chipRect, chipHeight / 2, chipHeight / 2);
+
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(k_ItemColor);
+            painter.drawText(chipRect.adjusted(chipPaddingX, 0, -chipPaddingX, 0),
+                             Qt::AlignCenter,
+                             chipMetrics.elidedText(chips[i], Qt::ElideRight,
+                                                    chipRect.width() - (chipPaddingX * 2)));
+        }
+        y += chipsHeight;
+        if (graphRows > 0) {
+            y += graphGap;
+        }
+    }
+
+    if (graphRows > 0) {
+        painter.setFont(headerFont);
+        painter.setPen(k_TitleColor);
+        painter.drawText(QRectF(contentLeft, y, contentRight - contentLeft, headerMetrics.height()),
+                         Qt::AlignLeft | Qt::AlignVCenter,
+                         QStringLiteral("Last %1 seconds").arg(windowSeconds));
+        y += headerMetrics.height() + graphGap;
+    }
 
     const qreal gridTop = y;
-    for (int i = 0; i < graphCount; i++) {
-        const GraphSpec& spec = k_Graphs[i];
-        const qreal cellLeft = contentLeft + ((i / graphRows) * (columnWidth + columnGap));
-        const qreal cellTop = gridTop + ((i % graphRows) * (graphHeight + graphGap));
-        const QRectF labelRect(cellLeft, cellTop, columnWidth, labelHeight);
+    for (int column = 0; column < graphColumns; column++) {
+        for (int row = 0; row < (int)columns[column].size(); row++) {
+            const GraphSpec& spec = *columns[column][row];
+            const qreal cellLeft = contentLeft + (column * (columnWidth + columnGap));
+            const qreal cellTop = gridTop + (row * (graphHeight + graphGap));
+            const QRectF labelRect(cellLeft, cellTop, columnWidth, labelHeight);
 
-        painter.setFont(labelFont);
-        painter.setPen(k_ItemColor);
-        painter.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter,
-                         QString::fromUtf8(spec.title));
+            painter.setFont(labelFont);
+            painter.setPen(k_ItemColor);
+            painter.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter,
+                             QString::fromUtf8(spec.title));
 
-        QRectF valueRect = labelRect;
-        if (!points.empty() && spec.withFrameRate) {
-            // The equivalent frame rate is secondary to the frametime it comes
-            // from, so it sits to its right in the smaller, dimmer label type.
-            const float frametimeMs = points.back().*spec.field;
-            const QString rateText = QStringLiteral("  (%1 FPS)")
-                    .arg(frametimeMs > 0 ? qRound(1000.0 / frametimeMs) : 0);
+            QRectF valueRect = labelRect;
+            if (!points.empty() && spec.withFrameRate) {
+                // The equivalent frame rate is secondary to the frametime it comes
+                // from, so it sits to its right in the smaller, dimmer label type.
+                const float frametimeMs = points.back().*spec.field;
+                const QString rateText = QStringLiteral("  (%1 FPS)")
+                        .arg(frametimeMs > 0 ? qRound(1000.0 / frametimeMs) : 0);
+
+                painter.setFont(scaleFont);
+                painter.setPen(k_TitleColor);
+                painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter, rateText);
+                valueRect.setRight(valueRect.right() -
+                                   QFontMetricsF(scaleFont).horizontalAdvance(rateText));
+            }
+            else if (!points.empty() && spec.secondaryField) {
+                // Named in its own line colour, which doubles as the legend
+                const QString secondaryText = QStringLiteral("  (%1 %2)")
+                        .arg(points.back().*spec.secondaryField, 0, 'f', spec.decimals)
+                        .arg(QString::fromUtf8(spec.secondaryName));
+
+                painter.setFont(scaleFont);
+                painter.setPen(spec.secondaryColor);
+                painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter, secondaryText);
+                valueRect.setRight(valueRect.right() -
+                                   QFontMetricsF(scaleFont).horizontalAdvance(secondaryText));
+            }
+
+            painter.setFont(valueFont);
+            painter.setPen(points.empty() ? k_TitleColor : k_GraphValueColor);
+            painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter,
+                             points.empty() ? QStringLiteral("--")
+                                            : QStringLiteral("%1%2")
+                                                .arg(points.back().*spec.field, 0, 'f', spec.decimals)
+                                                .arg(QString::fromUtf8(spec.unit)));
 
             painter.setFont(scaleFont);
-            painter.setPen(k_TitleColor);
-            painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter, rateText);
-            valueRect.setRight(valueRect.right() -
-                               QFontMetricsF(scaleFont).horizontalAdvance(rateText));
+            drawGraph(painter,
+                      QRectF(cellLeft, cellTop + labelHeight + labelGap,
+                             columnWidth, plotHeight),
+                      spec, points, maxPoints);
         }
-        else if (!points.empty() && spec.secondaryField) {
-            // Named in its own line colour, which doubles as the legend
-            const QString secondaryText = QStringLiteral("  (%1 %2)")
-                    .arg(points.back().*spec.secondaryField, 0, 'f', spec.decimals)
-                    .arg(QString::fromUtf8(spec.secondaryName));
-
-            painter.setFont(scaleFont);
-            painter.setPen(spec.secondaryColor);
-            painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter, secondaryText);
-            valueRect.setRight(valueRect.right() -
-                               QFontMetricsF(scaleFont).horizontalAdvance(secondaryText));
-        }
-
-        painter.setFont(valueFont);
-        painter.setPen(points.empty() ? k_TitleColor : k_GraphValueColor);
-        painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter,
-                         points.empty() ? QStringLiteral("--")
-                                        : QStringLiteral("%1%2")
-                                            .arg(points.back().*spec.field, 0, 'f', spec.decimals)
-                                            .arg(QString::fromUtf8(spec.unit)));
-
-        painter.setFont(scaleFont);
-        drawGraph(painter,
-                  QRectF(cellLeft, cellTop + labelHeight + labelGap,
-                         columnWidth, plotHeight),
-                  spec, points, maxPoints);
     }
 
     painter.end();

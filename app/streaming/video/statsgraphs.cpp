@@ -2,6 +2,7 @@
 #include "overlaymanager.h"
 #include "overlaypainter.h"
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 
@@ -13,6 +14,7 @@ StatsGraphs::~StatsGraphs()
 }
 
 void StatsGraphs::start(OverlayManager* overlayManager,
+                        const StatsGraphConfig& config,
                         std::function<void(StatsGraphCounters&)> sampler)
 {
     // Initialization can be retried with a different renderer without an
@@ -20,6 +22,7 @@ void StatsGraphs::start(OverlayManager* overlayManager,
     stop();
 
     m_OverlayManager = overlayManager;
+    m_Config = config;
     m_Sampler = std::move(sampler);
     m_Stopping = false;
     m_Points.clear();
@@ -53,6 +56,22 @@ void StatsGraphs::stop()
     m_Sampler = nullptr;
 }
 
+void StatsGraphs::setViewportHeight(int height)
+{
+    m_ViewportHeight.store(height, std::memory_order_relaxed);
+}
+
+float StatsGraphs::scale() const
+{
+    if (m_Config.sizePercent > 0) {
+        return m_Config.sizePercent / 100.0f;
+    }
+
+    // The same range the gamepad menu scales over, authored against 1080p
+    const int viewportHeight = m_ViewportHeight.load(std::memory_order_relaxed);
+    return viewportHeight > 0 ? std::clamp(viewportHeight / 1080.0f, 0.75f, 3.0f) : 1.0f;
+}
+
 void StatsGraphs::run()
 {
     using Clock = std::chrono::steady_clock;
@@ -62,6 +81,9 @@ void StatsGraphs::run()
     auto nextSample = lastSample + interval;
     auto lastRepaint = Clock::time_point{};
     bool wasEnabled = false;
+    // Whether nothing is published, so a card with nothing to show isn't
+    // republished (and its texture rebuilt) on every repaint.
+    bool publishedBlank = true;
 
     for (;;) {
         {
@@ -92,16 +114,27 @@ void StatsGraphs::run()
             // tick the graphs are turned on so they don't appear blank.
             if (!wasEnabled ||
                     now - lastRepaint >= std::chrono::milliseconds(k_RepaintIntervalMs)) {
-                m_OverlayManager->setOverlaySurface(OverlayDebugGraphs,
-                                                    Painter::paintStatsGraphs(m_Points,
-                                                                              k_MaxSamples,
-                                                                              k_WindowSeconds));
+                // The summary stands in for the text overlay, so it only
+                // appears while that is hidden.
+                const bool showStreamInfo = !m_OverlayManager->isOverlayEnabled(OverlayDebug);
+                SDL_Surface* surface = Painter::paintStatsGraphs(m_Points,
+                                                                 k_MaxSamples,
+                                                                 k_WindowSeconds,
+                                                                 m_Config,
+                                                                 scale(),
+                                                                 showStreamInfo ? &counters.streamInfo
+                                                                                : nullptr);
+                if (surface != nullptr || !publishedBlank) {
+                    m_OverlayManager->setOverlaySurface(OverlayDebugGraphs, surface);
+                }
+                publishedBlank = surface == nullptr;
                 lastRepaint = now;
             }
         }
         else if (wasEnabled) {
             // Don't keep a megabyte of pixels around while they aren't on screen
             m_OverlayManager->setOverlaySurface(OverlayDebugGraphs, nullptr);
+            publishedBlank = true;
         }
         wasEnabled = enabled;
     }
@@ -159,6 +192,24 @@ void StatsGraphs::appendSample(const StatsGraphCounters& counters, double interv
                   point.hostProcessingLatencyMaxMs);
     applyPerFrame(counters.reassembly, previous.reassemblyMs, 0,
                   point.reassemblyMs, point.reassemblyMinMs, point.reassemblyMaxMs);
+    applyPerFrame(counters.decodingTime, previous.decodingTimeMs, 0,
+                  point.decodingTimeMs, point.decodingTimeMinMs, point.decodingTimeMaxMs);
+    applyPerFrame(counters.renderingTime, previous.renderingTimeMs, 0,
+                  point.renderingTimeMs, point.renderingTimeMinMs, point.renderingTimeMaxMs);
+
+    // Decoding is measured as a frametime, like the other rates, and only
+    // converted for display. The interval bounds an empty interval's frame
+    // rate from above, just as it bounds the frametime from below.
+    {
+        float frametimeMs, fastestMs, slowestMs;
+        applyPerFrame(counters.decodingFrametime,
+                      previous.decodingFps > 0 ? 1000.0f / previous.decodingFps : 0,
+                      intervalMs, frametimeMs, fastestMs, slowestMs);
+        auto toFps = [](float ms) { return ms > 0 ? 1000.0f / ms : 0.0f; };
+        point.decodingFps = toFps(frametimeMs);
+        point.decodingFpsMin = toFps(slowestMs);
+        point.decodingFpsMax = toFps(fastestMs);
+    }
 
     if (intervalSecs > 0) {
         point.videoMbps = (float)(delta(counters.videoBytes, m_LastCounters.videoBytes) *
