@@ -783,7 +783,7 @@ ApplicationWindow {
     Rectangle {
         id: focusRing
 
-        readonly property int ringMargin: 4
+        readonly property int ringMargin: target && target.focusRingFlush ? 0 : 4
 
         // Only shown while the gamepad is in use. Only controls report
         // visualFocus, and only when focus was gained through keyboard or

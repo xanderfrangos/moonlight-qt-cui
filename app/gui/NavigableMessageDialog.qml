@@ -3,6 +3,7 @@ import QtQuick.Controls 2.2
 import QtQuick.Layouts 1.2
 
 import SystemProperties 1.0
+import TvTheme 1.0
 
 NavigableDialog {
     id: dialog
@@ -64,12 +65,24 @@ NavigableDialog {
         standardButtons: dialog.standardButtons
 
         delegate: Button {
+            id: dialogButton
+
             // In TV mode the focused button is filled with the accent color, so
             // it's always clear what pressing A will do. This follows focus
             // itself rather than the focus ring, which only appears for focus
             // gained through keyboard or gamepad navigation.
             flat: !(SystemProperties.tvMode && activeFocus)
             highlighted: SystemProperties.tvMode && activeFocus
+            property bool focusRingFlush: SystemProperties.tvMode
+
+            // Material's six-pixel top and bottom insets leave a strip between
+            // the fill and focus outline. Remove them but keep the button's
+            // original height so the dialog layout does not shift.
+            topInset: SystemProperties.tvMode ? 0 : 6
+            bottomInset: SystemProperties.tvMode ? 0 : 6
+            implicitHeight: Math.max(implicitBackgroundHeight + (SystemProperties.tvMode ? 12 : topInset + bottomInset),
+                                     implicitContentHeight + topPadding + bottomPadding)
+            Binding { target: dialogButton.background; property: "radius"; value: TvTheme.focusRingRadius; when: SystemProperties.tvMode }
 
             Keys.onReturnPressed: clicked()
             Keys.onEnterPressed: clicked()
