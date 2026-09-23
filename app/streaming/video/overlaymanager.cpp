@@ -135,11 +135,25 @@ void OverlayManager::updateOverlayText(OverlayType type, const char* text)
         SDL_FreeSurface(overlay.paintedSurface);
         overlay.paintedSurface = nullptr;
         SDL_utf8strlcpy(overlay.text, text, sizeof(overlay.text));
-        ++overlay.revision;
-        overlay.dirty = overlay.dirty || overlay.enabled;
-        overlay.queued = std::chrono::steady_clock::now();
+        queueContentChangeLocked(type);
     }
     m_WorkReady.notify_one();
+}
+
+void OverlayManager::queueContentChangeLocked(OverlayType type)
+{
+    auto& overlay = m_Overlays[type];
+
+    // A disabled overlay shows nothing whatever its content, so there is
+    // nothing to redraw. Leave its revision alone too: bumping it would make
+    // the worker discard an in-flight hide, and nothing would queue it again.
+    if (!overlay.enabled) {
+        return;
+    }
+
+    ++overlay.revision;
+    overlay.dirty = true;
+    overlay.queued = std::chrono::steady_clock::now();
 }
 
 void OverlayManager::setOverlayAnchor(OverlayType type, OverlayAnchor anchor)
@@ -148,10 +162,7 @@ void OverlayManager::setOverlayAnchor(OverlayType type, OverlayAnchor anchor)
 
     {
         std::lock_guard<std::mutex> lock(m_StateLock);
-        auto& overlay = m_Overlays[type];
-        ++overlay.revision;
-        overlay.dirty = overlay.dirty || overlay.enabled;
-        overlay.queued = std::chrono::steady_clock::now();
+        queueContentChangeLocked(type);
     }
     m_WorkReady.notify_one();
 }
@@ -184,9 +195,7 @@ void OverlayManager::setOverlaySurface(OverlayType type, SDL_Surface* surface, b
         SDL_FreeSurface(overlay.paintedSurface);
         overlay.paintedSurface = surface;
         overlay.paintedRetained = retain;
-        ++overlay.revision;
-        overlay.dirty = overlay.dirty || overlay.enabled;
-        overlay.queued = std::chrono::steady_clock::now();
+        queueContentChangeLocked(type);
 
         // The status messages share this overlay. Hand it back to them once
         // the surface that took it over is gone, turning the overlay off if
@@ -213,9 +222,7 @@ void OverlayManager::setOverlayStyle(OverlayType type, OverlayAnchor anchor, SDL
         auto& overlay = m_Overlays[type];
         overlay.color = color;
         overlay.background = background;
-        ++overlay.revision;
-        overlay.dirty = overlay.dirty || overlay.enabled;
-        overlay.queued = std::chrono::steady_clock::now();
+        queueContentChangeLocked(type);
     }
     m_WorkReady.notify_one();
 }
