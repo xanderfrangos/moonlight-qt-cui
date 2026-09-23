@@ -1746,7 +1746,7 @@ static const QColor k_MenuDimColor(0x00, 0x00, 0x00, 0xA8);
 
 // Returns the size of the stream window in the same pixel units the renderers
 // use for their viewports, which is what the menu scales itself against.
-static void getWindowPixelSize(SDL_Window* window, int& width, int& height)
+void Session::getWindowPixelSize(SDL_Window* window, int& width, int& height)
 {
     width = 0;
     height = 0;
@@ -1765,18 +1765,13 @@ static void getWindowPixelSize(SDL_Window* window, int& width, int& height)
     }
 }
 
-int Session::getWindowPixelHeight(SDL_Window* window)
-{
-    int width, height;
-    getWindowPixelSize(window, width, height);
-    return height;
-}
-
 Overlay::StatsGraphConfig Session::getStatsGraphConfig() const
 {
     Overlay::StatsGraphConfig config;
     config.visibleGraphs = (uint32_t)m_Preferences->visiblePerformanceGraphs();
     config.sizePercent = m_Preferences->performanceGraphSize;
+    config.backgroundOpacity = m_Preferences->performanceGraphOpacity;
+    config.windowSeconds = m_Preferences->performanceGraphHistory;
     switch (m_Preferences->performanceGraphHeight) {
     case StreamingPreferences::PGH_COMPACT:
         config.plotHeight = 28;
@@ -2361,6 +2356,16 @@ void Session::exec()
 
     // Start rich presence to indicate we're in game
     RichPresenceManager presence(*m_Preferences, m_App.name);
+
+    // The graphs take the side the user picked and the text stats the other
+    const bool graphsOnLeft =
+            m_Preferences->performanceGraphPosition == StreamingPreferences::PGP_LEFT;
+    m_OverlayManager.setOverlayAnchor(Overlay::OverlayDebugGraphs,
+                                      graphsOnLeft ? Overlay::OverlayAnchorTopLeft
+                                                   : Overlay::OverlayAnchorTopRight);
+    m_OverlayManager.setOverlayAnchor(Overlay::OverlayDebug,
+                                      graphsOnLeft ? Overlay::OverlayAnchorTopRight
+                                                   : Overlay::OverlayAnchorTopLeft);
 
     // Show the configured stats overlay arrangement if requested by the user.
     setStatsOverlayEnabled(m_Preferences->showPerformanceOverlay);

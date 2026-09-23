@@ -69,6 +69,9 @@
 #define SER_PERFGRAPHSTOGGLED "performancegraphstoggled"
 #define SER_PERFGRAPHSIZE "performancegraphsize"
 #define SER_PERFGRAPHHEIGHT "performancegraphheight"
+#define SER_PERFGRAPHOPACITY "performancegraphopacity"
+#define SER_PERFGRAPHHISTORY "performancegraphhistory"
+#define SER_PERFGRAPHPOSITION "performancegraphposition"
 #define SER_SWAPMOUSEBUTTONS "swapmousebuttons"
 #define SER_MUTEONFOCUSLOSS "muteonfocusloss"
 #define SER_BACKGROUNDGAMEPAD "backgroundgamepad"
@@ -237,6 +240,31 @@ void StreamingPreferences::reload()
     performanceGraphHeight = settings.value(SER_PERFGRAPHHEIGHT, PGH_NORMAL).toInt();
     if (performanceGraphHeight < PGH_COMPACT || performanceGraphHeight > PGH_TALL) {
         performanceGraphHeight = PGH_NORMAL;
+    }
+    performanceGraphOpacity = settings.value(SER_PERFGRAPHOPACITY, 75).toInt();
+    switch (performanceGraphOpacity) {
+    case 25:
+    case 50:
+    case 75:
+    case 95:
+        break;
+    default:
+        performanceGraphOpacity = 75;
+        break;
+    }
+    performanceGraphHistory = settings.value(SER_PERFGRAPHHISTORY, 10).toInt();
+    switch (performanceGraphHistory) {
+    case 5:
+    case 10:
+    case 30:
+        break;
+    default:
+        performanceGraphHistory = 10;
+        break;
+    }
+    performanceGraphPosition = settings.value(SER_PERFGRAPHPOSITION, PGP_RIGHT).toInt();
+    if (performanceGraphPosition != PGP_LEFT) {
+        performanceGraphPosition = PGP_RIGHT;
     }
     packetSize = settings.value(SER_PACKETSIZE, 0).toInt();
     swapMouseButtons = settings.value(SER_SWAPMOUSEBUTTONS, false).toBool();
@@ -437,18 +465,58 @@ bool StreamingPreferences::loadTvMode()
     return settings.value(SER_TVMODE, false).toBool();
 }
 
+const QVector<StreamingPreferences::PerformanceGraphInfo>& StreamingPreferences::performanceGraphs()
+{
+    static const QVector<PerformanceGraphInfo> k_Graphs = {
+        { PG_INCOMING_FRAMETIME, QT_TR_NOOP("Incoming frametime"), QT_TR_NOOP("Network"), true },
+        { PG_BANDWIDTH, QT_TR_NOOP("Bandwidth"), nullptr, true },
+        { PG_NETWORK_LATENCY, QT_TR_NOOP("Network latency"), nullptr, true },
+        { PG_NETWORK_JITTER, QT_TR_NOOP("Network jitter"), nullptr, true },
+        { PG_NETWORK_DROPS, QT_TR_NOOP("Dropped by network"), nullptr, true },
+        { PG_RENDERING_FRAMETIME, QT_TR_NOOP("Rendering frametime"), QT_TR_NOOP("Client"), true },
+        { PG_DECODING_FRAMETIME, QT_TR_NOOP("Decoding frametime"), nullptr, false },
+        { PG_HOST_PROCESSING_LATENCY, QT_TR_NOOP("Host processing latency"), nullptr, true },
+        { PG_REASSEMBLY, QT_TR_NOOP("Reassembly time"), nullptr, true },
+        { PG_DECODING_TIME, QT_TR_NOOP("Decoding time"), nullptr, false },
+        { PG_QUEUE_DEPTH, QT_TR_NOOP("Frame queue depth"), nullptr, true },
+        { PG_RENDERING_TIME, QT_TR_NOOP("Rendering time"), nullptr, false },
+        { PG_JITTER_DROPS, QT_TR_NOOP("Dropped by client pacer"), nullptr, true },
+    };
+    return k_Graphs;
+}
+
+QString StreamingPreferences::performanceGraphName(int id)
+{
+    for (const PerformanceGraphInfo& graph : performanceGraphs()) {
+        if (graph.id == id) {
+            return tr(graph.name);
+        }
+    }
+    return QString();
+}
+
+QVariantList StreamingPreferences::getPerformanceGraphs()
+{
+    QVariantList graphs;
+    for (const PerformanceGraphInfo& graph : performanceGraphs()) {
+        QVariantMap entry;
+        entry.insert(QStringLiteral("bit"), (int)graph.id);
+        entry.insert(QStringLiteral("text"), tr(graph.name));
+        entry.insert(QStringLiteral("section"), graph.section != nullptr ? tr(graph.section) : QString());
+        graphs.append(entry);
+    }
+    return graphs;
+}
+
 int StreamingPreferences::getPerformanceGraphsDefault()
 {
-    return (1 << PG_INCOMING_FRAMETIME) |
-           (1 << PG_BANDWIDTH) |
-           (1 << PG_NETWORK_LATENCY) |
-           (1 << PG_NETWORK_JITTER) |
-           (1 << PG_NETWORK_DROPS) |
-           (1 << PG_RENDERING_FRAMETIME) |
-           (1 << PG_HOST_PROCESSING_LATENCY) |
-           (1 << PG_REASSEMBLY) |
-           (1 << PG_QUEUE_DEPTH) |
-           (1 << PG_JITTER_DROPS);
+    int mask = 0;
+    for (const PerformanceGraphInfo& graph : performanceGraphs()) {
+        if (graph.defaultVisible) {
+            mask |= 1 << graph.id;
+        }
+    }
+    return mask;
 }
 
 void StreamingPreferences::save()
@@ -492,6 +560,9 @@ void StreamingPreferences::save()
     settings.setValue(SER_PERFGRAPHSTOGGLED, performanceGraphsToggled);
     settings.setValue(SER_PERFGRAPHSIZE, performanceGraphSize);
     settings.setValue(SER_PERFGRAPHHEIGHT, performanceGraphHeight);
+    settings.setValue(SER_PERFGRAPHOPACITY, performanceGraphOpacity);
+    settings.setValue(SER_PERFGRAPHHISTORY, performanceGraphHistory);
+    settings.setValue(SER_PERFGRAPHPOSITION, performanceGraphPosition);
     settings.setValue(SER_AUDIOCFG, static_cast<int>(audioConfig));
     settings.setValue(SER_HDR, enableHdr);
     settings.setValue(SER_YUV444, enableYUV444);

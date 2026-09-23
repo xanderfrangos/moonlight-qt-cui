@@ -2522,91 +2522,151 @@ Flickable {
 
                     Label {
                         width: parent.width
+                        text: qsTr("Graph position")
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                    }
+
+                    AutoResizingComboBox {
+                        id: performanceGraphPositionComboBox
+                        textRole: "text"
+                        model: ListModel {
+                            id: performanceGraphPositionListModel
+                            ListElement {
+                                text: qsTr("Right (text stats on the left)")
+                                val: StreamingPreferences.PGP_RIGHT
+                            }
+                            ListElement {
+                                text: qsTr("Left (text stats on the right)")
+                                val: StreamingPreferences.PGP_LEFT
+                            }
+                        }
+                        currentIndex: {
+                            for (var i = 0; i < performanceGraphPositionListModel.count; i++) {
+                                if (performanceGraphPositionListModel.get(i).val === StreamingPreferences.performanceGraphPosition) {
+                                    return i
+                                }
+                            }
+                            return 0
+                        }
+                        onActivated: {
+                            StreamingPreferences.performanceGraphPosition = performanceGraphPositionListModel.get(currentIndex).val
+                        }
+                        Component.onCompleted: {
+                            recalculateWidth()
+                            languageChanged.connect(recalculateWidth)
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("Graph background opacity")
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                    }
+
+                    AutoResizingComboBox {
+                        id: performanceGraphOpacityComboBox
+                        textRole: "text"
+                        model: ListModel {
+                            id: performanceGraphOpacityListModel
+                            ListElement {
+                                text: qsTr("95%")
+                                val: 95
+                            }
+                            ListElement {
+                                text: qsTr("75%")
+                                val: 75
+                            }
+                            ListElement {
+                                text: qsTr("50%")
+                                val: 50
+                            }
+                            ListElement {
+                                text: qsTr("25%")
+                                val: 25
+                            }
+                        }
+                        currentIndex: {
+                            for (var i = 0; i < performanceGraphOpacityListModel.count; i++) {
+                                if (performanceGraphOpacityListModel.get(i).val === StreamingPreferences.performanceGraphOpacity) {
+                                    return i
+                                }
+                            }
+                            return 1
+                        }
+                        onActivated: {
+                            StreamingPreferences.performanceGraphOpacity = performanceGraphOpacityListModel.get(currentIndex).val
+                        }
+                        Component.onCompleted: {
+                            recalculateWidth()
+                            languageChanged.connect(recalculateWidth)
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("Graph history")
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                    }
+
+                    AutoResizingComboBox {
+                        id: performanceGraphHistoryComboBox
+                        textRole: "text"
+                        model: ListModel {
+                            id: performanceGraphHistoryListModel
+                            ListElement {
+                                text: qsTr("5 seconds")
+                                val: 5
+                            }
+                            ListElement {
+                                text: qsTr("10 seconds")
+                                val: 10
+                            }
+                            ListElement {
+                                text: qsTr("30 seconds")
+                                val: 30
+                            }
+                        }
+                        currentIndex: {
+                            for (var i = 0; i < performanceGraphHistoryListModel.count; i++) {
+                                if (performanceGraphHistoryListModel.get(i).val === StreamingPreferences.performanceGraphHistory) {
+                                    return i
+                                }
+                            }
+                            return 1
+                        }
+                        onActivated: {
+                            StreamingPreferences.performanceGraphHistory = performanceGraphHistoryListModel.get(currentIndex).val
+                        }
+                        Component.onCompleted: {
+                            recalculateWidth()
+                            languageChanged.connect(recalculateWidth)
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
                         text: qsTr("Graphs to show")
                         font.pointSize: 12
                         wrapMode: Text.Wrap
                     }
 
                     Repeater {
-                        // Grouped by where each measurement comes from. The
-                        // stream lays them out in its own order.
-                        model: ListModel {
-                            ListElement {
-                                text: qsTr("Incoming frametime")
-                                bit: StreamingPreferences.PG_INCOMING_FRAMETIME
-                                section: qsTr("Network")
-                            }
-                            ListElement {
-                                text: qsTr("Bandwidth")
-                                bit: StreamingPreferences.PG_BANDWIDTH
-                                section: ""
-                            }
-                            ListElement {
-                                text: qsTr("Network latency")
-                                bit: StreamingPreferences.PG_NETWORK_LATENCY
-                                section: ""
-                            }
-                            ListElement {
-                                text: qsTr("Network jitter")
-                                bit: StreamingPreferences.PG_NETWORK_JITTER
-                                section: ""
-                            }
-                            ListElement {
-                                text: qsTr("Dropped by network")
-                                bit: StreamingPreferences.PG_NETWORK_DROPS
-                                section: ""
-                            }
-                            ListElement {
-                                text: qsTr("Rendering frametime")
-                                bit: StreamingPreferences.PG_RENDERING_FRAMETIME
-                                section: qsTr("Client")
-                            }
-                            ListElement {
-                                text: qsTr("Host processing latency")
-                                bit: StreamingPreferences.PG_HOST_PROCESSING_LATENCY
-                                section: ""
-                            }
-                            ListElement {
-                                text: qsTr("Reassembly time")
-                                bit: StreamingPreferences.PG_REASSEMBLY
-                                section: ""
-                            }
-                            ListElement {
-                                text: qsTr("Decoding frame rate")
-                                bit: StreamingPreferences.PG_DECODING_FRAMERATE
-                                section: ""
-                            }
-                            ListElement {
-                                text: qsTr("Decoding time")
-                                bit: StreamingPreferences.PG_DECODING_TIME
-                                section: ""
-                            }
-                            ListElement {
-                                text: qsTr("Frame queue depth")
-                                bit: StreamingPreferences.PG_QUEUE_DEPTH
-                                section: ""
-                            }
-                            ListElement {
-                                text: qsTr("Rendering time")
-                                bit: StreamingPreferences.PG_RENDERING_TIME
-                                section: ""
-                            }
-                            ListElement {
-                                text: qsTr("Dropped by client pacer")
-                                bit: StreamingPreferences.PG_JITTER_DROPS
-                                section: ""
-                            }
-                        }
+                        // The C++ side owns the list of graphs, their names,
+                        // sections and defaults
+                        model: StreamingPreferences.getPerformanceGraphs()
 
                         delegate: Column {
                             width: parent.width
                             spacing: 0
 
                             Label {
-                                visible: model.section !== ""
+                                visible: modelData.section !== ""
                                 topPadding: 5
                                 leftPadding: 5
-                                text: model.section
+                                text: modelData.section
                                 font.pointSize: 10
                                 font.bold: true
                                 opacity: 0.7
@@ -2614,14 +2674,14 @@ Flickable {
 
                             CheckBox {
                                 width: parent.width
-                                text: model.text
+                                text: modelData.text
                                 font.pointSize: 12
                                 // The preference records changes from each
                                 // graph's default, so a click just flips its bit
                                 checked: ((StreamingPreferences.performanceGraphsDefault ^
-                                           StreamingPreferences.performanceGraphsToggled) & (1 << model.bit)) !== 0
+                                           StreamingPreferences.performanceGraphsToggled) & (1 << modelData.bit)) !== 0
                                 onToggled: {
-                                    StreamingPreferences.performanceGraphsToggled ^= (1 << model.bit)
+                                    StreamingPreferences.performanceGraphsToggled ^= (1 << modelData.bit)
                                 }
                             }
                         }

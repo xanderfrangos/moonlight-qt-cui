@@ -114,7 +114,9 @@ bool FFmpegVideoDecoder::notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info)
     if (originalInfo.stateChangeFlags & WINDOW_STATE_CHANGE_SIZE) {
         // The event carries the size in window units, not the pixels the
         // renderers draw the overlays in
-        m_StatsGraphs.setViewportHeight(Session::getWindowPixelHeight(originalInfo.window));
+        int width, height;
+        Session::getWindowPixelSize(originalInfo.window, width, height);
+        m_StatsGraphs.setViewportSize(width, height);
     }
 
     const bool handled =
@@ -853,7 +855,11 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
         // Sampling runs whether or not the graphs are visible, so they already
         // cover a full window by the time the user brings them up.
         m_StatsGraphPacketWireBytes = getVideoPacketWireBytes();
-        m_StatsGraphs.setViewportHeight(Session::getWindowPixelHeight(params->window));
+        {
+            int width, height;
+            Session::getWindowPixelSize(params->window, width, height);
+            m_StatsGraphs.setViewportSize(width, height);
+        }
         m_StatsGraphs.start(&Session::get()->getOverlayManager(),
                             Session::get()->getStatsGraphConfig(),
                             [this](Overlay::StatsGraphCounters& counters) {

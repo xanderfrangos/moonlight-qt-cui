@@ -127,8 +127,8 @@ public:
     void toggleStatsOverlay();
     // Which stats graphs to draw and how, from the user's preferences
     Overlay::StatsGraphConfig getStatsGraphConfig() const;
-    // Height of the stream window in the pixel units renderers draw in
-    static int getWindowPixelHeight(SDL_Window* window);
+    // Size of the stream window in the pixel units renderers draw in
+    static void getWindowPixelSize(SDL_Window* window, int& width, int& height);
     bool clientPacingWarningsEnabled() const { return m_Preferences->connectionWarnings; }
     bool hevcPacingAlternative() const { return m_HevcPacingAlternative; }
 

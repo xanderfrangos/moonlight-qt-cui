@@ -95,7 +95,7 @@ struct StatsGraphCounters {
     StatsGraphAccumulator renderingFrametime;
     StatsGraphAccumulator hostProcessingLatency;
     StatsGraphAccumulator reassembly;
-    // Interval between frames leaving the decoder, plotted as a frame rate
+    // Interval between frames leaving the decoder
     StatsGraphAccumulator decodingFrametime;
     StatsGraphAccumulator decodingTime;
     StatsGraphAccumulator renderingTime;
@@ -111,6 +111,10 @@ struct StatsGraphConfig {
     int sizePercent = 100;
     // Height of each plot at 100% scale, in pixels
     int plotHeight = 40;
+    // Opacity of the card behind the graphs, in percent
+    int backgroundOpacity = 75;
+    // Length of the plotted history
+    int windowSeconds = 10;
 };
 
 // One sampling interval's worth of plotted values.
@@ -132,11 +136,9 @@ struct StatsGraphPoint {
     float reassemblyMs = 0;
     float reassemblyMinMs = 0;
     float reassemblyMaxMs = 0;
-    // Frames per second rather than milliseconds, with the spread inverted
-    // from the decoder's frametime: the slowest frame sets the minimum.
-    float decodingFps = 0;
-    float decodingFpsMin = 0;
-    float decodingFpsMax = 0;
+    float decodingFrametimeMs = 0;
+    float decodingFrametimeMinMs = 0;
+    float decodingFrametimeMaxMs = 0;
     float decodingTimeMs = 0;
     float decodingTimeMinMs = 0;
     float decodingTimeMaxMs = 0;
@@ -156,22 +158,21 @@ struct StatsGraphPoint {
 
 // Samples stream statistics on a fixed interval and publishes a painted plot of
 // the last few seconds to the debug graph overlay. While the debug text overlay
-// is hidden, the card also summarizes the stream it would otherwise describe. Sampling runs whether or not
-// the overlay is visible, so the graphs already cover a full window when the
-// user brings them up. Painting only happens while they're on screen.
+// is hidden, the card also summarizes the stream it would otherwise describe.
+// Sampling runs whether or not the overlay is visible, so the graphs already
+// cover a full window when the user brings them up. Painting only happens
+// while they're on screen.
 class StatsGraphs
 {
 public:
     static constexpr int k_SampleIntervalMs = 100;
     // Repainting is deliberately slower than sampling. Every sample still
     // reaches the plot; only the refresh rate differs. A republish costs a
-    // megabyte-scale surface allocation, a copy of it inside the overlay
-    // manager, and a GPU texture rebuild in the renderer, all while the render
-    // thread contends for the same overlay state lock, so doing it ten times a
-    // second is far more pressure than any other overlay in this app applies.
+    // megabyte-scale surface allocation and a GPU texture rebuild in the
+    // renderer, while the render thread contends for the same overlay state
+    // lock, so doing it ten times a second is far more pressure than any
+    // other overlay in this app applies.
     static constexpr int k_RepaintIntervalMs = 200;
-    static constexpr int k_WindowSeconds = 10;
-    static constexpr int k_MaxSamples = (k_WindowSeconds * 1000) / k_SampleIntervalMs;
 
     StatsGraphs() = default;
     ~StatsGraphs();
@@ -184,9 +185,10 @@ public:
                std::function<void(StatsGraphCounters&)> sampler);
     void stop();
 
-    // The stream window's height in pixels, which an automatic size scales
-    // against. Safe to call from any thread.
-    void setViewportHeight(int height);
+    // The stream window's size in pixels. An automatic size scales against
+    // its height, and every size shrinks to fit it. Safe to call from any
+    // thread.
+    void setViewportSize(int width, int height);
 
 private:
     void run();
@@ -200,6 +202,9 @@ private:
 
     OverlayManager* m_OverlayManager = nullptr;
     StatsGraphConfig m_Config;
+    // Samples in a full window, from the configured history length
+    int m_MaxSamples = 0;
+    std::atomic<int> m_ViewportWidth{0};
     std::atomic<int> m_ViewportHeight{0};
     std::function<void(StatsGraphCounters&)> m_Sampler;
     std::mutex m_Lock;

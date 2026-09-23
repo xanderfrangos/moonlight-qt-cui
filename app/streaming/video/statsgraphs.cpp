@@ -23,6 +23,7 @@ void StatsGraphs::start(OverlayManager* overlayManager,
 
     m_OverlayManager = overlayManager;
     m_Config = config;
+    m_MaxSamples = std::max(2, (config.windowSeconds * 1000) / k_SampleIntervalMs);
     m_Sampler = std::move(sampler);
     m_Stopping = false;
     m_Points.clear();
@@ -56,8 +57,9 @@ void StatsGraphs::stop()
     m_Sampler = nullptr;
 }
 
-void StatsGraphs::setViewportHeight(int height)
+void StatsGraphs::setViewportSize(int width, int height)
 {
+    m_ViewportWidth.store(width, std::memory_order_relaxed);
     m_ViewportHeight.store(height, std::memory_order_relaxed);
 }
 
@@ -84,6 +86,10 @@ void StatsGraphs::run()
     // Whether nothing is published, so a card with nothing to show isn't
     // republished (and its texture rebuilt) on every repaint.
     bool publishedBlank = true;
+    // Widest the text overlay has been since it appeared. Its width changes
+    // with every update, and following it exactly would resize a card that
+    // has been squeezed beside it once a second.
+    int textWidth = 0;
 
     for (;;) {
         {
@@ -116,16 +122,31 @@ void StatsGraphs::run()
                     now - lastRepaint >= std::chrono::milliseconds(k_RepaintIntervalMs)) {
                 // The summary stands in for the text overlay, so it only
                 // appears while that is hidden.
-                const bool showStreamInfo = !m_OverlayManager->isOverlayEnabled(OverlayDebug);
+                const bool textShown = m_OverlayManager->isOverlayEnabled(OverlayDebug);
+
+                // Fit beside the text overlay, which sits on the other side
+                // of the stream, rather than overlapping it. Its width is
+                // only known once it has been drawn, so the card may overlap
+                // it for a moment when the two appear together.
+                textWidth = textShown ? std::max(textWidth, m_OverlayManager->getOverlayWidth(OverlayDebug))
+                                      : 0;
+                int maxWidth = m_ViewportWidth.load(std::memory_order_relaxed);
+                const int maxHeight = m_ViewportHeight.load(std::memory_order_relaxed);
+                if (maxWidth > 0) {
+                    maxWidth = std::max(1, maxWidth - textWidth);
+                }
+
                 SDL_Surface* surface = Painter::paintStatsGraphs(m_Points,
-                                                                 k_MaxSamples,
-                                                                 k_WindowSeconds,
+                                                                 m_MaxSamples,
                                                                  m_Config,
+                                                                 counters.streamInfo,
+                                                                 !textShown,
                                                                  scale(),
-                                                                 showStreamInfo ? &counters.streamInfo
-                                                                                : nullptr);
+                                                                 QSize(maxWidth, maxHeight));
                 if (surface != nullptr || !publishedBlank) {
-                    m_OverlayManager->setOverlaySurface(OverlayDebugGraphs, surface);
+                    // Not retained: this repaints often enough to cover a
+                    // renderer change by itself.
+                    m_OverlayManager->setOverlaySurface(OverlayDebugGraphs, surface, false);
                 }
                 publishedBlank = surface == nullptr;
                 lastRepaint = now;
@@ -196,20 +217,9 @@ void StatsGraphs::appendSample(const StatsGraphCounters& counters, double interv
                   point.decodingTimeMs, point.decodingTimeMinMs, point.decodingTimeMaxMs);
     applyPerFrame(counters.renderingTime, previous.renderingTimeMs, 0,
                   point.renderingTimeMs, point.renderingTimeMinMs, point.renderingTimeMaxMs);
-
-    // Decoding is measured as a frametime, like the other rates, and only
-    // converted for display. The interval bounds an empty interval's frame
-    // rate from above, just as it bounds the frametime from below.
-    {
-        float frametimeMs, fastestMs, slowestMs;
-        applyPerFrame(counters.decodingFrametime,
-                      previous.decodingFps > 0 ? 1000.0f / previous.decodingFps : 0,
-                      intervalMs, frametimeMs, fastestMs, slowestMs);
-        auto toFps = [](float ms) { return ms > 0 ? 1000.0f / ms : 0.0f; };
-        point.decodingFps = toFps(frametimeMs);
-        point.decodingFpsMin = toFps(slowestMs);
-        point.decodingFpsMax = toFps(fastestMs);
-    }
+    applyPerFrame(counters.decodingFrametime, previous.decodingFrametimeMs, intervalMs,
+                  point.decodingFrametimeMs, point.decodingFrametimeMinMs,
+                  point.decodingFrametimeMaxMs);
 
     if (intervalSecs > 0) {
         point.videoMbps = (float)(delta(counters.videoBytes, m_LastCounters.videoBytes) *
@@ -242,7 +252,7 @@ void StatsGraphs::appendSample(const StatsGraphCounters& counters, double interv
 
     m_LastCounters = counters;
 
-    if (m_Points.size() == (size_t)k_MaxSamples) {
+    if (m_Points.size() >= (size_t)m_MaxSamples) {
         m_Points.erase(m_Points.begin());
     }
     m_Points.push_back(point);

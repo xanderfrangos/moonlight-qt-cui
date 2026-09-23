@@ -5,6 +5,7 @@
 #include <QQmlEngine>
 #include <QStringList>
 #include <QVariantList>
+#include <QVector>
 
 class StreamingPreferences : public QObject
 {
@@ -188,7 +189,7 @@ public:
         PG_REASSEMBLY = 7,
         PG_QUEUE_DEPTH = 8,
         PG_JITTER_DROPS = 9,
-        PG_DECODING_FRAMERATE = 10,
+        PG_DECODING_FRAMETIME = 10,
         PG_DECODING_TIME = 11,
         PG_RENDERING_TIME = 12,
     };
@@ -209,6 +210,32 @@ public:
         PGH_TALL = 2,
     };
     Q_ENUM(PerformanceGraphHeight)
+
+    // Which side of the stream the graphs sit on. The text stats take the
+    // other side. Persisted IDs must stay stable.
+    enum PerformanceGraphPosition
+    {
+        PGP_RIGHT = 0,
+        PGP_LEFT = 1,
+    };
+    Q_ENUM(PerformanceGraphPosition)
+
+    // The one list of performance graphs, in the order the settings page
+    // shows them. The stream lays them out in its own order, but takes their
+    // names from here so the two can't drift apart.
+    struct PerformanceGraphInfo {
+        PerformanceGraph id;
+        // Untranslated. Use performanceGraphName() for display.
+        const char* name;
+        // Heads the settings list for the graphs that follow it, if set
+        const char* section;
+        bool defaultVisible;
+    };
+    static const QVector<PerformanceGraphInfo>& performanceGraphs();
+    static QString performanceGraphName(int id);
+
+    // Each entry is a map with "bit", "text" and "section" for QML
+    Q_INVOKABLE static QVariantList getPerformanceGraphs();
 
     Q_PROPERTY(int width MEMBER width NOTIFY displayModeChanged)
     Q_PROPERTY(int height MEMBER height NOTIFY displayModeChanged)
@@ -242,6 +269,9 @@ public:
     Q_PROPERTY(int performanceGraphsDefault READ getPerformanceGraphsDefault CONSTANT)
     Q_PROPERTY(int performanceGraphSize MEMBER performanceGraphSize NOTIFY performanceGraphSizeChanged)
     Q_PROPERTY(int performanceGraphHeight MEMBER performanceGraphHeight NOTIFY performanceGraphHeightChanged)
+    Q_PROPERTY(int performanceGraphOpacity MEMBER performanceGraphOpacity NOTIFY performanceGraphOpacityChanged)
+    Q_PROPERTY(int performanceGraphHistory MEMBER performanceGraphHistory NOTIFY performanceGraphHistoryChanged)
+    Q_PROPERTY(int performanceGraphPosition MEMBER performanceGraphPosition NOTIFY performanceGraphPositionChanged)
     Q_PROPERTY(AudioConfig audioConfig MEMBER audioConfig NOTIFY audioConfigChanged)
     Q_PROPERTY(VideoCodecConfig videoCodecConfig MEMBER videoCodecConfig NOTIFY videoCodecConfigChanged)
     Q_PROPERTY(bool enableHdr MEMBER enableHdr NOTIFY enableHdrChanged)
@@ -323,6 +353,11 @@ public:
     }
     int performanceGraphSize;
     int performanceGraphHeight;
+    // Background opacity in percent
+    int performanceGraphOpacity;
+    // Seconds of history plotted
+    int performanceGraphHistory;
+    int performanceGraphPosition;
     bool swapMouseButtons;
     bool muteOnFocusLoss;
     bool backgroundGamepad;
@@ -400,6 +435,9 @@ signals:
     void performanceGraphsToggledChanged();
     void performanceGraphSizeChanged();
     void performanceGraphHeightChanged();
+    void performanceGraphOpacityChanged();
+    void performanceGraphHistoryChanged();
+    void performanceGraphPositionChanged();
     void mouseButtonsChanged();
     void muteOnFocusLossChanged();
     void backgroundGamepadChanged();

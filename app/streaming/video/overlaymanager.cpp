@@ -124,6 +124,25 @@ void OverlayManager::updateOverlayText(OverlayType type, const char* text)
     m_WorkReady.notify_one();
 }
 
+void OverlayManager::setOverlayAnchor(OverlayType type, OverlayAnchor anchor)
+{
+    SDL_AtomicSet(&m_Overlays[type].anchor, anchor);
+
+    {
+        std::lock_guard<std::mutex> lock(m_StateLock);
+        auto& overlay = m_Overlays[type];
+        ++overlay.revision;
+        overlay.dirty = overlay.dirty || overlay.enabled;
+        overlay.queued = std::chrono::steady_clock::now();
+    }
+    m_WorkReady.notify_one();
+}
+
+int OverlayManager::getOverlayWidth(OverlayType type)
+{
+    return SDL_AtomicGet(&m_Overlays[type].publishedWidth);
+}
+
 int OverlayManager::getOverlayMaxTextLength()
 {
     return sizeof(m_Overlays[0].text);
@@ -139,13 +158,14 @@ SDL_Surface* OverlayManager::getUpdatedOverlaySurface(OverlayType type)
     return (SDL_Surface*)SDL_AtomicSetPtr((void**)&m_Overlays[type].surface, nullptr);
 }
 
-void OverlayManager::setOverlaySurface(OverlayType type, SDL_Surface* surface)
+void OverlayManager::setOverlaySurface(OverlayType type, SDL_Surface* surface, bool retain)
 {
     {
         std::lock_guard<std::mutex> lock(m_StateLock);
         auto& overlay = m_Overlays[type];
         SDL_FreeSurface(overlay.paintedSurface);
         overlay.paintedSurface = surface;
+        overlay.paintedRetained = retain;
         ++overlay.revision;
         overlay.dirty = overlay.dirty || overlay.enabled;
         overlay.queued = std::chrono::steady_clock::now();
@@ -291,8 +311,18 @@ void OverlayManager::run()
             queued = overlay.queued;
             color = overlay.color;
             background = overlay.background;
-            // Copied under the lock because the producer can replace it at any time
-            painted = (enabled && overlay.paintedSurface) ? SDL_DuplicateSurface(overlay.paintedSurface) : nullptr;
+            // Copied under the lock because the producer can replace it at any
+            // time, unless the producer said it doesn't need it kept
+            painted = nullptr;
+            if (enabled && overlay.paintedSurface) {
+                if (overlay.paintedRetained) {
+                    painted = SDL_DuplicateSurface(overlay.paintedSurface);
+                }
+                else {
+                    painted = overlay.paintedSurface;
+                    overlay.paintedSurface = nullptr;
+                }
+            }
             SDL_memcpy(text, overlay.text, sizeof(text));
         }
         const auto started = Clock::now();
@@ -319,7 +349,10 @@ void OverlayManager::run()
         {
             std::lock_guard<std::mutex> stateLock(m_StateLock);
             publish = !m_Stopping && m_Renderer && overlay.revision == revision;
-            if (publish) surface = (SDL_Surface*)SDL_AtomicSetPtr((void**)&overlay.surface, surface);
+            if (publish) {
+                SDL_AtomicSet(&overlay.publishedWidth, surface ? surface->w : 0);
+                surface = (SDL_Surface*)SDL_AtomicSetPtr((void**)&overlay.surface, surface);
+            }
         }
         SDL_FreeSurface(surface); // Superseded result or previous unconsumed surface.
         if (publish) {

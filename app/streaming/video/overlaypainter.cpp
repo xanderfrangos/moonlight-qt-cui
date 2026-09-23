@@ -68,14 +68,40 @@ SDL_Surface* imageToSurface(const QImage& image)
     return surface;
 }
 
+// Converts a premultiplied canvas straight into a new surface in a single pass,
+// rather than through an intermediate non-premultiplied image.
+SDL_Surface* canvasToSurface(const QImage& canvas)
+{
+    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, canvas.width(), canvas.height(),
+                                                          32, SDL_PIXELFORMAT_ARGB8888);
+    if (surface == nullptr) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Unable to allocate overlay surface: %s",
+                     SDL_GetError());
+        return nullptr;
+    }
+
+    // The same memory layout as imageToSurface() relies on. Qt converts to
+    // the non-premultiplied format as it copies.
+    QImage target((uchar*)surface->pixels, surface->w, surface->h, surface->pitch,
+                  QImage::Format_ARGB32);
+    QPainter painter(&target);
+    painter.setCompositionMode(QPainter::CompositionMode_Source);
+    painter.drawImage(0, 0, canvas);
+    painter.end();
+
+    return surface;
+}
+
 // A soft shadow that lifts the card off the video without needing a blur pass
-void drawCardShadow(QPainter& painter, const QRectF& cardRect, qreal radius, qreal spread)
+void drawCardShadow(QPainter& painter, const QRectF& cardRect, qreal radius, qreal spread,
+                    qreal strength = 1.0)
 {
     painter.setPen(Qt::NoPen);
 
     for (qreal i = spread; i >= 1; i--) {
         const qreal falloff = 1.0 - (i / spread);
-        painter.setBrush(QColor(0, 0, 0, qRound(60.0 * falloff * falloff)));
+        painter.setBrush(QColor(0, 0, 0, qRound(60.0 * falloff * falloff * strength)));
         painter.drawRoundedRect(cardRect.adjusted(-i, -i * 0.6, i, i * 1.4),
                                 radius + i, radius + i);
     }
@@ -231,11 +257,14 @@ namespace {
 const QColor k_GraphPlotColor(0x00, 0x00, 0x00, 0x66);
 const QColor k_GraphGridColor(0xFF, 0xFF, 0xFF, 0x1F);
 const QColor k_GraphValueColor(0xFF, 0xFF, 0xFF);
+const QColor k_GraphTargetColor(0xFF, 0xFF, 0xFF, 0x70);
+
+// Opacity the card's colors are authored at, which the user's setting scales
+constexpr qreal k_DefaultCardOpacity = 0.95;
 
 struct GraphSpec {
-    // A StreamingPreferences::PerformanceGraph, so it can be hidden
+    // A StreamingPreferences::PerformanceGraph, which also names the graph
     int id;
-    const char* title;
     float StatsGraphPoint::* field;
     // Per-interval spread, where the value is measured per frame. Null for
     // metrics sampled once an interval, which have no spread to show.
@@ -247,7 +276,8 @@ struct GraphSpec {
     // Smallest full-scale value, so an idle graph doesn't amplify noise into
     // something that looks like a problem.
     qreal minScale;
-    // Frametime graphs also print the frame rate they correspond to.
+    // Frametime graphs also print the frame rate they correspond to, and mark
+    // the stream's target frametime.
     bool withFrameRate = false;
     // A second series drawn as a line over the first, with its current value
     // named alongside the main one. Null when a graph plots only one series.
@@ -270,16 +300,22 @@ qreal niceCeil(qreal value)
     return step * magnitude;
 }
 
+// target is a value to mark with a reference line, or 0 for none. The plot's
+// backdrop follows the card's opacity, relative to the default.
 void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
-               const std::vector<StatsGraphPoint>& points, int maxPoints)
+               const std::vector<StatsGraphPoint>& points, int maxPoints,
+               qreal target, qreal opacity)
 {
+    QColor plotColor = k_GraphPlotColor;
+    plotColor.setAlphaF(qMin(1.0, plotColor.alphaF() * opacity));
     painter.setPen(Qt::NoPen);
-    painter.setBrush(k_GraphPlotColor);
+    painter.setBrush(plotColor);
     painter.drawRoundedRect(plotRect, 4, 4);
 
     // Scale against the spread, not just the mean, so a spike that only shows
-    // up in the band is never clipped off the top of the plot.
-    qreal scale = spec.minScale;
+    // up in the band is never clipped off the top of the plot. The target is
+    // always in view, so a stream running slow still shows where it should be.
+    qreal scale = qMax(spec.minScale, target);
     qreal windowMin = 0, windowMax = 0;
     for (size_t i = 0; i < points.size(); i++) {
         const qreal low = spec.minField ? (qreal)(points[i].*spec.minField)
@@ -304,6 +340,14 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
     painter.setPen(QPen(k_GraphGridColor, 1));
     const qreal midY = plotRect.center().y();
     painter.drawLine(QPointF(plotRect.left() + 1, midY), QPointF(plotRect.right() - 1, midY));
+
+    // Drawn under the data, so a line sitting on its target hides it
+    if (target > 0) {
+        const qreal targetY = plotRect.bottom() - (target * plotRect.height() / scale);
+        painter.setPen(QPen(k_GraphTargetColor, 1, Qt::DashLine));
+        painter.drawLine(QPointF(plotRect.left() + 1, targetY),
+                         QPointF(plotRect.right() - 1, targetY));
+    }
 
     if (!points.empty() && maxPoints > 1) {
         const qreal stepX = plotRect.width() / (maxPoints - 1);
@@ -441,71 +485,61 @@ QStringList streamInfoChips(const StatsGraphStreamInfo& info)
 
 SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& points,
                                        int maxPoints,
-                                       int windowSeconds,
                                        const StatsGraphConfig& config,
+                                       const StatsGraphStreamInfo& streamInfo,
+                                       bool showStreamInfo,
                                        qreal scale,
-                                       const StatsGraphStreamInfo* streamInfo)
+                                       QSize maxSize)
 {
     // Graphs are dealt into the two columns in turn, so this order reads
     // across each row. The default graphs pair the network path in on the
-    // left with the client pipeline on the right. The opt-in graphs come
+    // left with the client pipeline on the right. Most opt-in graphs come
     // last, so turning them on never shifts a default graph across.
     static const GraphSpec k_Graphs[] = {
-        { StreamingPreferences::PG_INCOMING_FRAMETIME,
-          "Incoming frametime", &StatsGraphPoint::incomingFrametimeMs,
+        { StreamingPreferences::PG_INCOMING_FRAMETIME, &StatsGraphPoint::incomingFrametimeMs,
           &StatsGraphPoint::incomingFrametimeMinMs, &StatsGraphPoint::incomingFrametimeMaxMs,
           QColor(0x26, 0xA6, 0x9A), " ms", 1, 20, true },
-        { StreamingPreferences::PG_RENDERING_FRAMETIME,
-          "Rendering frametime", &StatsGraphPoint::renderingFrametimeMs,
+        { StreamingPreferences::PG_RENDERING_FRAMETIME, &StatsGraphPoint::renderingFrametimeMs,
           &StatsGraphPoint::renderingFrametimeMinMs, &StatsGraphPoint::renderingFrametimeMaxMs,
           QColor(0x4C, 0xAF, 0x50), " ms", 1, 20, true },
         // Everything on the wire, with the video payload inside it drawn over
         // the top, so the gap between the two is the FEC and packet overhead.
-        { StreamingPreferences::PG_BANDWIDTH,
-          "Bandwidth", &StatsGraphPoint::networkMbps,
+        { StreamingPreferences::PG_BANDWIDTH, &StatsGraphPoint::networkMbps,
           nullptr, nullptr,
           QColor(0xEC, 0x40, 0x7A), " Mbps", 1, 5, false,
           &StatsGraphPoint::videoMbps, "video", QColor(0xF8, 0xBB, 0xD0) },
-        { StreamingPreferences::PG_HOST_PROCESSING_LATENCY,
-          "Host processing latency", &StatsGraphPoint::hostProcessingLatencyMs,
+        // Opt-in. Placed to land directly under the rendering frametime it sits
+        // beside in the pipeline, which shifts the graphs after it along by one.
+        { StreamingPreferences::PG_DECODING_FRAMETIME, &StatsGraphPoint::decodingFrametimeMs,
+          &StatsGraphPoint::decodingFrametimeMinMs, &StatsGraphPoint::decodingFrametimeMaxMs,
+          QColor(0x5C, 0x6B, 0xC0), " ms", 1, 20, true },
+        { StreamingPreferences::PG_HOST_PROCESSING_LATENCY, &StatsGraphPoint::hostProcessingLatencyMs,
           &StatsGraphPoint::hostProcessingLatencyMinMs, &StatsGraphPoint::hostProcessingLatencyMaxMs,
           QColor(0x42, 0xA5, 0xF5), " ms", 1, 10 },
-        { StreamingPreferences::PG_NETWORK_LATENCY,
-          "Network latency", &StatsGraphPoint::networkLatencyMs,
+        { StreamingPreferences::PG_NETWORK_LATENCY, &StatsGraphPoint::networkLatencyMs,
           nullptr, nullptr,
           QColor(0xAB, 0x47, 0xBC), " ms", 0, 20 },
-        { StreamingPreferences::PG_REASSEMBLY,
-          "Reassembly time", &StatsGraphPoint::reassemblyMs,
+        { StreamingPreferences::PG_REASSEMBLY, &StatsGraphPoint::reassemblyMs,
           &StatsGraphPoint::reassemblyMinMs, &StatsGraphPoint::reassemblyMaxMs,
           QColor(0x26, 0xC6, 0xDA), " ms", 1, 5 },
-        { StreamingPreferences::PG_NETWORK_JITTER,
-          "Network jitter", &StatsGraphPoint::networkJitterMs,
+        { StreamingPreferences::PG_NETWORK_JITTER, &StatsGraphPoint::networkJitterMs,
           nullptr, nullptr,
           QColor(0x7E, 0x57, 0xC2), " ms", 1, 5 },
-        { StreamingPreferences::PG_QUEUE_DEPTH,
-          "Frame queue depth", &StatsGraphPoint::queueDepth,
+        { StreamingPreferences::PG_QUEUE_DEPTH, &StatsGraphPoint::queueDepth,
           nullptr, nullptr,
           QColor(0x9C, 0xCC, 0x65), "", 0, 3 },
-        { StreamingPreferences::PG_NETWORK_DROPS,
-          "Dropped by network", &StatsGraphPoint::networkDroppedFrames,
+        { StreamingPreferences::PG_NETWORK_DROPS, &StatsGraphPoint::networkDroppedFrames,
           nullptr, nullptr,
           QColor(0xEF, 0x53, 0x50), "", 0, 4 },
-        { StreamingPreferences::PG_JITTER_DROPS,
-          "Dropped by client pacer", &StatsGraphPoint::jitterDroppedFrames,
+        { StreamingPreferences::PG_JITTER_DROPS, &StatsGraphPoint::jitterDroppedFrames,
           nullptr, nullptr,
           QColor(0xFF, 0xA7, 0x26), "", 0, 4 },
 
         // Opt-in, in the order a frame passes through them
-        { StreamingPreferences::PG_DECODING_FRAMERATE,
-          "Decoding frame rate", &StatsGraphPoint::decodingFps,
-          &StatsGraphPoint::decodingFpsMin, &StatsGraphPoint::decodingFpsMax,
-          QColor(0x5C, 0x6B, 0xC0), " FPS", 0, 60 },
-        { StreamingPreferences::PG_DECODING_TIME,
-          "Decoding time", &StatsGraphPoint::decodingTimeMs,
+        { StreamingPreferences::PG_DECODING_TIME, &StatsGraphPoint::decodingTimeMs,
           &StatsGraphPoint::decodingTimeMinMs, &StatsGraphPoint::decodingTimeMaxMs,
           QColor(0x8D, 0x6E, 0x63), " ms", 1, 5 },
-        { StreamingPreferences::PG_RENDERING_TIME,
-          "Rendering time", &StatsGraphPoint::renderingTimeMs,
+        { StreamingPreferences::PG_RENDERING_TIME, &StatsGraphPoint::renderingTimeMs,
           &StatsGraphPoint::renderingTimeMinMs, &StatsGraphPoint::renderingTimeMaxMs,
           QColor(0xD4, 0xE1, 0x57), " ms", 1, 10 },
     };
@@ -525,8 +559,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
         }
     }
 
-    const QStringList chips = streamInfo != nullptr ? streamInfoChips(*streamInfo)
-                                                    : QStringList();
+    const QStringList chips = showStreamInfo ? streamInfoChips(streamInfo) : QStringList();
     if (columns.empty() && chips.isEmpty()) {
         return nullptr;
     }
@@ -599,13 +632,27 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
                       (graphHeight * graphRows) + (graphGap * (graphRows - 1));
     }
 
+    // Shrink to fit the space available rather than running off the screen,
+    // down to a size that is still legible.
+    const qreal naturalWidth = cardWidth + (shadowSpread * 2);
+    const qreal naturalHeight = cardHeight + (shadowSpread * 2);
+    if (maxSize.width() > 0) {
+        scale = qMin(scale, maxSize.width() / naturalWidth);
+    }
+    if (maxSize.height() > 0) {
+        scale = qMin(scale, maxSize.height() / naturalHeight);
+    }
+    scale = qMax(scale, 0.5);
+
+    const qreal opacity = qBound(0, config.backgroundOpacity, 100) / 100.0;
+    const qreal opacityFactor = opacity / k_DefaultCardOpacity;
+
     // Reused across repaints. This card republishes for as long as it is on
     // screen, and reallocating a megabyte of pixels every time churns the
     // allocator to no purpose. Only the stats graph sampling thread paints
     // here, so a thread-local canvas needs no additional synchronization.
     static thread_local QImage image;
-    const QSize cardSize(qCeil((cardWidth + (shadowSpread * 2)) * scale),
-                         qCeil((cardHeight + (shadowSpread * 2)) * scale));
+    const QSize cardSize(qCeil(naturalWidth * scale), qCeil(naturalHeight * scale));
     if (image.size() != cardSize) {
         image = QImage(cardSize, QImage::Format_ARGB32_Premultiplied);
         if (image.isNull()) {
@@ -621,19 +668,26 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
 
     const QRectF cardRect(shadowSpread, shadowSpread, cardWidth, cardHeight);
 
-    drawCardShadow(painter, cardRect, cardRadius, shadowSpread);
+    drawCardShadow(painter, cardRect, cardRadius, shadowSpread, qMin(1.0, opacityFactor));
 
+    QColor surfaceColor = k_SurfaceColor;
+    surfaceColor.setAlphaF(opacity);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(k_SurfaceColor);
+    painter.setBrush(surfaceColor);
     painter.drawRoundedRect(cardRect, cardRadius, cardRadius);
 
+    QColor edgeColor = k_SurfaceEdgeColor;
+    edgeColor.setAlphaF(qMin(1.0, edgeColor.alphaF() * opacityFactor));
     painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(k_SurfaceEdgeColor, 1));
+    painter.setPen(QPen(edgeColor, 1));
     painter.drawRoundedRect(cardRect.adjusted(0.5, 0.5, -0.5, -0.5), cardRadius, cardRadius);
 
     const qreal contentLeft = cardRect.left() + cardPadding;
     const qreal contentRight = cardRect.right() - cardPadding;
     qreal y = cardRect.top() + cardPadding;
+
+    // Frametime graphs mark the frametime the stream is meant to arrive at
+    const qreal targetFrametimeMs = streamInfo.frameRate > 0 ? 1000.0 / streamInfo.frameRate : 0;
 
     if (!chipRects.empty()) {
         painter.setFont(chipFont);
@@ -661,7 +715,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
         painter.setPen(k_TitleColor);
         painter.drawText(QRectF(contentLeft, y, contentRight - contentLeft, headerMetrics.height()),
                          Qt::AlignLeft | Qt::AlignVCenter,
-                         QStringLiteral("Last %1 seconds").arg(windowSeconds));
+                         QStringLiteral("Last %1 seconds").arg(config.windowSeconds));
         y += headerMetrics.height() + graphGap;
     }
 
@@ -676,7 +730,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
             painter.setFont(labelFont);
             painter.setPen(k_ItemColor);
             painter.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter,
-                             QString::fromUtf8(spec.title));
+                             StreamingPreferences::performanceGraphName(spec.id));
 
             QRectF valueRect = labelRect;
             if (!points.empty() && spec.withFrameRate) {
@@ -717,13 +771,15 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
             drawGraph(painter,
                       QRectF(cellLeft, cellTop + labelHeight + labelGap,
                              columnWidth, plotHeight),
-                      spec, points, maxPoints);
+                      spec, points, maxPoints,
+                      spec.withFrameRate ? targetFrametimeMs : 0,
+                      opacityFactor);
         }
     }
 
     painter.end();
 
-    return imageToSurface(image.convertToFormat(QImage::Format_ARGB32));
+    return canvasToSurface(image);
 }
 
 SDL_Surface* Painter::paintFill(QColor color)

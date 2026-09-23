@@ -82,18 +82,30 @@ public:
     SDL_Surface* getUpdatedOverlaySurface(OverlayType type);
 
     // Publishes a pre-rendered overlay in place of the built-in text rasterizer.
-    // Ownership of the surface transfers to the overlay manager, which retains it
-    // so the overlay survives renderer recreation. Passing nullptr returns the
-    // overlay to text rendering. Surfaces must be ARGB8888.
-    void setOverlaySurface(OverlayType type, SDL_Surface* surface);
+    // Ownership of the surface transfers to the overlay manager. A retained
+    // surface is kept so the overlay survives renderer recreation, which costs
+    // a copy of it on every publish. A producer that repaints on its own
+    // schedule can pass retain=false to hand the surface straight to the
+    // renderer instead; the overlay is then blank after a renderer change
+    // until its next repaint. Passing nullptr returns the overlay to text
+    // rendering. Surfaces must be ARGB8888.
+    void setOverlaySurface(OverlayType type, SDL_Surface* surface, bool retain = true);
 
     // Restyles an overlay. This takes effect on the next updateOverlayText()
     // or setOverlayState() call for that overlay. A background with zero alpha
     // draws the text directly over the video with no box behind it.
     void setOverlayStyle(OverlayType type, OverlayAnchor anchor, SDL_Color color, SDL_Color background);
 
+    // Moves an overlay without restyling it. Renderers that place overlays
+    // when they receive a surface pick this up on the next update.
+    void setOverlayAnchor(OverlayType type, OverlayAnchor anchor);
+
     // Safe to call from render threads without blocking overlay producers
     OverlayAnchor getOverlayAnchor(OverlayType type);
+
+    // Width in pixels of what was last handed to the renderer for an overlay,
+    // or 0 if nothing is shown. Safe to call from any thread.
+    int getOverlayWidth(OverlayType type);
 
     // Places an overlay of the given size within a viewport and returns the size
     // it should be drawn at, which differs from the surface size for anchors that
@@ -132,8 +144,14 @@ private:
         SDL_atomic_t enabledForReaders = {};
 
         // Pre-rendered overlay from setOverlaySurface(), retained so it can be
-        // republished when the renderer changes. Guarded by m_StateLock.
+        // republished when the renderer changes unless paintedRetained is
+        // false, in which case the worker hands it over and forgets it.
+        // Guarded by m_StateLock.
         SDL_Surface* paintedSurface = nullptr;
+        bool paintedRetained = true;
+
+        // Written by the overlay worker when it publishes
+        SDL_atomic_t publishedWidth = {};
 
         TTF_Font* font = nullptr; // Owned exclusively by the overlay worker.
         SDL_Surface* surface = nullptr; // Atomic ownership transfer to renderer.
