@@ -276,7 +276,7 @@ FFmpegVideoDecoder::FFmpegVideoDecoder(bool testOnly)
       m_StatsGraphVideoBytes(0),
       m_StatsGraphLastFrameUs(0),
       m_StatsGraphLastDecodeUs(0),
-      m_StatsGraphSyncMode(Overlay::StatsGraphSyncMode::None),
+      m_StatsGraphSyncMode(Overlay::StatsGraphSyncMode::Off),
       m_StatsGraphPacketWireBytes(0),
       m_FramesIn(0),
       m_FramesOut(0),
@@ -334,7 +334,7 @@ void FFmpegVideoDecoder::reset()
     m_StatsGraphVideoBytes = 0;
     m_StatsGraphLastFrameUs = 0;
     m_StatsGraphLastDecodeUs = 0;
-    m_StatsGraphSyncMode = Overlay::StatsGraphSyncMode::None;
+    m_StatsGraphSyncMode = Overlay::StatsGraphSyncMode::Off;
     m_FrameInfoQueue.clear();
     m_FrameSubmitTimeQueue.clear();
 
@@ -621,7 +621,7 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
         // rather than trusting the request
         m_StatsGraphSyncMode = m_Pacer->isVrrActive() ? Overlay::StatsGraphSyncMode::Vrr :
                                params->enableVsync ? Overlay::StatsGraphSyncMode::VSync :
-                                                     Overlay::StatsGraphSyncMode::None;
+                                                     Overlay::StatsGraphSyncMode::Off;
     }
 
     m_VideoDecoderCtx = avcodec_alloc_context3(decoder);

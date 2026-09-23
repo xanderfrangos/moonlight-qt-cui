@@ -38,9 +38,10 @@ struct StatsGraphAccumulator {
     float average() const { return count != 0 ? (float)(sum / count) : 0; }
 };
 
-// How presentation is synchronized to the display
+// How presentation is synchronized to the display. Not "None", which X11
+// headers define as a macro.
 enum class StatsGraphSyncMode {
-    None,
+    Off,
     VSync,
     Vrr,
 };
@@ -64,7 +65,7 @@ struct StatsGraphStreamInfo {
     const char* backendRenderer = nullptr;
     // What the pacer actually runs, which is fixed V-sync when VRR was
     // requested but isn't available
-    StatsGraphSyncMode syncMode = StatsGraphSyncMode::None;
+    StatsGraphSyncMode syncMode = StatsGraphSyncMode::Off;
 };
 
 // Cumulative counters read once per sampling interval. The graphs plot the

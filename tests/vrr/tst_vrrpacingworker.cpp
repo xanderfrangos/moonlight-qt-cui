@@ -190,8 +190,8 @@ void testPreparedFramesOverlapAndTrace()
     resetFakeClock();
     QTemporaryDir directory;
     const QString path = directory.filePath("prepared.vrrtrace");
-    SDL_setenv("MOONLIGHT_VRR_TRACE", QFile::encodeName(path).constData(), 1);
-    SDL_setenv("MOONLIGHT_VRR_DEEP_TRACE", "1", 1);
+    qputenv("MOONLIGHT_VRR_TRACE", QFile::encodeName(path).constData());
+    qputenv("MOONLIGHT_VRR_DEEP_TRACE", "1");
     PreparedFramePresenter backend;
     backend.blockPreparation();
     PacerTelemetry telemetry;
@@ -245,8 +245,8 @@ void testPreparedFramesOverlapAndTrace()
         expect(QFile::copy(path, QString::fromLocal8Bit(exportPath)),
                "prepared-frame fixture must export for exact replay");
     }
-    SDL_setenv("MOONLIGHT_VRR_TRACE", "", 1);
-    SDL_setenv("MOONLIGHT_VRR_DEEP_TRACE", "0", 1);
+    qputenv("MOONLIGHT_VRR_TRACE", "");
+    qputenv("MOONLIGHT_VRR_DEEP_TRACE", "0");
 }
 
 void testSlowPreparedFramesKeepPresenting()
@@ -572,7 +572,7 @@ void testExpiredQueueSkipsBlockingDecode()
         resetFakeClock();
         QTemporaryDir directory;
         const QString path = directory.filePath("early-stale.vrrtrace");
-        SDL_setenv("MOONLIGHT_VRR_TRACE", QFile::encodeName(path).constData(), 1);
+        qputenv("MOONLIGHT_VRR_TRACE", QFile::encodeName(path).constData());
         FakeVrrFramePresenter backend;
         backend.blockPreparation();
         backend.blockDecodeFrame(2);
@@ -617,7 +617,7 @@ void testExpiredQueueSkipsBlockingDecode()
             expect(QFile::copy(path, QString::fromLocal8Bit(exportPath)),
                    "early-stale fixture must export for exact replay");
         }
-        SDL_setenv("MOONLIGHT_VRR_TRACE", "", 1);
+        qputenv("MOONLIGHT_VRR_TRACE", "");
     }
 
     // A 120-to-20 FPS source transition needs the slower adjacent interval,
@@ -919,7 +919,7 @@ void testDecodeWaitDoesNotExpireReadyFrame()
     }
     expect(verifiedDecodeBoundary,
            "GPU readiness must keep the residual wait separate from its post-wait completion upper bound");
-    SDL_setenv("MOONLIGHT_VRR_TRACE", "", 1);
+    qputenv("MOONLIGHT_VRR_TRACE", "");
 }
 
 void testRepeatedDecodeContentionKeepsPresenting()
@@ -933,7 +933,7 @@ void testRepeatedDecodeContentionKeepsPresenting()
         resetFakeClock();
         QTemporaryDir directory;
         const QString path = directory.filePath("decode-contention.vrrtrace");
-        SDL_setenv("MOONLIGHT_VRR_TRACE", QFile::encodeName(path).constData(), 1);
+        qputenv("MOONLIGHT_VRR_TRACE", QFile::encodeName(path).constData());
         FakeVrrFramePresenter backend;
         backend.blockDecodeFrame(1);
         backend.setPreparationLimit(0);
@@ -996,7 +996,7 @@ void testRepeatedDecodeContentionKeepsPresenting()
             expect(QFile::copy(path, QString::fromLocal8Bit(exportPath)),
                    "decode-contention fixture must export for exact replay");
         }
-        SDL_setenv("MOONLIGHT_VRR_TRACE", "", 1);
+        qputenv("MOONLIGHT_VRR_TRACE", "");
     }
 }
 
@@ -1006,8 +1006,8 @@ void testFirstFrameDecodeReadinessTrace()
     QTemporaryDir directory;
     expect(directory.isValid(), "first-frame readiness fixture needs a trace directory");
     const QString path = directory.filePath("first-decode-wait.vrrtrace");
-    SDL_setenv("MOONLIGHT_VRR_TRACE", QFile::encodeName(path).constData(), 1);
-    SDL_setenv("MOONLIGHT_VRR_DEEP_TRACE", "1", 1);
+    qputenv("MOONLIGHT_VRR_TRACE", QFile::encodeName(path).constData());
+    qputenv("MOONLIGHT_VRR_DEEP_TRACE", "1");
     FakeVrrFramePresenter backend;
     backend.blockDecodeFrame(1);
     PacerTelemetry telemetry;
@@ -1043,8 +1043,8 @@ void testFirstFrameDecodeReadinessTrace()
         expect(QFile::copy(path, QString::fromLocal8Bit(exportPath)),
                "first-frame decode fixture must export for exact replay");
     }
-    SDL_setenv("MOONLIGHT_VRR_TRACE", "", 1);
-    SDL_setenv("MOONLIGHT_VRR_DEEP_TRACE", "0", 1);
+    qputenv("MOONLIGHT_VRR_TRACE", "");
+    qputenv("MOONLIGHT_VRR_DEEP_TRACE", "0");
 }
 
 void testTelemetrySnapshotsRemainCumulative()
@@ -1267,7 +1267,7 @@ void testCancelledPreparedFenceTrace()
     resetFakeClock();
     QTemporaryDir directory;
     const QString path = directory.filePath("cancelled-fence.vrrtrace");
-    SDL_setenv("MOONLIGHT_VRR_TRACE", QFile::encodeName(path).constData(), 1);
+    qputenv("MOONLIGHT_VRR_TRACE", QFile::encodeName(path).constData());
     FakeVrrFramePresenter backend;
     backend.blockPreparation();
     backend.setCancelCompletesPreparedFence(true);
@@ -1329,7 +1329,7 @@ void testCancelledPreparedFenceTrace()
         expect(QFile::copy(path, QString::fromLocal8Bit(exportPath)),
                "cancelled-fence fixture must export for exact replay");
     }
-    SDL_setenv("MOONLIGHT_VRR_TRACE", "", 1);
+    qputenv("MOONLIGHT_VRR_TRACE", "");
 }
 
 void testDeferredSurfaceLifetime()
