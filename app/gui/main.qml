@@ -973,7 +973,8 @@ ApplicationWindow {
         z: 1000000
         visible: target !== null && target.visible && targetOnScreen
         color: "transparent"
-        radius: SystemProperties.tvMode ? TvTheme.focusRingRadius : 6
+        radius: target && target.focusRingPill ? height / 2 :
+                SystemProperties.tvMode ? TvTheme.focusRingRadius : 6
         border.width: SystemProperties.tvMode ? TvTheme.focusRingWidth : 3
         border.color: Material.accent
 

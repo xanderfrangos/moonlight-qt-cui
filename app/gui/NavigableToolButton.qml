@@ -20,6 +20,8 @@ ToolButton {
     property bool tvShowLabel: true
 
     readonly property bool tvLabelVisible: tvLabel !== "" && (tvShowLabel || visualFocus)
+    // In TV mode, both labelled and icon-only toolbar buttons are capsules.
+    readonly property bool focusRingPill: SystemProperties.tvMode
 
     activeFocusOnTab: true
 
