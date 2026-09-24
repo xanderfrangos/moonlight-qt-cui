@@ -289,6 +289,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             int frameRate, bool enableVsync, bool enableFramePacing,
                             bool testOnly, IVideoDecoder*& chosenDecoder,
                             bool enableVrr, bool preferVrrRenderer, bool fsr1Upscaling,
+                            double fsr1RcasSharpness,
                             int vrrDisplayRefreshHz,
                             [[maybe_unused]] bool* effectiveVrr, bool smoothVrrFrameTiming,
                             bool gamescopeMailbox, int vrrLatencyMode, bool gamescopeRepaint,
@@ -321,6 +322,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.temporalDithering = temporalDithering;
     params.debandMode = debandMode;
     params.fsr1Upscaling = fsr1Upscaling;
+    params.fsr1RcasSharpness = fsr1RcasSharpness;
     params.vrrDisplayRefreshHz = vrrDisplayRefreshHz;
     params.testOnly = testOnly;
     params.vds = vds;
@@ -581,7 +583,8 @@ bool Session::populateDecoderProperties(SDL_Window* window)
                        false, false, true, decoder,
                        false,
                        m_PresentationSettings.enableVrr,
-                       m_PresentationSettings.fsr1Upscaling)) {
+                       m_PresentationSettings.fsr1Upscaling,
+                       m_PresentationSettings.fsr1RcasSharpness)) {
         return false;
     }
 
@@ -699,6 +702,7 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     m_PresentationSettings.temporalDithering = m_Preferences->temporalDithering;
     m_PresentationSettings.debandMode = m_Preferences->debandMode;
     m_PresentationSettings.fsr1Upscaling = m_Preferences->fsr1Upscaling;
+    m_PresentationSettings.fsr1RcasSharpness = m_Preferences->fsr1RcasSharpness;
 
     if (requestedVrr) {
         const bool hasAdaptiveHeadroom = hasStrictRefreshRate &&
@@ -2779,6 +2783,7 @@ void Session::exec()
                                m_PresentationSettings.enableVrr,
                                m_PresentationSettings.enableVrr,
                                m_PresentationSettings.fsr1Upscaling,
+                               m_PresentationSettings.fsr1RcasSharpness,
                                m_PresentationSettings.refreshRate,
                                &m_PresentationSettings.enableVrr,
                                m_PresentationSettings.smoothVrrFrameTiming,

@@ -16,6 +16,10 @@ size; a failed shader parse falls back to ordinary Vulkan scaling. The option
 is hidden outside Linux builds with Vulkan support and defaults off. Added
 GPU work may alter frame readiness and must be measured live; this source
 change alone does not establish throughput or smoothness.
+The RCAS sharpness slider saves a 0-100 setting and substitutes the matching
+0-2 RCAS stop value into both shaders when the stream starts. Its 62.5 default
+retains the PR's 0.75-stop setting; the minimum is still a mild RCAS pass.
+Changes take effect after reconnecting.
 
 On successful `LiStartConnection()`, the session records the connection start
 time. `Session::exec()` owns the SDL event loop while streaming, so it raises

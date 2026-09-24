@@ -946,14 +946,24 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
 
 #ifdef Q_OS_LINUX
     if (params->fsr1Upscaling) {
-        auto loadHook = [this](const char* path) -> const pl_hook* {
+        const double sharpness = qBound(0.0, params->fsr1RcasSharpness, 100.0);
+        const QByteArray shaderSharpness =
+            "#define SHARPNESS " + QByteArray::number((100.0 - sharpness) / 50.0, 'f', 2);
+        auto loadHook = [this, &shaderSharpness](const char* path) -> const pl_hook* {
             QFile file(QString::fromLatin1(path));
             if (!file.open(QIODevice::ReadOnly)) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                              "Unable to load FSR1 shader: %s", path);
                 return nullptr;
             }
-            const QByteArray shader = file.readAll();
+            QByteArray shader = file.readAll();
+            static const QByteArray defaultSharpness = "#define SHARPNESS 0.75";
+            if (shader.count(defaultSharpness) != 1) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "FSR1 shader has no unique RCAS sharpness setting: %s", path);
+                return nullptr;
+            }
+            shader.replace(defaultSharpness, shaderSharpness);
             return pl_mpv_user_shader_parse(m_Vulkan->gpu,
                                             shader.constData(), shader.size());
         };
@@ -970,7 +980,8 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
         }
         else {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "FSR1 upscaling enabled for the Vulkan renderer");
+                        "FSR1 upscaling enabled for the Vulkan renderer (RCAS sharpness %.1f/100)",
+                        sharpness);
         }
     }
 #endif

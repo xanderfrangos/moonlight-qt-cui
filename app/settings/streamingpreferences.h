@@ -291,6 +291,7 @@ public:
     Q_PROPERTY(bool temporalDithering MEMBER temporalDithering NOTIFY temporalDitheringChanged)
     Q_PROPERTY(int debandMode MEMBER debandMode NOTIFY debandModeChanged)
     Q_PROPERTY(bool fsr1Upscaling MEMBER fsr1Upscaling NOTIFY fsr1UpscalingChanged)
+    Q_PROPERTY(double fsr1RcasSharpness MEMBER fsr1RcasSharpness NOTIFY fsr1RcasSharpnessChanged)
     Q_PROPERTY(VideoDecoderSelection videoDecoderSelection MEMBER videoDecoderSelection NOTIFY videoDecoderSelectionChanged)
     Q_PROPERTY(RendererSelection rendererSelection MEMBER rendererSelection NOTIFY rendererSelectionChanged)
     Q_PROPERTY(WindowMode windowMode MEMBER windowMode NOTIFY windowModeChanged)
@@ -396,6 +397,8 @@ public:
     int debandMode;
     // Linux Vulkan FSR1 upscaling. Takes effect on the next stream.
     bool fsr1Upscaling;
+    // RCAS sharpness slider (0-100), with the shader's 0.75-stop default at 62.5.
+    double fsr1RcasSharpness;
     VideoDecoderSelection videoDecoderSelection;
     WindowMode windowMode;
     WindowMode recommendedFullScreenMode;
@@ -436,6 +439,7 @@ signals:
     void temporalDitheringChanged();
     void debandModeChanged();
     void fsr1UpscalingChanged();
+    void fsr1RcasSharpnessChanged();
     void videoDecoderSelectionChanged();
     void uiDisplayModeChanged();
     void uiScaleChanged();

@@ -1130,6 +1130,34 @@ Flickable {
                 Column {
                     width: parent.width
                     spacing: 5
+                    visible: SystemProperties.supportsFsr1Upscaling && StreamingPreferences.fsr1Upscaling
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("RCAS sharpness: %1").arg(StreamingPreferences.fsr1RcasSharpness.toFixed(1))
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                    }
+
+                    NavigableSlider {
+                        width: parent.width
+                        from: 0
+                        to: 100
+                        stepSize: 0.5
+                        snapMode: "SnapAlways"
+                        value: StreamingPreferences.fsr1RcasSharpness
+                        onMoved: StreamingPreferences.fsr1RcasSharpness = Math.round(value * 2) / 2
+
+                        ToolTip.delay: 1000
+                        ToolTip.timeout: 10000
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                        ToolTip.text: qsTr("Move right for stronger sharpening. The minimum still applies a mild RCAS pass. Reconnect the stream after changing this setting.")
+                    }
+                }
+
+                Column {
+                    width: parent.width
+                    spacing: 5
                     visible: SystemProperties.supportsVideoDithering && enableHdr.checked
 
                     Label {
