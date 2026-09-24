@@ -752,27 +752,27 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
     // are rasterized at the final size rather than stretched.
     const qreal cardRadius = palette.cardRadius;
     const qreal cardPadding = 14;
-    const qreal columnWidth = 264;
+    const qreal columnWidth = 304;
     const qreal columnGap = 16;
     const qreal contentWidth = qMax(1, graphColumns) * columnWidth +
                                qMax(0, graphColumns - 1) * columnGap;
     const qreal cardWidth = (cardPadding * 2) + contentWidth;
-    const qreal labelHeight = 18;
+    const qreal labelHeight = 21;
     const qreal labelGap = 3;
     const qreal plotHeight = qMax(config.plotHeight, 16);
     const qreal graphGap = 10;
     const qreal shadowSpread = 14;
-    const qreal chipPaddingX = 7;
-    const qreal chipHeight = 20;
+    const qreal chipPaddingX = 8;
+    const qreal chipHeight = 23;
     const qreal chipGap = 6;
 
-    QFont headerFont = menuFont(13, QFont::DemiBold);
+    QFont headerFont = menuFont(15, QFont::DemiBold);
     headerFont.setCapitalization(QFont::AllUppercase);
     headerFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.2);
-    QFont labelFont = menuFont(13, QFont::Normal);
-    QFont valueFont = menuFont(14, QFont::DemiBold);
-    QFont scaleFont = menuFont(11, QFont::Normal);
-    QFont chipFont = menuFont(12, QFont::DemiBold);
+    QFont labelFont = menuFont(15, QFont::Normal);
+    QFont valueFont = menuFont(16, QFont::DemiBold);
+    QFont scaleFont = menuFont(13, QFont::Normal);
+    QFont chipFont = menuFont(14, QFont::DemiBold);
 
     QFontMetricsF headerMetrics(headerFont);
     QFontMetricsF chipMetrics(chipFont);
