@@ -8,6 +8,9 @@
         <file alias="haptics/README.md">../third-party/saxense/README.md</file>
         <file>res/gamepad.svg</file>
         <file>res/desktop_windows-48px.svg</file>
+        <file>res/pc.svg</file>
+        <file>res/pc_offline.svg</file>
+        <file>res/pc_unpaired.svg</file>
         <file>res/add_pc.svg</file>
         <file>res/baseline-lock-24px.svg</file>
         <file>res/play_arrow_FILL1_wght700_GRAD200_opsz48.svg</file>

@@ -110,7 +110,7 @@ CenteredGridView {
 
             Image {
                 anchors.centerIn: parent
-                source: "qrc:/res/desktop_windows-48px.svg"
+                source: "qrc:/res/pc.svg"
                 sourceSize.width: 160
                 sourceSize.height: 160
                 opacity: 0.25
@@ -118,7 +118,7 @@ CenteredGridView {
 
             BusyIndicator {
                 anchors.centerIn: parent
-                anchors.verticalCenterOffset: -14
+                anchors.verticalCenterOffset: -160 / 12
                 width: 64
                 height: 64
                 visible: StreamingPreferences.enableMdns
@@ -232,7 +232,12 @@ CenteredGridView {
             id: pcIcon
             anchors.horizontalCenter: parent.horizontalCenter
             y: SystemProperties.tvMode ? 40 : 0
-            source: "qrc:/res/desktop_windows-48px.svg"
+            // In TV mode, the screen shows why a PC can't be used yet. The
+            // desktop icon has a separate badge for that below.
+            source: !SystemProperties.tvMode ? "qrc:/res/desktop_windows-48px.svg" :
+                    model.statusUnknown ? "qrc:/res/pc.svg" :
+                    !model.online ? "qrc:/res/pc_offline.svg" :
+                    !model.paired ? "qrc:/res/pc_unpaired.svg" : "qrc:/res/pc.svg"
             sourceSize {
                 width: SystemProperties.tvMode ? 132 : 200
                 height: SystemProperties.tvMode ? 132 : 200
@@ -244,14 +249,12 @@ CenteredGridView {
             id: stateIcon
             anchors.horizontalCenter: pcIcon.horizontalCenter
             anchors.verticalCenter: pcIcon.verticalCenter
-            // TV mode's computer icon is two thirds the size, so the badge is too
-            readonly property real tvScale: SystemProperties.tvMode ? 132 / 200 : 1.0
-            anchors.verticalCenterOffset: (!model.online ? -18 : -16) * tvScale
-            visible: !model.statusUnknown && (!model.online || !model.paired)
+            anchors.verticalCenterOffset: !model.online ? -18 : -16
+            visible: !SystemProperties.tvMode && !model.statusUnknown && (!model.online || !model.paired)
             source: !model.online ? "qrc:/res/warning_FILL1_wght300_GRAD200_opsz24.svg" : "qrc:/res/baseline-lock-24px.svg"
             sourceSize {
-                width: (!model.online ? 75 : 70) * tvScale
-                height: (!model.online ? 75 : 70) * tvScale
+                width: !model.online ? 75 : 70
+                height: !model.online ? 75 : 70
             }
         }
 
@@ -259,9 +262,10 @@ CenteredGridView {
             id: statusUnknownSpinner
             anchors.horizontalCenter: pcIcon.horizontalCenter
             anchors.verticalCenter: pcIcon.verticalCenter
-            anchors.verticalCenterOffset: SystemProperties.tvMode ? -10 : -15
-            width: SystemProperties.tvMode ? 56 : 75
-            height: SystemProperties.tvMode ? 56 : 75
+            // Centered on the icon's screen
+            anchors.verticalCenterOffset: SystemProperties.tvMode ? -pcIcon.height / 12 : -15
+            width: SystemProperties.tvMode ? 48 : 75
+            height: SystemProperties.tvMode ? 48 : 75
             visible: model.statusUnknown
             running: visible
         }
