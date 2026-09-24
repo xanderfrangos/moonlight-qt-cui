@@ -653,7 +653,7 @@ ApplicationWindow {
                 id: addPcButton
                 visible: stackView.currentItem instanceof PcView
 
-                iconSource:  "qrc:/res/ic_add_to_queue_white_48px.svg"
+                iconSource:  "qrc:/res/add_pc.svg"
                 tvLabel: qsTr("Add PC")
                 tvShowLabel: toolBar.tvBarLevel < 1
 
@@ -724,7 +724,7 @@ ApplicationWindow {
                 ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Gamepad Mapper")
 
-                iconSource: "qrc:/res/ic_videogame_asset_white_48px.svg"
+                iconSource: "qrc:/res/gamepad.svg"
 
                 onClicked: navigateTo("qrc:/gui/GamepadMapper.qml", GamepadMapper)
 
@@ -736,7 +736,7 @@ ApplicationWindow {
             NavigableToolButton {
                 id: controllersButton
 
-                iconSource: "qrc:/res/ic_videogame_asset_white_48px.svg"
+                iconSource: "qrc:/res/gamepad.svg"
                 tvLabel: qsTr("Controllers")
                 tvShowLabel: toolBar.tvBarLevel < 1
 

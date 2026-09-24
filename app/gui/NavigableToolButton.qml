@@ -77,7 +77,9 @@ ToolButton {
             font.pixelSize = TvTheme.fontLabel
             font.weight = Font.DemiBold
             spacing = 12
-            leftPadding = rightPadding = tvLabel !== "" ? TvTheme.pillPadding : 0
+            // Without its label, a button is round and its icon needs all the room
+            leftPadding = Qt.binding(function() { return button.tvLabelVisible ? TvTheme.pillPadding : 0 })
+            rightPadding = Qt.binding(function() { return button.tvLabelVisible ? TvTheme.pillPadding : 0 })
             topPadding = bottomPadding = 0
         }
     }

@@ -207,7 +207,14 @@ Item {
             delegate: Rectangle {
                 id: controllerRow
                 width: controllerList.width
-                height: 128
+                height: stacked ? rowGrid.implicitHeight + 2 * TvTheme.spacingMediumLarge : 128
+
+                // The details need this much room to show the name. When a
+                // narrow window can't fit them beside the controls, the
+                // controls move to a line of their own under them.
+                readonly property real detailsMinimumWidth: 72 + 56 + 2 * TvTheme.spacingMediumLarge + 300
+                readonly property bool stacked: width - rowGrid.anchors.leftMargin - rowGrid.anchors.rightMargin <
+                                                detailsMinimumWidth + rowGrid.columnSpacing + controlsRow.implicitWidth
                 radius: TvTheme.tileRadius
                 color: TvTheme.surface
 
@@ -270,11 +277,16 @@ Item {
                     }
                 }
 
-                RowLayout {
-                    anchors.fill: parent
+                GridLayout {
+                    id: rowGrid
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
                     anchors.leftMargin: 38
                     anchors.rightMargin: TvTheme.spacingLarge
-                    spacing: TvTheme.spacingMediumLarge
+                    columns: controllerRow.stacked ? 1 : 2
+                    columnSpacing: TvTheme.spacingMediumLarge
+                    rowSpacing: TvTheme.spacingMedium
 
                     // The controller's details. Controllers that aren't passed
                     // to the host are dimmed, but their controls aren't, so they
@@ -301,7 +313,7 @@ Item {
                         }
 
                         Image {
-                            source: "qrc:/res/ic_videogame_asset_white_48px.svg"
+                            source: "qrc:/res/gamepad.svg"
                             sourceSize.width: 56
                             sourceSize.height: 56
                             opacity: 0.6
@@ -352,65 +364,72 @@ Item {
                         }
                     }
 
-                    TvPillButton {
-                        id: identifyButton
-                        text: qsTr("Identify")
-                        enabled: modelData.canIdentify
-                        onClicked: SdlGamepadKeyNavigation.identifyController(modelData.id)
-                        onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
-                    }
+                    // Under the details when stacked, lined up with the name
+                    RowLayout {
+                        id: controlsRow
+                        spacing: TvTheme.spacingMediumLarge
+                        Layout.leftMargin: controllerRow.stacked ? 72 + 56 + 2 * TvTheme.spacingMediumLarge : 0
 
-                    Switch {
-                        id: enabledSwitch
-                        text: modelData.enabled ? qsTr("Enabled") : qsTr("Disabled")
-                        checked: modelData.enabled
-                        font.pixelSize: TvTheme.fontLabel
-                        font.weight: Font.DemiBold
-                        Layout.leftMargin: TvTheme.spacingSmall
-                        Layout.rightMargin: TvTheme.spacingSmall
-
-                        // Clicks, touch, and Space toggle the switch themselves.
-                        // The gamepad's A button arrives as Return.
-                        onClicked: controllerRow.toggleEnabled()
-                        Keys.onReturnPressed: controllerRow.toggleEnabled()
-                        Keys.onEnterPressed: controllerRow.toggleEnabled()
-                        onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
-                    }
-
-                    TvPillButton {
-                        id: upButton
-                        iconSource: "qrc:/res/arrow_left.svg"
-                        iconRotation: 90
-                        enabled: modelData.canMoveUp
-                        Accessible.name: qsTr("Move up")
-                        onClicked: {
-                            controllerPage.rememberFocus(modelData.id, controllerPage.moveUpColumn)
-                            SdlGamepadKeyNavigation.moveController(modelData.id, -1)
+                        TvPillButton {
+                            id: identifyButton
+                            text: qsTr("Identify")
+                            enabled: modelData.canIdentify
+                            onClicked: SdlGamepadKeyNavigation.identifyController(modelData.id)
+                            onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
                         }
-                        onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
 
-                        ToolTip.delay: 1000
-                        ToolTip.timeout: 3000
-                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                        ToolTip.text: qsTr("Move up")
-                    }
+                        Switch {
+                            id: enabledSwitch
+                            text: modelData.enabled ? qsTr("Enabled") : qsTr("Disabled")
+                            checked: modelData.enabled
+                            font.pixelSize: TvTheme.fontLabel
+                            font.weight: Font.DemiBold
+                            Layout.leftMargin: TvTheme.spacingSmall
+                            Layout.rightMargin: TvTheme.spacingSmall
 
-                    TvPillButton {
-                        id: downButton
-                        iconSource: "qrc:/res/arrow_left.svg"
-                        iconRotation: -90
-                        enabled: modelData.canMoveDown
-                        Accessible.name: qsTr("Move down")
-                        onClicked: {
-                            controllerPage.rememberFocus(modelData.id, controllerPage.moveDownColumn)
-                            SdlGamepadKeyNavigation.moveController(modelData.id, 1)
+                            // Clicks, touch, and Space toggle the switch themselves.
+                            // The gamepad's A button arrives as Return.
+                            onClicked: controllerRow.toggleEnabled()
+                            Keys.onReturnPressed: controllerRow.toggleEnabled()
+                            Keys.onEnterPressed: controllerRow.toggleEnabled()
+                            onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
                         }
-                        onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
 
-                        ToolTip.delay: 1000
-                        ToolTip.timeout: 3000
-                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                        ToolTip.text: qsTr("Move down")
+                        TvPillButton {
+                            id: upButton
+                            iconSource: "qrc:/res/arrow_left.svg"
+                            iconRotation: 90
+                            enabled: modelData.canMoveUp
+                            Accessible.name: qsTr("Move up")
+                            onClicked: {
+                                controllerPage.rememberFocus(modelData.id, controllerPage.moveUpColumn)
+                                SdlGamepadKeyNavigation.moveController(modelData.id, -1)
+                            }
+                            onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
+
+                            ToolTip.delay: 1000
+                            ToolTip.timeout: 3000
+                            ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                            ToolTip.text: qsTr("Move up")
+                        }
+
+                        TvPillButton {
+                            id: downButton
+                            iconSource: "qrc:/res/arrow_left.svg"
+                            iconRotation: -90
+                            enabled: modelData.canMoveDown
+                            Accessible.name: qsTr("Move down")
+                            onClicked: {
+                                controllerPage.rememberFocus(modelData.id, controllerPage.moveDownColumn)
+                                SdlGamepadKeyNavigation.moveController(modelData.id, 1)
+                            }
+                            onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
+
+                            ToolTip.delay: 1000
+                            ToolTip.timeout: 3000
+                            ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                            ToolTip.text: qsTr("Move down")
+                        }
                     }
                 }
             }

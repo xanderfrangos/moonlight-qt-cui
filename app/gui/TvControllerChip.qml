@@ -34,7 +34,7 @@ Rectangle {
 
         Image {
             anchors.verticalCenter: parent.verticalCenter
-            source: "qrc:/res/ic_videogame_asset_white_48px.svg"
+            source: "qrc:/res/gamepad.svg"
             sourceSize.width: chip.iconSize
             sourceSize.height: chip.iconSize
             opacity: 0.7
