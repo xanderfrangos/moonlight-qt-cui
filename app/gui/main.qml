@@ -495,10 +495,17 @@ ApplicationWindow {
             text: settingsButton.tvLabel
         }
 
+        // The clock's width, which only changes with the number of characters
         TextMetrics {
             id: clockMetrics
             font: clockLabel.font
-            text: clockLabel.text
+            text: clockLabel.widestText
+        }
+
+        // Measures text for the clock as it's needed
+        TextMetrics {
+            id: clockMeasure
+            font: clockLabel.font
         }
 
         // TV mode shows the window's background through the toolbar. This is
@@ -810,14 +817,53 @@ ApplicationWindow {
                 font.pixelSize: TvTheme.fontBody
                 font.weight: Font.DemiBold
 
+                // The locale's short time without seconds, which some locales
+                // include, so it stays 12 or 24 hour as the locale prefers
+                readonly property string timeFormat: Qt.locale().timeFormat(Locale.ShortFormat)
+                                                         .replace(/[:.]?s+/g, "")
+                                                         .replace(/\s*t+/g, "")
+                                                         .trim()
+
+                // The time with every digit as the widest one, and the wider of
+                // AM and PM. Sizing the clock for this keeps the top bar from
+                // shifting as the time changes, except when it gains or loses
+                // a character.
+                property string widestText: ""
+
+                Layout.preferredWidth: Math.ceil(clockMetrics.advanceWidth)
+                horizontalAlignment: Text.AlignRight
+
+                function measure(text) {
+                    clockMeasure.text = text
+                    return clockMeasure.advanceWidth
+                }
+
+                function update() {
+                    text = Qt.formatTime(new Date(), timeFormat)
+
+                    var widestDigit = "0"
+                    for (var digit = 1; digit <= 9; digit++) {
+                        if (measure(String(digit)) > measure(widestDigit)) {
+                            widestDigit = String(digit)
+                        }
+                    }
+                    var widest = text.replace(/[0-9]/g, widestDigit)
+
+                    var am = Qt.locale().amText
+                    var pm = Qt.locale().pmText
+                    if (am !== "" && pm !== "") {
+                        var widerSuffix = measure(am) >= measure(pm) ? am : pm
+                        widest = widest.replace(am, widerSuffix).replace(pm, widerSuffix)
+                    }
+                    widestText = widest
+                }
+
                 Timer {
                     interval: 1000
                     repeat: true
                     triggeredOnStart: true
                     running: clockLabel.visible
-                    onTriggered: {
-                        clockLabel.text = Qt.formatTime(new Date(), Qt.locale().timeFormat(Locale.ShortFormat))
-                    }
+                    onTriggered: clockLabel.update()
                 }
             }
         }
