@@ -397,7 +397,7 @@ Item {
 
                         TvPillButton {
                             id: upButton
-                            iconSource: "qrc:/res/arrow_left.svg"
+                            iconSource: "qrc:/res/tv_arrow_left.svg"
                             iconRotation: 90
                             enabled: modelData.canMoveUp
                             Accessible.name: qsTr("Move up")
@@ -415,7 +415,7 @@ Item {
 
                         TvPillButton {
                             id: downButton
-                            iconSource: "qrc:/res/arrow_left.svg"
+                            iconSource: "qrc:/res/tv_arrow_left.svg"
                             iconRotation: -90
                             enabled: modelData.canMoveDown
                             Accessible.name: qsTr("Move down")

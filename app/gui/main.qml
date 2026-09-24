@@ -545,7 +545,7 @@ ApplicationWindow {
                 // Only make the button visible if the user has navigated somewhere.
                 visible: stackView.depth > 1
 
-                iconSource: "qrc:/res/arrow_left.svg"
+                iconSource: SystemProperties.tvMode ? "qrc:/res/tv_arrow_left.svg" : "qrc:/res/arrow_left.svg"
 
                 onClicked: goBack()
 
@@ -628,7 +628,7 @@ ApplicationWindow {
                 id: helpButton
                 visible: SystemProperties.hasBrowser
 
-                iconSource: "qrc:/res/question_mark.svg"
+                iconSource: SystemProperties.tvMode ? "qrc:/res/tv_question_mark.svg" : "qrc:/res/question_mark.svg"
 
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
@@ -653,7 +653,7 @@ ApplicationWindow {
                 id: addPcButton
                 visible: stackView.currentItem instanceof PcView
 
-                iconSource:  "qrc:/res/add_pc.svg"
+                iconSource: SystemProperties.tvMode ? "qrc:/res/add_pc.svg" : "qrc:/res/ic_add_to_queue_white_48px.svg"
                 tvLabel: qsTr("Add PC")
                 tvShowLabel: toolBar.tvBarLevel < 1
 
@@ -724,7 +724,7 @@ ApplicationWindow {
                 ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Gamepad Mapper")
 
-                iconSource: "qrc:/res/gamepad.svg"
+                iconSource: SystemProperties.tvMode ? "qrc:/res/gamepad.svg" : "qrc:/res/ic_videogame_asset_white_48px.svg"
 
                 onClicked: navigateTo("qrc:/gui/GamepadMapper.qml", GamepadMapper)
 
@@ -736,7 +736,7 @@ ApplicationWindow {
             NavigableToolButton {
                 id: controllersButton
 
-                iconSource: "qrc:/res/gamepad.svg"
+                iconSource: SystemProperties.tvMode ? "qrc:/res/gamepad.svg" : "qrc:/res/ic_videogame_asset_white_48px.svg"
                 tvLabel: qsTr("Controllers")
                 tvShowLabel: toolBar.tvBarLevel < 1
 
@@ -755,7 +755,7 @@ ApplicationWindow {
             NavigableToolButton {
                 id: settingsButton
 
-                iconSource:  "qrc:/res/settings.svg"
+                iconSource: SystemProperties.tvMode ? "qrc:/res/tv_settings.svg" : "qrc:/res/settings.svg"
                 tvLabel: qsTr("Settings")
                 tvShowLabel: toolBar.tvBarLevel < 1
 

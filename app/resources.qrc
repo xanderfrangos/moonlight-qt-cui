@@ -7,11 +7,13 @@
         <file alias="haptics/packet.h">../third-party/saxense/packet.h</file>
         <file alias="haptics/README.md">../third-party/saxense/README.md</file>
         <file>res/gamepad.svg</file>
+        <file>res/ic_videogame_asset_white_48px.svg</file>
         <file>res/desktop_windows-48px.svg</file>
         <file>res/pc.svg</file>
         <file>res/pc_offline.svg</file>
         <file>res/pc_unpaired.svg</file>
         <file>res/add_pc.svg</file>
+        <file>res/ic_add_to_queue_white_48px.svg</file>
         <file>res/baseline-lock-24px.svg</file>
         <file>res/play_arrow_FILL1_wght700_GRAD200_opsz48.svg</file>
         <file>res/baseline-warning-24px.svg</file>
@@ -23,6 +25,9 @@
         <file>res/settings.svg</file>
         <file>res/arrow_left.svg</file>
         <file>res/question_mark.svg</file>
+        <file>res/tv_settings.svg</file>
+        <file>res/tv_arrow_left.svg</file>
+        <file>res/tv_question_mark.svg</file>
         <file>res/moonlight.svg</file>
         <file>res/update.svg</file>
         <file>res/baseline-help_outline-24px.svg</file>
