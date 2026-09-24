@@ -1834,6 +1834,7 @@ void Session::refreshStatusOverlay()
                                          k_MenuColor, k_NoBackground);
         m_OverlayManager.setOverlaySurface(Overlay::OverlayStatusUpdate,
                                            Overlay::Painter::paintGamepadMenu(QStringLiteral("Moonlight"),
+                                                                              m_App.name,
                                                                               items,
                                                                               m_GamepadMenuIndex,
                                                                               hints,

@@ -28,7 +28,9 @@ struct ButtonHint {
 // Draws the in-stream gamepad menu as a Material card. The layout scales with
 // the viewport height so it reads the same at 720p and 4K. Returns an ARGB8888
 // surface owned by the caller, or nullptr on failure.
+// subtitle names what is being streamed, under the title. It may be empty.
 SDL_Surface* paintGamepadMenu(const QString& title,
+                              const QString& subtitle,
                               const QStringList& items,
                               int selectedIndex,
                               const QList<ButtonHint>& hints,

@@ -20,25 +20,6 @@ using namespace Overlay;
 
 namespace {
 
-// Matches the app's Material dark palette. See TvTheme.qml and the Material
-// defaults that main.cpp installs.
-const QColor k_SurfaceColor(0x1F, 0x23, 0x30, 0xF2);
-const QColor k_SurfaceEdgeColor(0xFF, 0xFF, 0xFF, 0x1A);
-const QColor k_TitleColor(0x9A, 0xA0, 0xAE);
-const QColor k_ItemColor(0xE8, 0xEA, 0xF0);
-const QColor k_SelectedItemColor(0xFF, 0xFF, 0xFF);
-
-// Material Purple, which main.cpp uses as the accent unless the user overrides it
-const QColor k_DefaultAccentColor(0x9C, 0x27, 0xB0);
-
-QColor accentColor()
-{
-    // Follow the accent the user picked for the rest of the app when we can parse
-    // it. Material's named colors line up with SVG color names closely enough.
-    QColor accent(qEnvironmentVariable("QT_QUICK_CONTROLS_MATERIAL_ACCENT"));
-    return accent.isValid() ? accent : k_DefaultAccentColor;
-}
-
 QFont menuFont(qreal pixelSize, QFont::Weight weight)
 {
     QFont font = QGuiApplication::font();
@@ -108,62 +89,80 @@ void drawCardShadow(QPainter& painter, const QRectF& cardRect, qreal radius, qre
     }
 }
 
-// The menu's colors and corners. TV mode matches TvTheme.qml, and the desktop
-// matches the Material dark menus of the rest of the desktop app.
+// The menu's colors and corners. TV mode's match TvTheme.qml and its dialog
+// buttons, and the desktop's match the Material dark menus of the rest of the
+// desktop app.
 struct MenuPalette {
     QColor surface;
     QColor surfaceEdge;
     QColor title;
     QColor item;
     QColor selectedItem;
+    // Drawn around items that aren't selected, if valid
+    QColor itemOutline;
+    // The selected item's fill
+    QColor highlight;
     qreal cardRadius;
     qreal itemRadius;
-    // Desktop menus mark the selected item with a plain highlight rather
-    // than TV mode's accent ring
+    qreal itemSpacing;
+    // TV mode rings the selected item like the rest of its focus
     bool focusRing;
-    QColor highlight;
+    QColor hintGlyphFill;
+    QColor hintText;
 };
+
+// TvTheme.qml's colors
+const QColor k_TvSurface(0x15, 0x19, 0x23);
+const QColor k_TvSurfaceRaised(0x1E, 0x23, 0x31);
+const QColor k_TvStroke(0x2B, 0x31, 0x42);
+const QColor k_TvTextPrimary(0xEE, 0xF1, 0xF6);
+const QColor k_TvTextSecondary(0xA7, 0xAE, 0xBD);
+const QColor k_TvAccent(0x8A, 0xA4, 0xFF);
+const QColor k_TvAccentText(0x0B, 0x0D, 0x12);
+const QColor k_TvFocusGlow(0x8A, 0xA4, 0xFF, 0x47);
 
 const MenuPalette& menuPalette()
 {
     static const MenuPalette k_TvPalette = {
-        k_SurfaceColor, k_SurfaceEdgeColor, k_TitleColor, k_ItemColor, k_SelectedItemColor,
-        16, 8, true, QColor()
+        QColor(0x1E, 0x23, 0x31, 0xF5), QColor(0xFF, 0xFF, 0xFF, 0x0F),
+        k_TvAccent, k_TvTextPrimary, k_TvAccentText,
+        k_TvStroke, k_TvAccent,
+        24, 14, 14, true,
+        k_TvSurfaceRaised, k_TvTextPrimary
     };
     static const MenuPalette k_DesktopPalette = {
         QColor(0x42, 0x42, 0x42, 0xF2), QColor(0xFF, 0xFF, 0xFF, 0x14),
         QColor(0xFF, 0xFF, 0xFF, 0xB3), QColor(0xFF, 0xFF, 0xFF), QColor(0xFF, 0xFF, 0xFF),
-        4, 2, false, QColor(0xFF, 0xFF, 0xFF, 0x1F)
+        QColor(), QColor(0xFF, 0xFF, 0xFF, 0x1F),
+        4, 2, 6, false,
+        Qt::transparent, QColor(0xFF, 0xFF, 0xFF, 0xB3)
     };
     return SystemProperties::isTvMode() ? k_TvPalette : k_DesktopPalette;
 }
 
-// The same focus treatment the QML views use: an accent ring with a soft glow
-// around it, over a tinted fill.
-void drawSelection(QPainter& painter, const QRectF& itemRect, qreal radius, qreal scale)
+// TV mode's focus ring, as the QML views draw it: an accent ring a pixel out
+// from the item, with a soft glow outside that
+void drawFocusRing(QPainter& painter, const QRectF& itemRect, qreal radius, qreal scale)
 {
-    QColor accent = accentColor();
+    const qreal ringWidth = 3 * scale;
+    const qreal glowWidth = 6 * scale;
+    const qreal ringOffset = 1 * scale + ringWidth / 2;
+    const qreal glowOffset = 1 * scale + ringWidth + glowWidth / 2;
 
-    QColor fill = accent;
-    fill.setAlpha(0x38);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(fill);
-    painter.drawRoundedRect(itemRect, radius, radius);
-
-    QColor glow = accent;
-    glow.setAlphaF(0.35f);
     painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(glow, 4 * scale));
-    painter.drawRoundedRect(itemRect.adjusted(-4 * scale, -4 * scale, 4 * scale, 4 * scale),
-                            radius + 4 * scale, radius + 4 * scale);
+    painter.setPen(QPen(k_TvFocusGlow, glowWidth));
+    painter.drawRoundedRect(itemRect.adjusted(-glowOffset, -glowOffset, glowOffset, glowOffset),
+                            radius + glowOffset, radius + glowOffset);
 
-    painter.setPen(QPen(accent, 3 * scale));
-    painter.drawRoundedRect(itemRect, radius, radius);
+    painter.setPen(QPen(k_TvAccent, ringWidth));
+    painter.drawRoundedRect(itemRect.adjusted(-ringOffset, -ringOffset, ringOffset, ringOffset),
+                            radius + ringOffset, radius + ringOffset);
 }
 
 }
 
 SDL_Surface* Painter::paintGamepadMenu(const QString& title,
+                                       const QString& subtitle,
                                        const QStringList& items,
                                        int selectedIndex,
                                        const QList<ButtonHint>& hints,
@@ -183,8 +182,11 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
     const qreal cardPadding = 28 * scale;
     const qreal itemPaddingX = 20 * scale;
     const qreal itemHeight = 52 * scale;
-    const qreal itemSpacing = 6 * scale;
+    const qreal itemSpacing = palette.itemSpacing * scale;
     const qreal titleGap = 20 * scale;
+    const qreal subtitleGap = 6 * scale;
+    // Long game names are elided rather than widening the card without limit
+    const qreal maxSubtitleWidth = 560 * scale;
     const qreal hintGap = 22 * scale;
     const qreal hintSpacing = 28 * scale;
     const qreal glyphGap = 10 * scale;
@@ -193,11 +195,17 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
     QFont titleFont = menuFont(15 * scale, QFont::DemiBold);
     titleFont.setCapitalization(QFont::AllUppercase);
     titleFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.5 * scale);
+    // The game's name, in TV mode's display face like its other titles
+    QFont subtitleFont = menuFont(26 * scale, QFont::DemiBold);
+    if (SystemProperties::isTvMode()) {
+        subtitleFont.setFamily(QStringLiteral("Sora"));
+    }
     QFont itemFont = menuFont(21 * scale, QFont::Medium);
     QFont hintFont = menuFont(14 * scale, QFont::Normal);
     QFont glyphFont = menuFont(13 * scale, QFont::Bold);
 
     QFontMetricsF titleMetrics(titleFont);
+    QFontMetricsF subtitleMetrics(subtitleFont);
     QFontMetricsF itemMetrics(itemFont);
     QFontMetricsF hintMetrics(hintFont);
 
@@ -212,11 +220,12 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
         }
     }
 
-    // The selection ring is drawn outside the item rect, so the items need to sit
-    // far enough inside the card to leave room for it.
-    const qreal selectionMargin = 6 * scale;
+    // The focus ring is drawn outside the item rect, so the items need to sit
+    // far enough inside the card to leave room for it and its glow.
+    const qreal selectionMargin = (palette.focusRing ? 10 : 0) * scale;
 
     qreal contentWidth = qMax(titleMetrics.horizontalAdvance(title), hintsWidth);
+    contentWidth = qMax(contentWidth, qMin(subtitleMetrics.horizontalAdvance(subtitle), maxSubtitleWidth));
     for (const QString& item : items) {
         contentWidth = qMax(contentWidth, itemMetrics.horizontalAdvance(item) + (itemPaddingX * 2));
     }
@@ -227,6 +236,9 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
     qreal cardHeight = (cardPadding * 2) + selectionMargin +
                        titleMetrics.height() + titleGap +
                        (itemHeight * items.size()) + (itemSpacing * (items.size() - 1));
+    if (!subtitle.isEmpty()) {
+        cardHeight += subtitleGap + subtitleMetrics.height();
+    }
     if (!hints.isEmpty()) {
         cardHeight += hintGap + hintRowHeight;
     }
@@ -262,8 +274,19 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
     painter.setFont(titleFont);
     painter.setPen(palette.title);
     painter.drawText(QRectF(contentLeft, y, contentRight - contentLeft, titleMetrics.height()),
-                     Qt::AlignLeft | Qt::AlignVCenter, title);
-    y += titleMetrics.height() + titleGap;
+                     Qt::AlignHCenter | Qt::AlignVCenter, title);
+    y += titleMetrics.height();
+
+    if (!subtitle.isEmpty()) {
+        y += subtitleGap;
+        painter.setFont(subtitleFont);
+        painter.setPen(palette.item);
+        painter.drawText(QRectF(contentLeft, y, contentRight - contentLeft, subtitleMetrics.height()),
+                         Qt::AlignHCenter | Qt::AlignVCenter,
+                         subtitleMetrics.elidedText(subtitle, Qt::ElideRight, contentRight - contentLeft));
+        y += subtitleMetrics.height();
+    }
+    y += titleGap;
 
     painter.setFont(itemFont);
     for (int i = 0; i < items.size(); i++) {
@@ -271,19 +294,25 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
                               contentRight - contentLeft - (selectionMargin * 2), itemHeight);
 
         if (i == selectedIndex) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(palette.highlight);
+            painter.drawRoundedRect(itemRect, itemRadius, itemRadius);
             if (palette.focusRing) {
-                drawSelection(painter, itemRect, itemRadius, scale);
+                drawFocusRing(painter, itemRect, itemRadius, scale);
             }
-            else {
-                painter.setPen(Qt::NoPen);
-                painter.setBrush(palette.highlight);
-                painter.drawRoundedRect(itemRect, itemRadius, itemRadius);
-            }
+        }
+        else if (palette.itemOutline.isValid()) {
+            const qreal outlineWidth = 2 * scale;
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(QPen(palette.itemOutline, outlineWidth));
+            painter.drawRoundedRect(itemRect.adjusted(outlineWidth / 2, outlineWidth / 2,
+                                                      -outlineWidth / 2, -outlineWidth / 2),
+                                    itemRadius, itemRadius);
         }
 
         painter.setPen(i == selectedIndex ? palette.selectedItem : palette.item);
         painter.drawText(itemRect.adjusted(itemPaddingX, 0, -itemPaddingX, 0),
-                         Qt::AlignLeft | Qt::AlignVCenter, items.at(i));
+                         Qt::AlignHCenter | Qt::AlignVCenter, items.at(i));
 
         y += itemHeight + itemSpacing;
     }
@@ -291,13 +320,13 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
     if (!hints.isEmpty()) {
         y += hintGap - itemSpacing;
 
-        qreal x = contentLeft + selectionMargin;
+        qreal x = contentLeft + ((contentRight - contentLeft) - hintsWidth) / 2;
         for (const ButtonHint& hint : hints) {
             const QRectF glyphRect(x, y + (hintRowHeight - glyphDiameter) / 2, glyphDiameter, glyphDiameter);
             const qreal borderWidth = qMax(1.0, 2 * scale);
 
             painter.setPen(QPen(hint.color, borderWidth));
-            painter.setBrush(Qt::NoBrush);
+            painter.setBrush(palette.hintGlyphFill);
             painter.drawEllipse(glyphRect.adjusted(borderWidth / 2, borderWidth / 2,
                                                    -borderWidth / 2, -borderWidth / 2));
 
@@ -307,7 +336,7 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
 
             const qreal textWidth = hintMetrics.horizontalAdvance(hint.text);
             painter.setFont(hintFont);
-            painter.setPen(palette.title);
+            painter.setPen(palette.hintText);
             painter.drawText(QRectF(x, y, textWidth + 1, hintRowHeight),
                              Qt::AlignLeft | Qt::AlignVCenter, hint.text);
             x += textWidth + hintSpacing;
@@ -345,8 +374,9 @@ struct GraphPalette {
 const GraphPalette& graphPalette()
 {
     static const GraphPalette k_TvPalette = {
-        k_SurfaceColor, k_SurfaceEdgeColor, k_ItemColor, k_TitleColor,
-        QColor(0xFF, 0xFF, 0xFF, 0x1A), QColor(0x00, 0x00, 0x00, 0x66),
+        k_TvSurface, QColor(0xFF, 0xFF, 0xFF, 0x0F), k_TvTextPrimary, k_TvTextSecondary,
+        // Chips and plots stay translucent, so they follow the card's opacity
+        QColor(0x2B, 0x31, 0x42, 0xB3), QColor(0x0B, 0x0D, 0x12, 0x99),
         12, 4
     };
     // The desktop app's background, with Material's white text at full,
