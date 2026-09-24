@@ -21,7 +21,10 @@ public:
         const bool enabled = manager.isOverlayEnabled(type);
         SDL_FreeSurface(surface);
         std::unique_lock<std::mutex> guard(lock);
-        if (type == OverlayDebug) last = text;
+        if (type == OverlayDebug) {
+            last = text;
+            hidden = !enabled && surface == nullptr;
+        }
         ++calls;
         if (type == OverlayDebug && enabled && block) {
             entered = true;
@@ -34,11 +37,15 @@ public:
         std::unique_lock<std::mutex> guard(lock);
         assert(ready.wait_for(guard, 3s, [&] { return last == text; }));
     }
+    void awaitHidden() {
+        std::unique_lock<std::mutex> guard(lock);
+        assert(ready.wait_for(guard, 3s, [&] { return hidden; }));
+    }
     OverlayManager& manager;
     const std::thread::id producer = std::this_thread::get_id();
     std::mutex lock;
     std::condition_variable ready;
-    bool block = false, entered = false;
+    bool block = false, entered = false, hidden = false;
     unsigned calls = 0;
     std::string last;
 };
@@ -150,8 +157,23 @@ int main(int argc, char** argv)
         replacement.awaitText("latest");
         manager.setOverlayState(OverlayDebug, false);
         manager.updateOverlayText(OverlayDebug, "hidden");
-        replacement.awaitText("hidden"); // Updating disabled text cannot cancel the hide request.
+        // Updating disabled text cannot cancel the hide request. The worker may
+        // deliver the hide before or after the text update, so wait for the
+        // hide itself rather than for the text it happened to read.
+        replacement.awaitHidden();
+        assert(manager.getOverlayText(OverlayDebug) == "hidden");
         assert(!manager.isOverlayEnabled(OverlayDebug));
+        // Force the order a preempted producer sees: the hide is delivered
+        // before the text changes. Text set while hidden is kept for the next
+        // time the overlay is shown.
+        manager.setOverlayState(OverlayDebug, true);
+        replacement.awaitText("hidden");
+        manager.setOverlayState(OverlayDebug, false);
+        replacement.awaitHidden();
+        manager.updateOverlayText(OverlayDebug, "shown later");
+        assert(!manager.isOverlayEnabled(OverlayDebug));
+        manager.setOverlayState(OverlayDebug, true);
+        replacement.awaitText("shown later");
         manager.setOverlayRenderer(nullptr);
         IOverlayRenderer::UpdateTiming timing;
         bool measured = false;

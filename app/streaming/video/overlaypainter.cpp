@@ -335,7 +335,7 @@ qreal niceCeil(qreal value)
 // backdrop follows the card's opacity, relative to the default.
 void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
                const std::vector<StatsGraphPoint>& points, int maxPoints,
-               qreal target, qreal opacity)
+               qreal target, qreal opacity, qreal frametimeMin, qreal frametimeMax)
 {
     QColor plotColor = k_GraphPlotColor;
     plotColor.setAlphaF(qMin(1.0, plotColor.alphaF() * opacity));
@@ -344,8 +344,7 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
     painter.drawRoundedRect(plotRect, 4, 4);
 
     // Scale against the spread, not just the mean, so a spike that only shows
-    // up in the band is never clipped off the top of the plot. The target is
-    // always in view, so a stream running slow still shows where it should be.
+    // up in the band is never clipped off the plot.
     qreal scale = qMax(spec.minScale, target);
     qreal windowMin = 0, windowMax = 0;
     for (size_t i = 0; i < points.size(); i++) {
@@ -364,7 +363,18 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
             scale = qMax(scale, (qreal)(points[i].*spec.secondaryField));
         }
     }
-    scale = niceCeil(scale);
+    // All visible frametime graphs share one close view of their combined
+    // spread. Leave at least 1 ms, or 10% of that spread, at both edges.
+    qreal baseline = 0;
+    if (spec.withFrameRate && !points.empty()) {
+        const qreal padding = qMax((qreal)1, (frametimeMax - frametimeMin) * 0.1);
+        baseline = qMax((qreal)0, frametimeMin - padding);
+        scale = frametimeMax + padding;
+    }
+    else {
+        scale = niceCeil(scale);
+    }
+    const qreal plotRange = scale - baseline;
 
     // A midpoint gridline is enough to read the shape against
     painter.setBrush(Qt::NoBrush);
@@ -372,9 +382,11 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
     const qreal midY = plotRect.center().y();
     painter.drawLine(QPointF(plotRect.left() + 1, midY), QPointF(plotRect.right() - 1, midY));
 
-    // Drawn under the data, so a line sitting on its target hides it
-    if (target > 0) {
-        const qreal targetY = plotRect.bottom() - (target * plotRect.height() / scale);
+    // Draw the target only when it fits the data-focused frametime view.
+    // An off-scale target must not flatten the observed variation.
+    if (target > baseline && target < scale) {
+        const qreal targetY = plotRect.bottom() -
+                ((target - baseline) * plotRect.height() / plotRange);
         painter.setPen(QPen(k_GraphTargetColor, 1, Qt::DashLine));
         painter.drawLine(QPointF(plotRect.left() + 1, targetY),
                          QPointF(plotRect.right() - 1, targetY));
@@ -382,14 +394,16 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
 
     if (!points.empty() && maxPoints > 1) {
         const qreal stepX = plotRect.width() / (maxPoints - 1);
-        const qreal valueToY = plotRect.height() / scale;
+        const qreal valueToY = plotRect.height() / plotRange;
 
         // Anchor the newest sample to the right edge so a history that hasn't
         // filled the window grows leftward instead of stretching.
         auto pointAt = [&](size_t i, float StatsGraphPoint::* member) {
             const qreal x = plotRect.right() - ((points.size() - 1 - i) * stepX);
             const qreal y = plotRect.bottom() -
-                    qBound((qreal)0, (qreal)(points[i].*member) * valueToY, plotRect.height());
+                    qBound((qreal)0,
+                           ((qreal)(points[i].*member) - baseline) * valueToY,
+                           plotRect.height());
             return QPointF(x, y);
         };
 
@@ -496,8 +510,13 @@ QStringList streamInfoChips(const StatsGraphStreamInfo& info)
     }
     if (info.videoFormat != 0) {
         chips.append(QString::fromUtf8(codecName(info.videoFormat)));
-        chips.append((info.videoFormat & VIDEO_FORMAT_MASK_10BIT) ? QStringLiteral("10-bit")
-                                                                  : QStringLiteral("8-bit"));
+        if (info.videoFormat & VIDEO_FORMAT_MASK_10BIT) {
+            chips.append(info.outputBitsPerComponent == 8 ? QStringLiteral("10-bit -> 8-bit")
+                                                          : QStringLiteral("10-bit"));
+        }
+        else {
+            chips.append(QStringLiteral("8-bit"));
+        }
         chips.append(info.hdr ? QStringLiteral("HDR") : QStringLiteral("SDR"));
         chips.append((info.videoFormat & VIDEO_FORMAT_MASK_YUV444) ? QStringLiteral("4:4:4")
                                                                    : QStringLiteral("4:2:0"));
@@ -593,6 +612,31 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
     const QStringList chips = showStreamInfo ? streamInfoChips(streamInfo) : QStringList();
     if (columns.empty() && chips.isEmpty()) {
         return nullptr;
+    }
+
+    // Use the same vertical axis for every visible frametime graph. Keep
+    // each graph's own windowMin/windowMax for its printed range.
+    qreal frametimeMin = 0, frametimeMax = 0;
+    bool haveFrametime = false;
+    for (const auto& column : columns) {
+        for (const GraphSpec* spec : column) {
+            if (!spec->withFrameRate) {
+                continue;
+            }
+            for (const StatsGraphPoint& point : points) {
+                const qreal low = point.*spec->minField;
+                const qreal high = point.*spec->maxField;
+                if (!haveFrametime) {
+                    frametimeMin = low;
+                    frametimeMax = high;
+                    haveFrametime = true;
+                }
+                else {
+                    frametimeMin = qMin(frametimeMin, low);
+                    frametimeMax = qMax(frametimeMax, high);
+                }
+            }
+        }
     }
 
     const int graphColumns = (int)columns.size();
@@ -804,7 +848,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
                              columnWidth, plotHeight),
                       spec, points, maxPoints,
                       spec.withFrameRate ? targetFrametimeMs : 0,
-                      opacityFactor);
+                      opacityFactor, frametimeMin, frametimeMax);
         }
     }
 

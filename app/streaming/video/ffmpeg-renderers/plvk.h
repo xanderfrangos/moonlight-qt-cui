@@ -93,6 +93,9 @@ public:
     virtual int getDecoderCapabilities() override;
     virtual bool isPixelFormatSupported(int videoFormat, enum AVPixelFormat pixelFormat) override;
     virtual AVPixelFormat getPreferredPixelFormat(int videoFormat) override;
+    virtual int getOutputBitsPerComponent() const override {
+        return m_OutputBitsPerComponent.load(std::memory_order_relaxed);
+    }
 
 private:
     static void lockQueue(AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index);
@@ -158,6 +161,7 @@ private:
 
     // Stream state
     int m_MaxVideoFps = 0;
+    std::atomic<int> m_OutputBitsPerComponent{0};
 
     // The libplacebo rendering state
     pl_log m_Log = nullptr;

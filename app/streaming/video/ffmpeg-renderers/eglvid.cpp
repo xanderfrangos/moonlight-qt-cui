@@ -75,7 +75,8 @@ EGLRenderer::EGLRenderer(IFFmpegRenderer *backendRenderer)
         m_eglClientWaitSync(nullptr),
         m_GlesMajorVersion(0),
         m_GlesMinorVersion(0),
-        m_HasExtUnpackSubimage(false)
+        m_HasExtUnpackSubimage(false),
+        m_OutputBitsPerComponent(0)
 {
     SDL_assert(backendRenderer);
     SDL_assert(backendRenderer->canExportEGL());
@@ -484,11 +485,14 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
     }
 
     {
-        int r, g, b, a;
+        int r = 0, g = 0, b = 0, a = 0;
         SDL_GL_GetAttribute(SDL_GL_RED_SIZE, &r);
         SDL_GL_GetAttribute(SDL_GL_GREEN_SIZE, &g);
         SDL_GL_GetAttribute(SDL_GL_BLUE_SIZE, &b);
         SDL_GL_GetAttribute(SDL_GL_ALPHA_SIZE, &a);
+        if (r > 0 && g > 0 && b > 0) {
+            m_OutputBitsPerComponent = (r < g ? (r < b ? r : b) : (g < b ? g : b));
+        }
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Color buffer is: R%dG%dB%dA%d",
                     r, g, b, a);

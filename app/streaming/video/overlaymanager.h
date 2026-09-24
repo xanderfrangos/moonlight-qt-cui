@@ -125,6 +125,9 @@ private:
     // off if there are none. Returns whether anything changed. Requires
     // m_StateLock.
     bool publishStatusMessagesLocked();
+    // Queues a redraw after the text, surface or style of an overlay changed.
+    // Requires m_StateLock.
+    void queueContentChangeLocked(OverlayType type);
     SDL_Surface* RenderTextOutlinedWrapped(TTF_Font* font, const char* text, SDL_Color textColor, SDL_Color outlineColor, int outlineWidth, int wrapWidth);
     static SDL_Surface* AddBackground(SDL_Surface* textSurface, SDL_Color background, int padding);
 

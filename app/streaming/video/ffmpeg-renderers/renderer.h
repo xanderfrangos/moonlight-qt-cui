@@ -222,6 +222,12 @@ public:
         return 0;
     }
 
+    // Output bits per color component, or zero when this renderer doesn't
+    // expose the output depth.
+    virtual int getOutputBitsPerComponent() const {
+        return 0;
+    }
+
     virtual int getDecoderColorspace() {
         // Rec 601 is default
         return COLORSPACE_REC_601;

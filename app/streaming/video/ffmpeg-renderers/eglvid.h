@@ -21,6 +21,9 @@ public:
     virtual bool notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO) override;
     virtual bool isPixelFormatSupported(int videoFormat, enum AVPixelFormat pixelFormat) override;
     virtual AVPixelFormat getPreferredPixelFormat(int videoFormat) override;
+    virtual int getOutputBitsPerComponent() const override {
+        return m_OutputBitsPerComponent;
+    }
 
 private:
 
@@ -57,6 +60,7 @@ private:
     int m_GlesMajorVersion;
     int m_GlesMinorVersion;
     bool m_HasExtUnpackSubimage;
+    int m_OutputBitsPerComponent;
 
 #define NV12_PARAM_YUVMAT 0
 #define NV12_PARAM_OFFSET 1

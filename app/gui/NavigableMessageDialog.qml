@@ -73,6 +73,16 @@ NavigableDialog {
             // gained through keyboard or gamepad navigation.
             flat: !(SystemProperties.tvMode && activeFocus)
             highlighted: SystemProperties.tvMode && activeFocus
+            property bool focusRingFlush: SystemProperties.tvMode
+
+            // Material's six-pixel top and bottom insets leave a strip between
+            // the fill and focus outline. Remove them but keep the button's
+            // original height so the dialog layout does not shift.
+            topInset: SystemProperties.tvMode ? 0 : 6
+            bottomInset: SystemProperties.tvMode ? 0 : 6
+            implicitHeight: Math.max(implicitBackgroundHeight + (SystemProperties.tvMode ? 12 : topInset + bottomInset),
+                                     implicitContentHeight + topPadding + bottomPadding)
+            Binding { target: dialogButton.background; property: "radius"; value: TvTheme.focusRingRadius; when: SystemProperties.tvMode }
 
             // Material draws highlighted text in white, which doesn't
             // contrast with the TV mode accent

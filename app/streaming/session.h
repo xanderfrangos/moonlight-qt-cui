@@ -346,6 +346,7 @@ private:
 
     bool m_AsyncConnectionSuccess;
     int m_PortTestResults;
+    Uint32 m_ConnectionStartedAtTicks;
 
     int m_ActiveVideoFormat;
     int m_ActiveVideoWidth;

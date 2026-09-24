@@ -178,6 +178,7 @@ public:
              int gamepadMask,
              int playStationGamepadMask,
              bool persistGameControllersOnDisconnect,
+             bool clientVrrRequested,
              QString& rtspSessionUrl);
 
     QVector<NvApp>
