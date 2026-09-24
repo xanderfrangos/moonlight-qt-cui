@@ -2,6 +2,7 @@ import QtQuick 2.9
 import QtQuick.Controls 2.2
 import QtQuick.Layouts 1.2
 import QtQuick.Window 2.2
+import QtQuick.Controls.Material 2.2
 
 import StreamingPreferences 1.0
 import ComputerManager 1.0
@@ -54,6 +55,8 @@ Flickable {
         id: tvModeScaleDialog
         standardButtons: Dialog.Yes | Dialog.No
         text: qsTr("Your display has a high resolution. Would you also like to increase the GUI scale to 200% so it is easier to read from a distance?")
+        acceptText: qsTr("Use 200%")
+        rejectText: qsTr("Keep the current scale")
         onAccepted: {
             StreamingPreferences.uiScale = 200
             for (var i = 0; i < uiScaleListModel.count; i++) {
@@ -72,6 +75,8 @@ Flickable {
         id: restartDialog
         standardButtons: Dialog.Yes | Dialog.No
         text: qsTr("Moonlight must be restarted for this change to take effect. Restart now?")
+        acceptText: qsTr("Restart now")
+        rejectText: qsTr("Later")
         onAccepted: SystemProperties.restartApplication()
     }
 
@@ -435,14 +440,14 @@ Flickable {
                         NavigableDialog {
                             id: customResolutionDialog
                             standardButtons: Dialog.Ok | Dialog.Cancel
+                            // TV mode shows a headline and says what the buttons do
+                            title: SystemProperties.tvMode ? qsTr("Custom resolution") : ""
+                            acceptText: qsTr("Save")
                             onOpened: {
                                 // Force keyboard focus on the textbox so keyboard navigation works
                                 widthField.forceActiveFocus()
 
-                                // standardButton() was added in Qt 5.10, so we must check for it first
-                                if (customResolutionDialog.standardButton) {
-                                    customResolutionDialog.standardButton(Dialog.Ok).enabled = customResolutionDialog.isInputValid()
-                                }
+                                customResolutionDialog.acceptEnabled = customResolutionDialog.isInputValid()
                             }
 
                             onClosed: {
@@ -500,11 +505,14 @@ Flickable {
                             }
 
                             ColumnLayout {
+                                width: parent ? parent.width : implicitWidth
+
                                 Label {
                                     text: qsTr("Custom resolutions are not officially supported by GeForce Experience, so it will not set your host display resolution. You will need to set it manually while in game.") + "\n\n" +
                                           qsTr("Resolutions that are not supported by your client or host PC may cause streaming errors.") + "\n"
                                     wrapMode: Label.WordWrap
-                                    Layout.maximumWidth: 300
+                                    color: SystemProperties.tvMode ? TvTheme.textSecondary : Material.foreground
+                                    Layout.maximumWidth: SystemProperties.tvMode ? TvTheme.dialogContentWidth : 300
                                 }
 
                                 Label {
@@ -515,6 +523,7 @@ Flickable {
                                 RowLayout {
                                     TextField {
                                         id: widthField
+                                        Layout.fillWidth: SystemProperties.tvMode
                                         maximumLength: 5
                                         inputMethodHints: Qt.ImhDigitsOnly
                                         placeholderText: resolutionListModel.get(resolutionComboBox.currentIndex).video_width
@@ -522,10 +531,7 @@ Flickable {
                                         focus: true
 
                                         onTextChanged: {
-                                            // standardButton() was added in Qt 5.10, so we must check for it first
-                                            if (customResolutionDialog.standardButton) {
-                                                customResolutionDialog.standardButton(Dialog.Ok).enabled = customResolutionDialog.isInputValid()
-                                            }
+                                            customResolutionDialog.acceptEnabled = customResolutionDialog.isInputValid()
                                         }
 
                                         Keys.onReturnPressed: {
@@ -544,16 +550,14 @@ Flickable {
 
                                     TextField {
                                         id: heightField
+                                        Layout.fillWidth: SystemProperties.tvMode
                                         maximumLength: 5
                                         inputMethodHints: Qt.ImhDigitsOnly
                                         placeholderText: resolutionListModel.get(resolutionComboBox.currentIndex).video_height
                                         validator: IntValidator{bottom:256; top:8192}
 
                                         onTextChanged: {
-                                            // standardButton() was added in Qt 5.10, so we must check for it first
-                                            if (customResolutionDialog.standardButton) {
-                                                customResolutionDialog.standardButton(Dialog.Ok).enabled = customResolutionDialog.isInputValid()
-                                            }
+                                            customResolutionDialog.acceptEnabled = customResolutionDialog.isInputValid()
                                         }
 
                                         Keys.onReturnPressed: {
@@ -605,14 +609,14 @@ Flickable {
 
                             id: customFpsDialog
                             standardButtons: Dialog.Ok | Dialog.Cancel
+                            // TV mode shows a headline and says what the buttons do
+                            title: SystemProperties.tvMode ? qsTr("Custom frame rate") : ""
+                            acceptText: qsTr("Save")
                             onOpened: {
                                 // Force keyboard focus on the textbox so keyboard navigation works
                                 fpsField.forceActiveFocus()
 
-                                // standardButton() was added in Qt 5.10, so we must check for it first
-                                if (customFpsDialog.standardButton) {
-                                    customFpsDialog.standardButton(Dialog.Ok).enabled = customFpsDialog.isInputValid()
-                                }
+                                customFpsDialog.acceptEnabled = customFpsDialog.isInputValid()
                             }
 
                             onClosed: {
@@ -650,6 +654,8 @@ Flickable {
                             }
 
                             ColumnLayout {
+                                width: parent ? parent.width : implicitWidth
+
                                 Label {
                                     text: qsTr("Enter a custom frame rate:")
                                     font.bold: true
@@ -658,6 +664,7 @@ Flickable {
                                 RowLayout {
                                     TextField {
                                         id: fpsField
+                                        Layout.fillWidth: SystemProperties.tvMode
                                         maximumLength: 4
                                         inputMethodHints: Qt.ImhDigitsOnly
                                         placeholderText: fpsListModel.get(fpsComboBox.currentIndex).video_fps
@@ -665,10 +672,7 @@ Flickable {
                                         focus: true
 
                                         onTextChanged: {
-                                            // standardButton() was added in Qt 5.10, so we must check for it first
-                                            if (customFpsDialog.standardButton) {
-                                                customFpsDialog.standardButton(Dialog.Ok).enabled = customFpsDialog.isInputValid()
-                                            }
+                                            customFpsDialog.acceptEnabled = customFpsDialog.isInputValid()
                                         }
 
                                         Keys.onReturnPressed: {

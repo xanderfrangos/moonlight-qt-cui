@@ -473,8 +473,15 @@ import AppModel 1.0; AppModel {}', parent, '')
         property bool segueToStream : false
         property string nextAppName: ""
         property int nextAppIndex: 0
-        text:qsTr("Are you sure you want to quit %1? Any unsaved progress will be lost.").arg(appName)
+        text: !SystemProperties.tvMode ? qsTr("Are you sure you want to quit %1? Any unsaved progress will be lost.").arg(appName) :
+              segueToStream ? qsTr("Any unsaved progress will be lost. %1 will start once it has closed.").arg(nextAppName) :
+                              qsTr("Any unsaved progress will be lost.")
         standardButtons: Dialog.Yes | Dialog.No
+        headline: qsTr("Quit %1?").arg(appName)
+        acceptText: qsTr("Quit game")
+        imageSrc: SystemProperties.tvMode ? "qrc:/res/stop_FILL1_wght700_GRAD200_opsz48.svg" : "qrc:/res/baseline-help_outline-24px.svg"
+        rejectText: qsTr("Cancel")
+        destructive: true
 
         function quitApp() {
             var component = Qt.createComponent("QuitSegue.qml")

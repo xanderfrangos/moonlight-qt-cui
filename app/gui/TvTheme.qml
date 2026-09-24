@@ -68,8 +68,22 @@ QtObject {
     readonly property int cardRadius: 12
     // Larger tiles, like the computer cards
     readonly property int tileRadius: 24
-    readonly property int dialogRadius: 16
+    readonly property int dialogRadius: 29
     readonly property int focusRingRadius: 8
+
+    // Dialogs: a fixed content width so they don't change size with their
+    // text, full width buttons stacked with the primary one on top, and a
+    // dark scrim over the page behind them. Dialogs are a size down from the
+    // page type scale, so they don't overwhelm the page they're over.
+    readonly property int dialogPadding: 43
+    readonly property int dialogSpacing: 17
+    readonly property int dialogContentWidth: 538
+    readonly property int dialogIconSize: 67
+    readonly property int dialogTitleFont: 31
+    readonly property int dialogBodyFont: 22
+    readonly property int dialogButtonHeight: 67
+    readonly property int dialogButtonRadius: 19
+    readonly property color scrim: "#B8050609"
 
     // Top bar buttons and status chips are pills this tall
     readonly property int pillHeight: 66

@@ -8,55 +8,125 @@ import TvTheme 1.0
 NavigableDialog {
     id: dialog
 
-    property alias text: dialogLabel.dialogText
-    property alias showSpinner: dialogSpinner.visible
-    property alias imageSrc: dialogImage.source
+    property string text
+    property bool showSpinner: false
+    property url imageSrc: (standardButtons & Dialog.Yes) ?
+                               "qrc:/res/baseline-help_outline-24px.svg" :
+                               "qrc:/res/baseline-error_outline-24px.svg"
 
     property string helpText
     property string helpUrl : "https://github.com/moonlight-stream/moonlight-docs/wiki/Troubleshooting"
     property string helpTextSeparator : " "
 
+    // TV mode: a headline above the text, like "Quit Moonlight?". When there
+    // is one, the text below it is the secondary explanation.
+    property string headline: ""
+
+    readonly property string fullText: text + ((helpText && (standardButtons & Dialog.Help)) ? (helpTextSeparator + helpText) : "")
+
+    onTvHelpRequested: {
+        Qt.openUrlExternally(helpUrl)
+        close()
+    }
+
     onOpened: {
-        // Force keyboard focus on the label so keyboard navigation works
-        if (dialogButtonBox.count > 0) {
+        // Force keyboard focus on a button so keyboard navigation works
+        if (SystemProperties.tvMode) {
+            focusFirstButton()
+        }
+        else if (dialogButtonBox.count > 0) {
             dialogButtonBox.itemAt(dialogButtonBox.count - 1).forceActiveFocus(Qt.TabFocus)
         }
     }
 
+    // Only one of the layouts below is shown, so the dialog is sized to it
+    contentWidth: SystemProperties.tvMode ? tvLayout.implicitWidth : desktopLayout.implicitWidth
+    contentHeight: SystemProperties.tvMode ? tvLayout.implicitHeight : desktopLayout.implicitHeight
+
     RowLayout {
+        id: desktopLayout
+        visible: !SystemProperties.tvMode
         spacing: 10
 
         BusyIndicator {
-            id: dialogSpinner
-            visible: false
+            visible: dialog.showSpinner
             running: visible
         }
 
         Image {
-            id: dialogImage
-            source: (standardButtons & Dialog.Yes) ?
-                        "qrc:/res/baseline-help_outline-24px.svg" :
-                        "qrc:/res/baseline-error_outline-24px.svg"
+            source: dialog.imageSrc
             sourceSize {
                 // The icon should be square so use the height as the width too
-                width: SystemProperties.tvMode ? 64 : 50
-                height: SystemProperties.tvMode ? 64 : 50
+                width: 50
+                height: 50
             }
-            visible: !showSpinner
+            visible: !dialog.showSpinner
         }
 
         Label {
-            property string dialogText
-
-            id: dialogLabel
-            text: dialogText + ((helpText && (standardButtons & Dialog.Help)) ? (helpTextSeparator + helpText) : "")
+            text: dialog.fullText
             wrapMode: Text.Wrap
             elide: Label.ElideRight
 
             // Cap the width so the dialog doesn't grow horizontally forever. This
             // will cause word wrap to kick in.
-            Layout.maximumWidth: SystemProperties.tvMode ? 640 : 400
-            Layout.maximumHeight: SystemProperties.tvMode ? 640 : 400
+            Layout.maximumWidth: 400
+            Layout.maximumHeight: 400
+        }
+    }
+
+    // TV mode: an icon, then the headline and text. The buttons are stacked
+    // under them by NavigableDialog.
+    ColumnLayout {
+        id: tvLayout
+        visible: SystemProperties.tvMode
+        spacing: TvTheme.dialogSpacing
+
+        Rectangle {
+            Layout.preferredWidth: TvTheme.dialogIconSize
+            Layout.preferredHeight: TvTheme.dialogIconSize
+            radius: width / 2
+            color: TvTheme.surface
+
+            BusyIndicator {
+                anchors.centerIn: parent
+                width: TvTheme.dialogIconSize * 0.7
+                height: TvTheme.dialogIconSize * 0.7
+                visible: dialog.showSpinner
+                running: visible
+            }
+
+            Image {
+                anchors.centerIn: parent
+                source: dialog.imageSrc
+                sourceSize.width: Math.round(TvTheme.dialogIconSize * 0.57)
+                sourceSize.height: Math.round(TvTheme.dialogIconSize * 0.57)
+                visible: !dialog.showSpinner
+            }
+        }
+
+        Label {
+            Layout.preferredWidth: TvTheme.dialogContentWidth
+            Layout.topMargin: 7
+            visible: dialog.headline !== ""
+            text: dialog.headline
+            color: TvTheme.textPrimary
+            font.pixelSize: TvTheme.dialogTitleFont
+            font.weight: Font.DemiBold
+            wrapMode: Text.Wrap
+        }
+
+        Label {
+            Layout.preferredWidth: TvTheme.dialogContentWidth
+            Layout.maximumHeight: 450
+            visible: dialog.fullText !== ""
+            text: dialog.fullText
+            // Under a headline, the text explains it
+            color: dialog.headline !== "" ? TvTheme.textSecondary : TvTheme.textPrimary
+            font.pixelSize: TvTheme.dialogBodyFont
+            lineHeight: 1.3
+            wrapMode: Text.Wrap
+            elide: Label.ElideRight
         }
     }
 
@@ -64,34 +134,10 @@ NavigableDialog {
         id: dialogButtonBox
         standardButtons: dialog.standardButtons
 
+        // TV mode replaces this with NavigableDialog's stacked buttons
+
         delegate: Button {
-            id: dialogButton
-
-            // In TV mode the focused button is filled with the accent color, so
-            // it's always clear what pressing A will do. This follows focus
-            // itself rather than the focus ring, which only appears for focus
-            // gained through keyboard or gamepad navigation.
-            flat: !(SystemProperties.tvMode && activeFocus)
-            highlighted: SystemProperties.tvMode && activeFocus
-            property bool focusRingFlush: SystemProperties.tvMode
-
-            // Material's six-pixel top and bottom insets leave a strip between
-            // the fill and focus outline. Remove them but keep the button's
-            // original height so the dialog layout does not shift.
-            topInset: SystemProperties.tvMode ? 0 : 6
-            bottomInset: SystemProperties.tvMode ? 0 : 6
-            implicitHeight: Math.max(implicitBackgroundHeight + (SystemProperties.tvMode ? 12 : topInset + bottomInset),
-                                     implicitContentHeight + topPadding + bottomPadding)
-            Binding { target: dialogButton.background; property: "radius"; value: TvTheme.focusRingRadius; when: SystemProperties.tvMode }
-
-            // Material draws highlighted text in white, which doesn't
-            // contrast with the TV mode accent
-            Binding {
-                target: dialogButton.contentItem
-                property: "color"
-                value: TvTheme.accentText
-                when: dialogButton.highlighted
-            }
+            flat: true
 
             Keys.onReturnPressed: clicked()
             Keys.onEnterPressed: clicked()

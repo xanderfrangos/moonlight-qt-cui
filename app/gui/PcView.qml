@@ -520,9 +520,7 @@ CenteredGridView {
 
         onOpened: {
             // Focus the button so the gamepad and keyboard can reach it
-            if (footer && footer.count > 0) {
-                footer.itemAt(0).forceActiveFocus(Qt.TabFocus)
-            }
+            focusFirstButton()
         }
 
         // Cancel, Escape, and the gamepad's back button all reject. Closing the
@@ -530,10 +528,10 @@ CenteredGridView {
         onRejected: computerModel.cancelPairing()
 
         ColumnLayout {
-            spacing: SystemProperties.tvMode ? 24 : 16
+            spacing: SystemProperties.tvMode ? TvTheme.dialogSpacing : 16
 
             Label {
-                Layout.maximumWidth: SystemProperties.tvMode ? 640 : 420
+                Layout.maximumWidth: SystemProperties.tvMode ? TvTheme.dialogContentWidth : 420
                 text: qsTr("Enter this PIN on %1:").arg(pairDialog.pcName)
                 font.bold: true
                 wrapMode: Text.Wrap
@@ -542,21 +540,21 @@ CenteredGridView {
             // The PIN in large digits, so it can be read from across the room
             Row {
                 Layout.alignment: Qt.AlignHCenter
-                spacing: SystemProperties.tvMode ? 16 : 10
+                spacing: SystemProperties.tvMode ? 13 : 10
 
                 Repeater {
                     model: pairDialog.pin.split("")
 
                     Rectangle {
-                        width: SystemProperties.tvMode ? 80 : 56
-                        height: SystemProperties.tvMode ? 104 : 72
+                        width: SystemProperties.tvMode ? 64 : 56
+                        height: SystemProperties.tvMode ? 84 : 72
                         radius: SystemProperties.tvMode ? TvTheme.cardRadius : 8
                         color: SystemProperties.tvMode ? TvTheme.surface : Qt.rgba(1, 1, 1, 0.08)
 
                         Label {
                             anchors.centerIn: parent
                             text: modelData
-                            font.pointSize: SystemProperties.tvMode ? 44 : 30
+                            font.pointSize: SystemProperties.tvMode ? 35 : 30
                             font.bold: true
                         }
                     }
@@ -574,7 +572,7 @@ CenteredGridView {
 
                 Label {
                     Layout.fillWidth: true
-                    Layout.maximumWidth: SystemProperties.tvMode ? 580 : 370
+                    Layout.maximumWidth: SystemProperties.tvMode ? TvTheme.dialogContentWidth - 52 : 370
                     text: qsTr("If your host PC is running Sunshine, navigate to the Sunshine web UI to enter the PIN.") + " " +
                           qsTr("This dialog will close when pairing is completed.")
                     color: SystemProperties.tvMode ? TvTheme.textSecondary : Material.foreground
@@ -589,8 +587,13 @@ CenteredGridView {
         // don't allow edits to the rest of the window while open
         property int pcIndex : -1
         property string pcName : ""
-        text: qsTr("Are you sure you want to remove '%1'?").arg(pcName)
+        text: SystemProperties.tvMode ? "" : qsTr("Are you sure you want to remove '%1'?").arg(pcName)
         standardButtons: Dialog.Yes | Dialog.No
+        headline: qsTr("Remove %1?").arg(pcName)
+        acceptText: qsTr("Remove")
+        imageSrc: SystemProperties.tvMode ? "qrc:/res/delete.svg" : "qrc:/res/baseline-help_outline-24px.svg"
+        rejectText: qsTr("Cancel")
+        destructive: true
 
         onAccepted: {
             computerModel.deleteComputer(pcIndex)
@@ -635,6 +638,9 @@ CenteredGridView {
         property int pcIndex : -1;
 
         standardButtons: Dialog.Ok | Dialog.Cancel
+        // TV mode shows a headline and says what the buttons do
+        title: SystemProperties.tvMode ? qsTr("Rename %1").arg(originalName) : ""
+        acceptText: qsTr("Rename")
 
         onOpened: {
             // Force keyboard focus on the textbox so keyboard navigation works
@@ -652,9 +658,13 @@ CenteredGridView {
         }
 
         ColumnLayout {
+            width: parent ? parent.width : implicitWidth
+
             Label {
                 text: renamePcDialog.label
-                font.bold: true
+                // Under the TV mode headline, this explains it
+                font.bold: !SystemProperties.tvMode
+                color: SystemProperties.tvMode ? TvTheme.textSecondary : Material.foreground
             }
 
             TextField {
@@ -662,6 +672,9 @@ CenteredGridView {
                 placeholderText: renamePcDialog.originalName
                 Layout.fillWidth: true
                 focus: true
+
+                // Move on to the buttons with the gamepad
+                Keys.onDownPressed: nextItemInFocusChain(true).forceActiveFocus(Qt.TabFocus)
 
                 Keys.onReturnPressed: {
                     renamePcDialog.accept()

@@ -854,7 +854,13 @@ ApplicationWindow {
     NavigableMessageDialog {
         id: quitConfirmationDialog
         standardButtons: Dialog.Yes | Dialog.No
-        text: qsTr("Are you sure you want to quit?")
+        headline: qsTr("Quit Moonlight?")
+        text: SystemProperties.tvMode ? qsTr("Games running on your host PCs keep running after Moonlight closes.")
+                                       : qsTr("Are you sure you want to quit?")
+        acceptText: qsTr("Quit")
+        rejectText: qsTr("Keep using Moonlight")
+        destructive: true
+        imageSrc: SystemProperties.tvMode ? "qrc:/res/power.svg" : "qrc:/res/baseline-help_outline-24px.svg"
         // For keyboard/gamepad navigation
         onAccepted: Qt.quit()
     }
@@ -887,6 +893,9 @@ ApplicationWindow {
         property string label: qsTr("Enter the IP address of your host PC:")
 
         standardButtons: Dialog.Ok | Dialog.Cancel
+        // TV mode shows a headline and says what the buttons do
+        title: SystemProperties.tvMode ? qsTr("Add a PC") : ""
+        acceptText: qsTr("Add PC")
 
         onOpened: {
             // Force keyboard focus on the textbox so keyboard navigation works
@@ -904,15 +913,22 @@ ApplicationWindow {
         }
 
         ColumnLayout {
+            width: parent ? parent.width : implicitWidth
+
             Label {
                 text: addPcDialog.label
-                font.bold: true
+                // Under the TV mode headline, this explains it
+                font.bold: !SystemProperties.tvMode
+                color: SystemProperties.tvMode ? TvTheme.textSecondary : Material.foreground
             }
 
             TextField {
                 id: editText
                 Layout.fillWidth: true
                 focus: true
+
+                // Move on to the buttons with the gamepad
+                Keys.onDownPressed: nextItemInFocusChain(true).forceActiveFocus(Qt.TabFocus)
 
                 Keys.onReturnPressed: {
                     addPcDialog.accept()
@@ -973,7 +989,9 @@ ApplicationWindow {
         z: 1000000
         visible: target !== null && target.visible && targetOnScreen
         color: "transparent"
+        // Controls can match the ring to their own shape
         radius: target && target.focusRingPill ? height / 2 :
+                target && target.focusRingRadius !== undefined ? target.focusRingRadius + ringMargin :
                 SystemProperties.tvMode ? TvTheme.focusRingRadius : 6
         border.width: SystemProperties.tvMode ? TvTheme.focusRingWidth : 3
         border.color: Material.accent
