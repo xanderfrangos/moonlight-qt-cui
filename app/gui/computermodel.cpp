@@ -42,24 +42,7 @@ QVariant ComputerModel::data(const QModelIndex& index, int role) const
         return computer->state == NvComputer::CS_UNKNOWN;
     case ServerSupportedRole:
         return computer->isSupportedServerVersion;
-    case DuplicateNameAddressRole: {
-        // Only PCs that share a name need their address to tell them apart
-        bool duplicate = false;
-        for (NvComputer* other : m_Computers) {
-            if (other == computer) {
-                continue;
-            }
-
-            QReadLocker otherLock(&other->lock);
-            if (other->name.compare(computer->name, Qt::CaseInsensitive) == 0) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (!duplicate) {
-            return QString();
-        }
-
+    case AddressRole:
         for (const NvAddress& address : { computer->activeAddress, computer->manualAddress,
                                           computer->localAddress, computer->remoteAddress }) {
             if (!address.isNull()) {
@@ -69,7 +52,6 @@ QVariant ComputerModel::data(const QModelIndex& index, int role) const
             }
         }
         return QString();
-    }
     case DetailsRole: {
         QString state, pairState;
 
@@ -138,7 +120,7 @@ QHash<int, QByteArray> ComputerModel::roleNames() const
     names[StatusUnknownRole] = "statusUnknown";
     names[ServerSupportedRole] = "serverSupported";
     names[DetailsRole] = "details";
-    names[DuplicateNameAddressRole] = "duplicateNameAddress";
+    names[AddressRole] = "address";
 
     return names;
 }
@@ -284,12 +266,9 @@ void ComputerModel::handleComputerStateChanged(NvComputer* computer)
         endResetModel();
     }
     else {
-        // Let the view know that this computer changed. Every row is updated,
-        // since a rename can change which other PCs share a name.
-        Q_UNUSED(computer);
-        if (!m_Computers.isEmpty()) {
-            emit dataChanged(createIndex(0, 0), createIndex(m_Computers.count() - 1, 0));
-        }
+        // Let the view know that this specific computer changed
+        int index = m_Computers.indexOf(computer);
+        emit dataChanged(createIndex(index, 0), createIndex(index, 0));
     }
 }
 

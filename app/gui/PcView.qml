@@ -308,7 +308,7 @@ CenteredGridView {
                 visible: text !== ""
                 leftPadding: TvTheme.spacingMedium
                 rightPadding: TvTheme.spacingMedium
-                text: model.duplicateNameAddress
+                text: model.address
                 color: TvTheme.textSecondary
                 font.pixelSize: TvTheme.fontCaption
                 horizontalAlignment: Text.AlignHCenter
