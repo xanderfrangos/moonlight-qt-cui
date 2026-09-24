@@ -29,7 +29,8 @@ Button {
     implicitHeight: TvTheme.dialogButtonHeight
     font.pixelSize: TvTheme.dialogBodyFont
     font.weight: Font.DemiBold
-    font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
+    // Older Material styles capitalize button labels
+    font.capitalization: Font.MixedCase
 
     contentItem: Label {
         text: button.text

@@ -76,7 +76,8 @@ ToolButton {
 
             font.pixelSize = TvTheme.fontLabel
             font.weight = Font.DemiBold
-            font.styleName = TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
+            // Older Material styles capitalize button labels
+            font.capitalization = Font.MixedCase
             spacing = 12
             // Without its label, a button is round and its icon needs all the room
             leftPadding = Qt.binding(function() { return button.tvLabelVisible ? TvTheme.pillPadding : 0 })

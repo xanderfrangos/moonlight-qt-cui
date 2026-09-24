@@ -110,7 +110,6 @@ Dialog {
             font.family: TvTheme.displayFontFamily
             font.pixelSize: TvTheme.dialogTitleFont
             font.weight: Font.DemiBold
-            font.styleName: TvTheme.fontStyleName(TvTheme.displayFontFamily, font.weight)
             wrapMode: Text.Wrap
             leftPadding: TvTheme.dialogPadding
             rightPadding: TvTheme.dialogPadding

@@ -46,7 +46,6 @@ Rectangle {
             color: TvTheme.textPrimary
             font.pixelSize: TvTheme.fontLabel
             font.weight: Font.DemiBold
-            font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
         }
 
         TvBatteryIcon {

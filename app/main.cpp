@@ -1108,8 +1108,14 @@ int main(int argc, char *argv[])
     if (tvMode) {
         // TV mode's typefaces are bundled, with their licenses beside them.
         // Figtree is the default and QML asks for Sora by name for titles.
-        for (const QString& fontFile : { QStringLiteral(":/res/fonts/Figtree.ttf"),
-                                         QStringLiteral(":/res/fonts/Sora.ttf") }) {
+        // Each weight in use is its own static font rather than one variable
+        // font, since some font backends, like fontconfig with older Qt, only
+        // ever use a variable font's default weight.
+        for (const QString& fontFile : { QStringLiteral(":/res/fonts/Figtree-Regular.ttf"),
+                                         QStringLiteral(":/res/fonts/Figtree-Medium.ttf"),
+                                         QStringLiteral(":/res/fonts/Figtree-SemiBold.ttf"),
+                                         QStringLiteral(":/res/fonts/Figtree-Bold.ttf"),
+                                         QStringLiteral(":/res/fonts/Sora-SemiBold.ttf") }) {
             if (QFontDatabase::addApplicationFont(fontFile) < 0) {
                 qWarning() << "Failed to load font:" << fontFile;
             }
@@ -1118,7 +1124,6 @@ int main(int argc, char *argv[])
         QFont font = app.font();
         font.setFamily(QStringLiteral("Figtree"));
         font.setWeight(QFont::Medium);
-        font.setStyleName(QStringLiteral("Medium"));
         app.setFont(font);
     }
     if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_PRIMARY")) {
