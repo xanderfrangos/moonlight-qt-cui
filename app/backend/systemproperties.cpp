@@ -57,6 +57,11 @@ void SystemProperties::setTvModeState(bool enabled, bool overridden)
     s_TvModeOverridden = overridden;
 }
 
+bool SystemProperties::isTvMode()
+{
+    return s_TvMode;
+}
+
 SystemProperties::SystemProperties()
 {
     versionString = QString(VERSION_STR);

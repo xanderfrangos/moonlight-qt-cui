@@ -13,6 +13,7 @@
 
 #include <cmath>
 
+#include "backend/systemproperties.h"
 #include "settings/streamingpreferences.h"
 
 using namespace Overlay;
@@ -285,10 +286,40 @@ namespace {
 // overlay it sits beside, which uses a fixed font size rather than scaling with
 // the viewport. The user can scale it from there, or have it follow the
 // viewport like the gamepad menu does.
-const QColor k_GraphPlotColor(0x00, 0x00, 0x00, 0x66);
 const QColor k_GraphGridColor(0xFF, 0xFF, 0xFF, 0x1F);
 const QColor k_GraphValueColor(0xFF, 0xFF, 0xFF);
 const QColor k_GraphTargetColor(0xFF, 0xFF, 0xFF, 0x70);
+
+// The graph card's colors and corners. TV mode matches TvTheme.qml, and the
+// desktop matches the Material dark style of the rest of the desktop app.
+struct GraphPalette {
+    QColor surface;
+    QColor surfaceEdge;
+    QColor text;
+    QColor secondaryText;
+    QColor chip;
+    QColor plot;
+    qreal cardRadius;
+    qreal plotRadius;
+};
+
+const GraphPalette& graphPalette()
+{
+    static const GraphPalette k_TvPalette = {
+        k_SurfaceColor, k_SurfaceEdgeColor, k_ItemColor, k_TitleColor,
+        QColor(0xFF, 0xFF, 0xFF, 0x1A), QColor(0x00, 0x00, 0x00, 0x66),
+        12, 4
+    };
+    // The desktop app's background, with Material's white text at full,
+    // 70% and hint strengths
+    static const GraphPalette k_DesktopPalette = {
+        QColor(0x30, 0x30, 0x30, 0xF2), QColor(0xFF, 0xFF, 0xFF, 0x14),
+        QColor(0xFF, 0xFF, 0xFF), QColor(0xFF, 0xFF, 0xFF, 0xB3),
+        QColor(0xFF, 0xFF, 0xFF, 0x1F), QColor(0x00, 0x00, 0x00, 0x4D),
+        4, 2
+    };
+    return SystemProperties::isTvMode() ? k_TvPalette : k_DesktopPalette;
+}
 
 // Opacity the card's colors are authored at, which the user's setting scales
 constexpr qreal k_DefaultCardOpacity = 0.95;
@@ -337,11 +368,12 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
                const std::vector<StatsGraphPoint>& points, int maxPoints,
                qreal target, qreal opacity, qreal frametimeMin, qreal frametimeMax)
 {
-    QColor plotColor = k_GraphPlotColor;
+    const GraphPalette& palette = graphPalette();
+    QColor plotColor = palette.plot;
     plotColor.setAlphaF(qMin(1.0, plotColor.alphaF() * opacity));
     painter.setPen(Qt::NoPen);
     painter.setBrush(plotColor);
-    painter.drawRoundedRect(plotRect, 4, 4);
+    painter.drawRoundedRect(plotRect, palette.plotRadius, palette.plotRadius);
 
     // Scale against the spread, not just the mean, so a spike that only shows
     // up in the band is never clipped off the plot.
@@ -465,7 +497,7 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
 
     // The window's range, so min and max are readable as numbers and not only
     // as the extent of the band.
-    painter.setPen(k_TitleColor);
+    painter.setPen(palette.secondaryText);
     painter.drawText(plotRect.adjusted(6, 2, -6, 0), Qt::AlignLeft | Qt::AlignTop,
                      points.empty() ? QStringLiteral("--")
                                     : QStringLiteral("%1 - %2")
@@ -645,9 +677,11 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
         graphRows = qMax(graphRows, (int)column.size());
     }
 
+    const GraphPalette& palette = graphPalette();
+
     // Laid out at 100% and drawn through a scaled painter, so text and lines
     // are rasterized at the final size rather than stretched.
-    const qreal cardRadius = 12;
+    const qreal cardRadius = palette.cardRadius;
     const qreal cardPadding = 14;
     const qreal columnWidth = 264;
     const qreal columnGap = 16;
@@ -745,13 +779,13 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
 
     drawCardShadow(painter, cardRect, cardRadius, shadowSpread, qMin(1.0, opacityFactor));
 
-    QColor surfaceColor = k_SurfaceColor;
+    QColor surfaceColor = palette.surface;
     surfaceColor.setAlphaF(opacity);
     painter.setPen(Qt::NoPen);
     painter.setBrush(surfaceColor);
     painter.drawRoundedRect(cardRect, cardRadius, cardRadius);
 
-    QColor edgeColor = k_SurfaceEdgeColor;
+    QColor edgeColor = palette.surfaceEdge;
     edgeColor.setAlphaF(qMin(1.0, edgeColor.alphaF() * opacityFactor));
     painter.setBrush(Qt::NoBrush);
     painter.setPen(QPen(edgeColor, 1));
@@ -769,11 +803,11 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
         for (int i = 0; i < chips.size(); i++) {
             const QRectF chipRect = chipRects[i].translated(contentLeft, y);
             painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(0xFF, 0xFF, 0xFF, 0x1A));
+            painter.setBrush(palette.chip);
             painter.drawRoundedRect(chipRect, chipHeight / 2, chipHeight / 2);
 
             painter.setBrush(Qt::NoBrush);
-            painter.setPen(k_ItemColor);
+            painter.setPen(palette.text);
             painter.drawText(chipRect.adjusted(chipPaddingX, 0, -chipPaddingX, 0),
                              Qt::AlignCenter,
                              chipMetrics.elidedText(chips[i], Qt::ElideRight,
@@ -787,7 +821,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
 
     if (graphRows > 0) {
         painter.setFont(headerFont);
-        painter.setPen(k_TitleColor);
+        painter.setPen(palette.secondaryText);
         painter.drawText(QRectF(contentLeft, y, contentRight - contentLeft, headerMetrics.height()),
                          Qt::AlignLeft | Qt::AlignVCenter,
                          QStringLiteral("Last %1 seconds").arg(config.windowSeconds));
@@ -803,7 +837,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
             const QRectF labelRect(cellLeft, cellTop, columnWidth, labelHeight);
 
             painter.setFont(labelFont);
-            painter.setPen(k_ItemColor);
+            painter.setPen(palette.text);
             painter.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter,
                              StreamingPreferences::performanceGraphName(spec.id));
 
@@ -816,7 +850,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
                         .arg(frametimeMs > 0 ? qRound(1000.0 / frametimeMs) : 0);
 
                 painter.setFont(scaleFont);
-                painter.setPen(k_TitleColor);
+                painter.setPen(palette.secondaryText);
                 painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter, rateText);
                 valueRect.setRight(valueRect.right() -
                                    QFontMetricsF(scaleFont).horizontalAdvance(rateText));
@@ -835,7 +869,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
             }
 
             painter.setFont(valueFont);
-            painter.setPen(points.empty() ? k_TitleColor : k_GraphValueColor);
+            painter.setPen(points.empty() ? palette.secondaryText : k_GraphValueColor);
             painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter,
                              points.empty() ? QStringLiteral("--")
                                             : QStringLiteral("%1%2")

@@ -57,6 +57,9 @@ public:
     // was forced by a command line option rather than the saved preference
     static void setTvModeState(bool enabled, bool overridden);
 
+    // For code outside QML, such as the stream's overlays
+    static bool isTvMode();
+
 signals:
     void unmappedGamepadsChanged();
     void hasHardwareAccelerationChanged();
