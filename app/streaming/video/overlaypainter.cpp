@@ -108,6 +108,36 @@ void drawCardShadow(QPainter& painter, const QRectF& cardRect, qreal radius, qre
     }
 }
 
+// The menu's colors and corners. TV mode matches TvTheme.qml, and the desktop
+// matches the Material dark menus of the rest of the desktop app.
+struct MenuPalette {
+    QColor surface;
+    QColor surfaceEdge;
+    QColor title;
+    QColor item;
+    QColor selectedItem;
+    qreal cardRadius;
+    qreal itemRadius;
+    // Desktop menus mark the selected item with a plain highlight rather
+    // than TV mode's accent ring
+    bool focusRing;
+    QColor highlight;
+};
+
+const MenuPalette& menuPalette()
+{
+    static const MenuPalette k_TvPalette = {
+        k_SurfaceColor, k_SurfaceEdgeColor, k_TitleColor, k_ItemColor, k_SelectedItemColor,
+        16, 8, true, QColor()
+    };
+    static const MenuPalette k_DesktopPalette = {
+        QColor(0x42, 0x42, 0x42, 0xF2), QColor(0xFF, 0xFF, 0xFF, 0x14),
+        QColor(0xFF, 0xFF, 0xFF, 0xB3), QColor(0xFF, 0xFF, 0xFF), QColor(0xFF, 0xFF, 0xFF),
+        4, 2, false, QColor(0xFF, 0xFF, 0xFF, 0x1F)
+    };
+    return SystemProperties::isTvMode() ? k_TvPalette : k_DesktopPalette;
+}
+
 // The same focus treatment the QML views use: an accent ring with a soft glow
 // around it, over a tinted fill.
 void drawSelection(QPainter& painter, const QRectF& itemRect, qreal radius, qreal scale)
@@ -143,11 +173,13 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
         return nullptr;
     }
 
+    const MenuPalette& palette = menuPalette();
+
     // Everything below is authored against 1080p and scaled from there
     const qreal scale = qBound(0.75, viewportHeight / 1080.0, 3.0);
 
-    const qreal cardRadius = 16 * scale;
-    const qreal itemRadius = 8 * scale;
+    const qreal cardRadius = palette.cardRadius * scale;
+    const qreal itemRadius = palette.itemRadius * scale;
     const qreal cardPadding = 28 * scale;
     const qreal itemPaddingX = 20 * scale;
     const qreal itemHeight = 52 * scale;
@@ -216,11 +248,11 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
     drawCardShadow(painter, cardRect, cardRadius, shadowSpread);
 
     painter.setPen(Qt::NoPen);
-    painter.setBrush(k_SurfaceColor);
+    painter.setBrush(palette.surface);
     painter.drawRoundedRect(cardRect, cardRadius, cardRadius);
 
     painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(k_SurfaceEdgeColor, 1));
+    painter.setPen(QPen(palette.surfaceEdge, 1));
     painter.drawRoundedRect(cardRect.adjusted(0.5, 0.5, -0.5, -0.5), cardRadius, cardRadius);
 
     const qreal contentLeft = cardRect.left() + cardPadding;
@@ -228,7 +260,7 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
     qreal y = cardRect.top() + cardPadding;
 
     painter.setFont(titleFont);
-    painter.setPen(k_TitleColor);
+    painter.setPen(palette.title);
     painter.drawText(QRectF(contentLeft, y, contentRight - contentLeft, titleMetrics.height()),
                      Qt::AlignLeft | Qt::AlignVCenter, title);
     y += titleMetrics.height() + titleGap;
@@ -239,10 +271,17 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
                               contentRight - contentLeft - (selectionMargin * 2), itemHeight);
 
         if (i == selectedIndex) {
-            drawSelection(painter, itemRect, itemRadius, scale);
+            if (palette.focusRing) {
+                drawSelection(painter, itemRect, itemRadius, scale);
+            }
+            else {
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(palette.highlight);
+                painter.drawRoundedRect(itemRect, itemRadius, itemRadius);
+            }
         }
 
-        painter.setPen(i == selectedIndex ? k_SelectedItemColor : k_ItemColor);
+        painter.setPen(i == selectedIndex ? palette.selectedItem : palette.item);
         painter.drawText(itemRect.adjusted(itemPaddingX, 0, -itemPaddingX, 0),
                          Qt::AlignLeft | Qt::AlignVCenter, items.at(i));
 
@@ -268,7 +307,7 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
 
             const qreal textWidth = hintMetrics.horizontalAdvance(hint.text);
             painter.setFont(hintFont);
-            painter.setPen(k_TitleColor);
+            painter.setPen(palette.title);
             painter.drawText(QRectF(x, y, textWidth + 1, hintRowHeight),
                              Qt::AlignLeft | Qt::AlignVCenter, hint.text);
             x += textWidth + hintSpacing;
