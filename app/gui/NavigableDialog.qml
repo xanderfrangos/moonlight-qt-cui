@@ -134,7 +134,9 @@ Dialog {
                 anchors.top: parent.top
                 anchors.leftMargin: TvTheme.dialogPadding
                 anchors.rightMargin: TvTheme.dialogPadding
-                spacing: TvTheme.dialogSpacing - 3
+                // Wide enough that the focused button's ring and glow stay clear of
+                // its neighbors
+                spacing: TvTheme.dialogSpacing + 1
 
                 Repeater {
                     id: buttonRepeater

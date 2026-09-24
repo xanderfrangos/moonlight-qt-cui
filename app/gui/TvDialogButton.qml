@@ -15,9 +15,16 @@ Button {
 
     readonly property bool filled: activeFocus
 
-    // The focus ring hugs the button's rounded corners
-    readonly property bool focusRingFlush: true
+    // The focus ring follows the button's rounded corners, a pixel out from
+    // it like the top bar's
     readonly property int focusRingRadius: TvTheme.dialogButtonRadius
+
+    // The Material style's insets would shrink the button inside the area
+    // the focus ring surrounds
+    topInset: 0
+    bottomInset: 0
+    leftInset: 0
+    rightInset: 0
 
     implicitHeight: TvTheme.dialogButtonHeight
     font.pixelSize: TvTheme.dialogBodyFont

@@ -12,12 +12,69 @@ import TvTheme 1.0
 Item {
     id: controllerPage
     objectName: qsTr("Controllers")
-    property string pendingFocusId: ""
-    property int pendingFocusControl: 0
 
-    function rememberFocus(id, control) {
+    // The controls in each row, left to right
+    readonly property int identifyColumn: 0
+    readonly property int enabledColumn: 1
+    readonly property int moveUpColumn: 2
+    readonly property int moveDownColumn: 3
+
+    // Where focus goes after an action rebuilds the list, since the rows are
+    // recreated whenever a controller changes
+    property string pendingFocusId: ""
+    property int pendingFocusColumn: 0
+
+    function rememberFocus(id, column) {
         pendingFocusId = id
-        pendingFocusControl = control
+        pendingFocusColumn = column
+    }
+
+    // Focuses the control in a row's column, or the nearest one to it that
+    // can be used. Returns whether anything was focused.
+    function focusControl(row, column) {
+        if (row < 0 || row >= controllerList.count) {
+            return false
+        }
+
+        controllerList.currentIndex = row
+        controllerList.positionViewAtIndex(row, ListView.Contain)
+        var rowItem = controllerList.itemAtIndex(row)
+        if (!rowItem) {
+            return false
+        }
+
+        var controls = rowItem.controls
+        for (var distance = 0; distance < controls.length; distance++) {
+            var candidates = [column - distance, column + distance]
+            for (var i = 0; i < candidates.length; i++) {
+                var control = controls[candidates[i]]
+                if (control && control.enabled && control.visible) {
+                    control.forceActiveFocus(Qt.TabFocusReason)
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    // Moves focus across a row with left and right, skipping controls that
+    // can't be used, or between rows with up and down, staying in the same
+    // column. Up from the first row goes to the top bar.
+    function moveFocus(row, column, rowDelta, columnDelta, fromItem) {
+        if (rowDelta !== 0) {
+            if (!focusControl(row + rowDelta, column) && rowDelta < 0) {
+                fromItem.nextItemInFocusChain(false).forceActiveFocus(Qt.TabFocusReason)
+            }
+            return
+        }
+
+        var controls = controllerList.itemAtIndex(row).controls
+        for (var c = column + columnDelta; c >= 0 && c < controls.length; c += columnDelta) {
+            if (controls[c].enabled && controls[c].visible) {
+                controls[c].forceActiveFocus(Qt.TabFocusReason)
+                return
+            }
+        }
     }
 
     function restorePendingFocus() {
@@ -27,39 +84,80 @@ Item {
         var controllers = SdlGamepadKeyNavigation.controllers
         for (var i = 0; i < controllers.length; i++) {
             if (controllers[i].id === pendingFocusId) {
-                controllerList.currentIndex = i
-                controllerList.positionViewAtIndex(i, ListView.Contain)
-                Qt.callLater(function() {
-                    if (!controllerList.currentItem) return
-                    if (pendingFocusControl === 1 && controllerList.currentItem.upControl.enabled) controllerList.currentItem.upControl.forceActiveFocus(Qt.TabFocusReason)
-                    else if (pendingFocusControl === 2 && controllerList.currentItem.downControl.enabled) controllerList.currentItem.downControl.forceActiveFocus(Qt.TabFocusReason)
-                    else controllerList.currentItem.firstControl.forceActiveFocus(Qt.TabFocusReason)
-                })
+                var row = i
+                var column = pendingFocusColumn
+                Qt.callLater(function() { focusControl(row, column) })
                 break
             }
         }
+        pendingFocusId = ""
+    }
+
+    // The battery level of a controller, from the status list that updates
+    // without rebuilding the rows
+    function batteryFor(id, status) {
+        for (var i = 0; i < status.length; i++) {
+            if (status[i].id === id) {
+                return status[i].battery
+            }
+        }
+        return -1
+    }
+
+    function batteryText(level) {
+        switch (level) {
+        case 0: return qsTr("Battery empty")
+        case 1: return qsTr("Battery low")
+        case 2: return qsTr("Battery medium")
+        case 3: return qsTr("Battery full")
+        case 4: return qsTr("Wired")
+        }
+        return ""
     }
 
     Connections {
         target: SdlGamepadKeyNavigation
         function onControllersChanged() {
-            controllerPage.restorePendingFocus()
-        }
-    }
+            if (controllerPage.pendingFocusId) {
+                controllerPage.restorePendingFocus()
+                return
+            }
 
-    StackView.onActivated: {
-        SdlGamepadKeyNavigation.setUiNavMode(true)
-        if (controllerList.count > 0) {
-            controllerList.currentIndex = 0
+            // The rows are recreated, so put focus back in the list if it
+            // was there, or on the first row if one just appeared. Leave it
+            // alone in the top bar and in dialogs.
             Qt.callLater(function() {
-                if (controllerList.currentItem) {
-                    controllerList.currentItem.firstControl.forceActiveFocus(Qt.TabFocusReason)
+                if (controllerPage.StackView.status !== StackView.Active) {
+                    return
+                }
+                var focusItem = window.activeFocusItem
+                if (focusItem === null || focusItem === controllerPage ||
+                        !(isSelfOrDescendantOf(focusItem, toolBar) || isInPopup(focusItem) ||
+                          isSelfOrDescendantOf(focusItem, controllerList.contentItem))) {
+                    if (controllerList.count > 0) {
+                        focusControl(Math.min(Math.max(controllerList.currentIndex, 0), controllerList.count - 1),
+                                     controllerPage.identifyColumn)
+                    }
+                    else {
+                        controllerPage.forceActiveFocus()
+                    }
                 }
             })
         }
     }
 
-    StackView.onDeactivating: SdlGamepadKeyNavigation.setUiNavMode(false)
+    // The top bar puts focus on the page itself when moving down from it
+    onActiveFocusChanged: {
+        if (activeFocus && controllerList.count > 0) {
+            focusControl(Math.max(controllerList.currentIndex, 0), identifyColumn)
+        }
+    }
+
+    StackView.onActivated: {
+        if (controllerList.count > 0) {
+            Qt.callLater(function() { focusControl(0, identifyColumn) })
+        }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -67,16 +165,16 @@ Item {
         anchors.rightMargin: SystemProperties.tvMode ? TvTheme.focusBleed : 32
         anchors.topMargin: 16
         anchors.bottomMargin: 16
-        spacing: TvTheme.spacingMedium
+        spacing: TvTheme.spacingMediumLarge
 
         Label {
             Layout.fillWidth: true
             text: (StreamingPreferences.multiController ?
-                       qsTr("Enabled controllers are passed to the host in this player order.") :
+                       qsTr("Controllers are passed to the host in this order.") :
                        qsTr("Enabled controllers are combined as Player 1 because Force gamepad #1 always connected is enabled.")) +
-                  " " + qsTr("Press a button on a controller to light up its row.")
+                  " " + qsTr("Press a button on a controller to find its row.")
             color: TvTheme.textSecondary
-            font.pointSize: 14
+            font.pixelSize: TvTheme.fontCaption
             wrapMode: Text.WordWrap
         }
 
@@ -86,7 +184,7 @@ Item {
             visible: controllerList.count === 0
             text: qsTr("No controllers detected")
             color: TvTheme.textSecondary
-            font.pointSize: 22
+            font.pixelSize: TvTheme.fontTitle
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
         }
@@ -96,39 +194,58 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: count > 0
-            clip: true
             spacing: TvTheme.spacingMedium
             model: SdlGamepadKeyNavigation.controllers
+            // The page moves focus between rows itself
+            keyNavigationEnabled: false
 
-            ScrollBar.vertical: ScrollBar { }
+            // Room for the focus ring around the controls in the first and
+            // last rows
+            topMargin: TvTheme.spacingSmall
+            bottomMargin: TvTheme.spacingSmall
 
             delegate: Rectangle {
                 id: controllerRow
-                width: controllerList.width - 16
-                height: 116
-                radius: TvTheme.cardRadius
+                width: controllerList.width
+                height: 128
+                radius: TvTheme.tileRadius
                 color: TvTheme.surface
-                border.width: rowFocus ? 2 : 0
-                border.color: Material.accent
 
-                property alias firstControl: enabledButton
-                property alias upControl: upButton
-                property alias downControl: downButton
-                readonly property bool rowFocus: identifyButton.activeFocus || enabledButton.activeFocus ||
-                                                 upButton.activeFocus || downButton.activeFocus
+                readonly property var controls: [identifyButton, enabledSwitch, upButton, downButton]
+                readonly property int battery: controllerPage.batteryFor(modelData.id, SdlGamepadKeyNavigation.controllerStatus)
+
+                function focusedColumn() {
+                    for (var i = 0; i < controls.length; i++) {
+                        if (controls[i].activeFocus) {
+                            return i
+                        }
+                    }
+                    return 0
+                }
+
+                function toggleEnabled() {
+                    controllerPage.rememberFocus(modelData.id, controllerPage.enabledColumn)
+                    SdlGamepadKeyNavigation.setControllerEnabled(modelData.id, !modelData.enabled)
+                }
+
+                // Arrow keys the focused control doesn't use arrive here
+                Keys.onLeftPressed: controllerPage.moveFocus(index, focusedColumn(), 0, -1, identifyButton)
+                Keys.onRightPressed: controllerPage.moveFocus(index, focusedColumn(), 0, 1, identifyButton)
+                Keys.onUpPressed: controllerPage.moveFocus(index, focusedColumn(), -1, 0, identifyButton)
+                Keys.onDownPressed: controllerPage.moveFocus(index, focusedColumn(), 1, 0, identifyButton)
 
                 // Lights up whenever a button is pressed on this controller, so
                 // the user can match the rows to the controllers in their hands
                 Rectangle {
                     id: activityLight
                     anchors.left: parent.left
-                    anchors.leftMargin: 10
+                    anchors.leftMargin: 14
                     anchors.verticalCenter: parent.verticalCenter
                     width: 6
-                    height: parent.height - 40
+                    height: parent.height - 48
                     radius: width / 2
-                    color: Material.accent
-                    opacity: 0.12
+                    color: TvTheme.accent
+                    opacity: 0.15
 
                     SequentialAnimation {
                         id: activityAnimation
@@ -137,7 +254,7 @@ Item {
                         NumberAnimation {
                             target: activityLight
                             property: "opacity"
-                            to: 0.12
+                            to: 0.15
                             duration: 600
                             easing.type: Easing.InQuad
                         }
@@ -155,93 +272,145 @@ Item {
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: 24
-                    anchors.rightMargin: 24
-                    spacing: TvTheme.spacingMedium
+                    anchors.leftMargin: 38
+                    anchors.rightMargin: TvTheme.spacingLarge
+                    spacing: TvTheme.spacingMediumLarge
 
-                    ColumnLayout {
+                    // The controller's details. Controllers that aren't passed
+                    // to the host are dimmed, but their controls aren't, so they
+                    // can still be turned back on.
+                    RowLayout {
                         Layout.fillWidth: true
-                        spacing: 4
+                        spacing: TvTheme.spacingMediumLarge
+                        opacity: modelData.enabled ? 1.0 : 0.55
 
-                        Label {
-                            Layout.fillWidth: true
-                            text: modelData.name
-                            font.pointSize: 18
-                            font.bold: true
-                            elide: Text.ElideRight
+                        // The player number
+                        Rectangle {
+                            Layout.preferredWidth: 72
+                            Layout.preferredHeight: 72
+                            radius: width / 2
+                            color: modelData.enabled ? TvTheme.accent : TvTheme.surfaceRaised
+
+                            Label {
+                                anchors.centerIn: parent
+                                text: modelData.enabled ? qsTr("P%1").arg(modelData.playerNumber) : "–"
+                                color: modelData.enabled ? TvTheme.accentText : TvTheme.textTertiary
+                                font.pixelSize: TvTheme.fontLabel
+                                font.weight: Font.Bold
+                            }
                         }
 
-                        Label {
-                            Layout.fillWidth: true
-                            visible: modelData.metadata.length > 0
-                            text: modelData.metadata
-                            color: TvTheme.textSecondary
-                            font.pointSize: 13
-                            elide: Text.ElideRight
+                        Image {
+                            source: "qrc:/res/ic_videogame_asset_white_48px.svg"
+                            sourceSize.width: 56
+                            sourceSize.height: 56
+                            opacity: 0.6
                         }
 
-                        Label {
-                            text: modelData.enabled ? qsTr("Player %1").arg(modelData.playerNumber) : qsTr("Not passed to host")
-                            color: TvTheme.textSecondary
-                            font.pointSize: 12
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: modelData.name
+                                color: TvTheme.textPrimary
+                                font.pixelSize: TvTheme.fontBody
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideRight
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 10
+
+                                TvBatteryIcon {
+                                    level: controllerRow.battery
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: {
+                                        var parts = []
+                                        if (!modelData.enabled) {
+                                            parts.push(qsTr("Not passed to host"))
+                                        }
+                                        var battery = controllerPage.batteryText(controllerRow.battery)
+                                        if (battery !== "") {
+                                            parts.push(battery)
+                                        }
+                                        if (modelData.metadata.length > 0) {
+                                            parts.push(modelData.metadata)
+                                        }
+                                        return parts.join(" · ")
+                                    }
+                                    color: TvTheme.textSecondary
+                                    font.pixelSize: TvTheme.fontCaption
+                                    elide: Text.ElideRight
+                                }
+                            }
                         }
                     }
 
-                    Button {
+                    TvPillButton {
                         id: identifyButton
                         text: qsTr("Identify")
                         enabled: modelData.canIdentify
                         onClicked: SdlGamepadKeyNavigation.identifyController(modelData.id)
                         onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
+                    }
+
+                    Switch {
+                        id: enabledSwitch
+                        text: modelData.enabled ? qsTr("Enabled") : qsTr("Disabled")
+                        checked: modelData.enabled
+                        font.pixelSize: TvTheme.fontLabel
+                        font.weight: Font.DemiBold
+                        Layout.leftMargin: TvTheme.spacingSmall
+                        Layout.rightMargin: TvTheme.spacingSmall
+
+                        // Clicks, touch, and Space toggle the switch themselves.
+                        // The gamepad's A button arrives as Return.
+                        onClicked: controllerRow.toggleEnabled()
+                        Keys.onReturnPressed: controllerRow.toggleEnabled()
+                        Keys.onEnterPressed: controllerRow.toggleEnabled()
+                        onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
+                    }
+
+                    TvPillButton {
+                        id: upButton
+                        iconSource: "qrc:/res/arrow_left.svg"
+                        iconRotation: 90
+                        enabled: modelData.canMoveUp
+                        Accessible.name: qsTr("Move up")
+                        onClicked: {
+                            controllerPage.rememberFocus(modelData.id, controllerPage.moveUpColumn)
+                            SdlGamepadKeyNavigation.moveController(modelData.id, -1)
+                        }
+                        onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
 
                         ToolTip.delay: 1000
                         ToolTip.timeout: 3000
                         ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                        ToolTip.text: modelData.canIdentify ? qsTr("Rumble this controller") :
-                                                              qsTr("This controller can't rumble")
+                        ToolTip.text: qsTr("Move up")
                     }
 
-                    Button {
-                        id: enabledButton
-                        text: modelData.enabled ? qsTr("Enabled") : qsTr("Disabled")
-                        highlighted: modelData.enabled
-
-                        // Material draws highlighted text in white, which
-                        // doesn't contrast with the TV mode accent
-                        Binding {
-                            target: enabledButton.contentItem
-                            property: "color"
-                            value: TvTheme.accentText
-                            when: enabledButton.highlighted && SystemProperties.tvMode
-                        }
-
-                        onClicked: {
-                            controllerPage.rememberFocus(modelData.id, 0)
-                            SdlGamepadKeyNavigation.setControllerEnabled(modelData.id, !modelData.enabled)
-                        }
-                        onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
-                    }
-
-                    Button {
-                        id: upButton
-                        text: qsTr("Move Up")
-                        enabled: modelData.canMoveUp
-                        onClicked: {
-                            controllerPage.rememberFocus(modelData.id, 1)
-                            SdlGamepadKeyNavigation.moveController(modelData.id, -1)
-                        }
-                        onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
-                    }
-
-                    Button {
+                    TvPillButton {
                         id: downButton
-                        text: qsTr("Move Down")
+                        iconSource: "qrc:/res/arrow_left.svg"
+                        iconRotation: -90
                         enabled: modelData.canMoveDown
+                        Accessible.name: qsTr("Move down")
                         onClicked: {
-                            controllerPage.rememberFocus(modelData.id, 2)
+                            controllerPage.rememberFocus(modelData.id, controllerPage.moveDownColumn)
                             SdlGamepadKeyNavigation.moveController(modelData.id, 1)
                         }
                         onActiveFocusChanged: if (activeFocus) controllerList.currentIndex = index
+
+                        ToolTip.delay: 1000
+                        ToolTip.timeout: 3000
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                        ToolTip.text: qsTr("Move down")
                     }
                 }
             }

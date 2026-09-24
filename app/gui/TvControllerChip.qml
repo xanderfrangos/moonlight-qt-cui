@@ -14,8 +14,6 @@ Rectangle {
     property int battery: -1
     property bool dimmed: false
 
-    readonly property bool showBattery: battery >= 0 && battery <= 3
-    readonly property color batteryColor: battery <= 1 ? TvTheme.statusError : TvTheme.textSecondary
 
     // Sizes the top bar uses to plan its layout before the chips exist
     readonly property int horizontalPadding: 18
@@ -50,32 +48,10 @@ Rectangle {
             font.weight: Font.DemiBold
         }
 
-        // Three bars in an outline, like a phone's battery icon
-        Rectangle {
-            visible: chip.showBattery
+        TvBatteryIcon {
             anchors.verticalCenter: parent.verticalCenter
             width: chip.batteryWidth
-            height: 16
-            radius: 4
-            color: "transparent"
-            border.width: 2
-            border.color: chip.batteryColor
-
-            Row {
-                anchors.centerIn: parent
-                spacing: 2
-
-                Repeater {
-                    model: 3
-
-                    Rectangle {
-                        width: 6
-                        height: 8
-                        radius: 1
-                        color: index < chip.battery ? chip.batteryColor : TvTheme.stroke
-                    }
-                }
-            }
+            level: chip.battery
         }
     }
 }
