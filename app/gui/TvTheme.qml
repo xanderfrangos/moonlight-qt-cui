@@ -58,6 +58,12 @@ QtObject {
     readonly property int focusGlowWidth: 6
     readonly property real focusScale: 1.06
 
+    // Pages extend this far past the safe area, and keep their content this
+    // far in from their own edges. The content lines up with the top and
+    // bottom bars, and focused items have room to grow and glow without
+    // being clipped at the page edge.
+    readonly property int focusBleed: 24
+
     // Box art and small cards
     readonly property int cardRadius: 12
     // Larger tiles, like the computer cards

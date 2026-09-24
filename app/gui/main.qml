@@ -239,8 +239,8 @@ ApplicationWindow {
     StackView {
         id: stackView
         anchors.fill: parent
-        anchors.leftMargin: tvSafeX
-        anchors.rightMargin: tvSafeX
+        anchors.leftMargin: SystemProperties.tvMode ? tvSafeX - TvTheme.focusBleed : 0
+        anchors.rightMargin: SystemProperties.tvMode ? tvSafeX - TvTheme.focusBleed : 0
         focus: true
 
         // What had focus on each page in the stack when we navigated away from
@@ -563,7 +563,6 @@ ApplicationWindow {
                 horizontalAlignment: SystemProperties.tvMode ? Qt.AlignLeft : Qt.AlignHCenter
                 verticalAlignment: Qt.AlignVCenter
                 Layout.fillWidth: true
-                Layout.leftMargin: SystemProperties.tvMode ? 8 : 0
 
                 // The TV mode type scale overrides the point size above
                 Binding {

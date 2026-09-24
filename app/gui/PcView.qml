@@ -20,17 +20,14 @@ CenteredGridView {
     topMargin: SystemProperties.tvMode ? 30 : 20
     bottomMargin: 5
 
-    // TV mode cards have room around them to grow when focused, and the grid
-    // is shifted so the cards are centered in their cells
+    // TV mode spreads the cards across the page, lined up with the top and
+    // bottom bars, with room at the edges for the focused card to grow
     readonly property int tvCardWidth: 312
     readonly property int tvCardHeight: 354
-    minMargin: SystemProperties.tvMode ? TvTheme.spacingMediumLarge : 10
-    leftInset: SystemProperties.tvMode ? (rowsFilled ? minMargin : 0) + (cellWidth - tvCardWidth) / 2 : 0
-    // The cards are shifted right within their cells by the left inset, so
-    // take the same amount off the right to leave exactly the room for the
-    // columns that fit
-    rightInset: SystemProperties.tvMode ? (rowsFilled ? minMargin : 0) - (cellWidth - tvCardWidth) / 2 : 0
-    cellWidth: SystemProperties.tvMode ? tvCardWidth + 54 : 310
+    minMargin: SystemProperties.tvMode ? TvTheme.focusBleed : 10
+    tvItemWidth: tvCardWidth
+    tvMinSpacing: 54
+    cellWidth: SystemProperties.tvMode ? tvCellWidth : 310
     cellHeight: SystemProperties.tvMode ? tvCardHeight + 46 : 330
     objectName: qsTr("Computers")
 

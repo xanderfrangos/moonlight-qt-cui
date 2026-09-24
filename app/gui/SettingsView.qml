@@ -8,6 +8,7 @@ import ComputerManager 1.0
 import SdlGamepadKeyNavigation 1.0
 import InputModeTracker 1.0
 import SystemProperties 1.0
+import TvTheme 1.0
 
 Flickable {
     // The TV mode toolbar and hint bar are transparent, so settings must not
@@ -219,8 +220,10 @@ Flickable {
 
     Column {
         padding: 10
+        // TV mode lines the content up with the top and bottom bars
+        leftPadding: SystemProperties.tvMode ? TvTheme.focusBleed : 10
         // Leave room for the scroll bar when this column spans the page
-        rightPadding: singleColumn ? 20 : 10
+        rightPadding: singleColumn ? (SystemProperties.tvMode ? TvTheme.focusBleed : 20) : 10
         id: settingsColumn1
         width: singleColumn ? settingsPage.width : settingsPage.width / 2
         spacing: 15
@@ -1854,7 +1857,8 @@ Flickable {
 
     Column {
         padding: 10
-        rightPadding: 20
+        leftPadding: singleColumn && SystemProperties.tvMode ? TvTheme.focusBleed : 10
+        rightPadding: SystemProperties.tvMode ? TvTheme.focusBleed : 20
         x: singleColumn ? 0 : settingsColumn1.width
         y: singleColumn ? settingsColumn1.height : 0
         id: settingsColumn2

@@ -63,8 +63,8 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.leftMargin: 32
-        anchors.rightMargin: 32
+        anchors.leftMargin: SystemProperties.tvMode ? TvTheme.focusBleed : 32
+        anchors.rightMargin: SystemProperties.tvMode ? TvTheme.focusBleed : 32
         anchors.topMargin: 16
         anchors.bottomMargin: 16
         spacing: TvTheme.spacingMedium

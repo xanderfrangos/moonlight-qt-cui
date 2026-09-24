@@ -20,21 +20,18 @@ CenteredGridView {
     id: appGrid
     focus: true
     activeFocusOnTab: true
-    // Leave room for the focused card to grow at the edges in TV mode. Each
-    // card sits at the left of its cell, so shift the grid right by half of
-    // the unused cell width to center the cards.
-    minMargin: SystemProperties.tvMode ? 40 : 10
-    leftInset: SystemProperties.tvMode ? (rowsFilled ? minMargin : 0) + (cellWidth - tvCardWidth) / 2 : 0
-    // The cards are shifted right within their cells by the left inset, so
-    // take the same amount off the right to leave exactly the room for the
-    // columns that fit
-    rightInset: SystemProperties.tvMode ? (rowsFilled ? minMargin : 0) - (cellWidth - tvCardWidth) / 2 : 0
+    // TV mode spreads the cards across the page, lined up with the top and
+    // bottom bars, with room at the edges for the focused card to grow
+    minMargin: SystemProperties.tvMode ? TvTheme.focusBleed : 10
+    tvItemWidth: tvCardWidth
+    tvMinSpacing: 30
     topMargin: SystemProperties.tvMode ? 30 : 20
     bottomMargin: 5
     // TV mode uses bigger box art with more room around each card, since
     // the focused card grows and shows the game's name underneath
-    readonly property int tvCardWidth: 260
-    cellWidth: SystemProperties.tvMode ? tvCardWidth + 30 : 230
+    // The card is as wide as its box art, so the art lines up with the bars
+    readonly property int tvCardWidth: 240
+    cellWidth: SystemProperties.tvMode ? tvCellWidth : 230
     cellHeight: SystemProperties.tvMode ? 425 : 297
 
     // Shown blurred behind the page in TV mode
