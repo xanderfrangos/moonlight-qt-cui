@@ -470,7 +470,7 @@ CenteredGridView {
                 }
             } else if (!model.online) {
                 // Using open() here because it may be activated by keyboard
-                pcContextMenu.open()
+                pcContextMenu.openCentered()
             }
         }
 
@@ -496,7 +496,7 @@ CenteredGridView {
         Keys.onMenuPressed: {
             // We must use open() here so the menu is positioned on
             // the ItemDelegate and not where the mouse cursor is
-            pcContextMenu.open()
+            pcContextMenu.openCentered()
         }
 
         Keys.onDeletePressed: {

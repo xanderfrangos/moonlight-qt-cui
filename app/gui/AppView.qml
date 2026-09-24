@@ -385,7 +385,7 @@ import AppModel 1.0; AppModel {}', parent, '')
             if (model.running) {
                 // This will be keyboard/gamepad driven so use
                 // open() instead of popup()
-                appContextMenu.open()
+                appContextMenu.openCentered()
             }
         }
 
@@ -396,13 +396,13 @@ import AppModel 1.0; AppModel {}', parent, '')
             if (model.running) {
                 // This will be keyboard/gamepad driven so use
                 // open() instead of popup()
-                appContextMenu.open()
+                appContextMenu.openCentered()
             }
         }
 
         Keys.onMenuPressed: {
             // This will be keyboard/gamepad driven so use open() instead of popup()
-            appContextMenu.open()
+            appContextMenu.openCentered()
         }
 
         function doQuitGame() {
