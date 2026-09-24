@@ -1119,12 +1119,68 @@ Flickable {
                     font.pointSize: 12
                     visible: SystemProperties.supportsFsr1Upscaling
                     checked: StreamingPreferences.fsr1Upscaling
-                    onCheckedChanged: StreamingPreferences.fsr1Upscaling = checked
+                    onCheckedChanged: {
+                        StreamingPreferences.fsr1Upscaling = checked
+                        if (checked) StreamingPreferences.ls1Upscaling = false
+                    }
 
                     ToolTip.delay: 1000
                     ToolTip.timeout: 10000
                     ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("Sharpens and upscales a lower-resolution stream on Linux using the Vulkan renderer. It may add GPU work and latency. Reconnect the stream after changing this setting.")
+                }
+
+                CheckBox {
+                    width: parent.width
+                    text: qsTr("LS1 upscaling (Vulkan)")
+                    font.pointSize: 12
+                    visible: SystemProperties.supportsFsr1Upscaling
+                    checked: StreamingPreferences.ls1Upscaling
+                    onCheckedChanged: {
+                        StreamingPreferences.ls1Upscaling = checked
+                        if (checked) StreamingPreferences.fsr1Upscaling = false
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 10000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Uses LS1 from your Steam-installed Lossless Scaling on Linux. Requires a compatible libvkd3d-shader on this PC. Works with SDR streams. Reconnect after changing this setting.")
+                }
+
+                Column {
+                    width: parent.width
+                    spacing: 5
+                    visible: SystemProperties.supportsFsr1Upscaling && StreamingPreferences.ls1Upscaling
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("Lossless.dll path (blank to find Steam installation)")
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                    }
+
+                    TextField {
+                        width: parent.width
+                        text: StreamingPreferences.ls1DllPath
+                        placeholderText: qsTr("Automatic Steam path")
+                        onEditingFinished: StreamingPreferences.ls1DllPath = text.trim()
+                    }
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("LS1 sharpness: %1").arg(StreamingPreferences.ls1Sharpness)
+                        font.pointSize: 12
+                    }
+
+                    NavigableSlider {
+                        width: parent.width
+                        from: 0
+                        to: 100
+                        stepSize: 25
+                        snapMode: "SnapAlways"
+                        value: StreamingPreferences.ls1Sharpness
+                        onMoved: StreamingPreferences.ls1Sharpness = Math.round(value / 25) * 25
+                    }
                 }
 
                 Column {

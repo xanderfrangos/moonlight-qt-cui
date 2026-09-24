@@ -48,6 +48,9 @@
 #define SER_DEBANDMODE "debandmode"
 #define SER_FSR1UPSCALING "fsr1upscaling"
 #define SER_FSR1RCASSHARPNESS "fsr1rcassharpness"
+#define SER_LS1UPSCALING "ls1upscaling"
+#define SER_LS1SHARPNESS "ls1sharpness"
+#define SER_LS1DLLPATH "ls1dllpath"
 #define SER_VIDEODEC "videodec"
 #define SER_WINDOWMODE "windowmode"
 #define SER_MDNS "mdns"
@@ -181,6 +184,9 @@ void StreamingPreferences::reload()
     }
     fsr1Upscaling = settings.value(SER_FSR1UPSCALING, false).toBool();
     fsr1RcasSharpness = qBound(0.0, settings.value(SER_FSR1RCASSHARPNESS, 62.5).toDouble(), 100.0);
+    ls1Upscaling = settings.value(SER_LS1UPSCALING, false).toBool();
+    ls1Sharpness = qBound(0, settings.value(SER_LS1SHARPNESS, 50).toInt(), 100);
+    ls1DllPath = settings.value(SER_LS1DLLPATH).toString();
     bitrateKbps = settings.value(SER_BITRATE, getDefaultBitrate(width, height, fps, enableYUV444)).toInt();
     unlockBitrate = settings.value(SER_UNLOCK_BITRATE, false).toBool();
     autoAdjustBitrate = settings.value(SER_AUTOADJUSTBITRATE, true).toBool();
@@ -578,6 +584,9 @@ void StreamingPreferences::save()
     settings.setValue(SER_DEBANDMODE, debandMode);
     settings.setValue(SER_FSR1UPSCALING, fsr1Upscaling);
     settings.setValue(SER_FSR1RCASSHARPNESS, fsr1RcasSharpness);
+    settings.setValue(SER_LS1UPSCALING, ls1Upscaling);
+    settings.setValue(SER_LS1SHARPNESS, ls1Sharpness);
+    settings.setValue(SER_LS1DLLPATH, ls1DllPath);
     settings.remove(SER_DITHERING); // Superseded by the kernel selection
     settings.setValue(SER_VIDEOCFG, static_cast<int>(videoCodecConfig));
     settings.setValue(SER_VIDEODEC, static_cast<int>(videoDecoderSelection));

@@ -30,6 +30,7 @@ extern "C" {
 #include <thread>
 #ifdef Q_OS_LINUX
 #include <QFile>
+#include "ls1shaders.h"
 #endif
 
 #ifndef VK_KHR_video_decode_av1
@@ -337,6 +338,8 @@ PlVkRenderer::~PlVkRenderer()
         pl_renderer_destroy(&m_Renderer);
 #ifdef Q_OS_LINUX
         // Hooks may own GPU resources, so release them before the GPU device.
+        m_Ls1Hook.reset();
+        m_Ls1HookPtr = nullptr;
         if (m_Fsr1HdrHook) pl_mpv_user_shader_destroy(&m_Fsr1HdrHook);
         if (m_Fsr1Hook) pl_mpv_user_shader_destroy(&m_Fsr1Hook);
 #endif
@@ -523,6 +526,16 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
     vkParams.get_proc_addr = m_PlVkInstance->get_proc_addr;
     vkParams.surface = m_VkSurface;
     vkParams.device = device;
+#ifdef Q_OS_LINUX
+    // LS1's feature image is R8_SNORM, which needs the extended storage-image
+    // feature enabled at device creation. libplacebo enables it opportunistically.
+    VkPhysicalDeviceFeatures2 ls1Features{};
+    if (decoderParams->ls1Upscaling) {
+        ls1Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        ls1Features.features.shaderStorageImageExtendedFormats = VK_TRUE;
+        vkParams.features = &ls1Features;
+    }
+#endif
 
     if (m_HwDeviceType == AV_HWDEVICE_TYPE_VULKAN) {
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(60, 26, 100)
@@ -945,7 +958,27 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
 #endif
 
 #ifdef Q_OS_LINUX
-    if (params->fsr1Upscaling) {
+    if (params->ls1Upscaling) {
+        const QString dllPath = findLosslessScalingDll(params->ls1DllPath);
+        if (dllPath.isEmpty()) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "LS1 requested, but no Steam-installed Lossless.dll was found");
+        } else {
+            m_Ls1Hook = std::make_unique<Ls1VulkanHook>(
+                m_Vulkan, dllPath, qBound(0, params->ls1Sharpness, 100) / 25);
+            if (m_Ls1Hook->ready()) {
+                m_Ls1HookPtr = m_Ls1Hook->hook();
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "LS1 upscaling enabled with user-installed Lossless.dll");
+            } else {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "LS1 unavailable: %s; using standard Vulkan scaling",
+                             qPrintable(m_Ls1Hook->error()));
+                m_Ls1Hook.reset();
+            }
+        }
+    }
+    else if (params->fsr1Upscaling) {
         const double sharpness = qBound(0.0, params->fsr1RcasSharpness, 100.0);
         const QByteArray shaderSharpness =
             "#define SHARPNESS " + QByteArray::number((100.0 - sharpness) / 50.0, 'f', 2);
@@ -2541,7 +2574,11 @@ pl_render_params PlVkRenderer::renderParamsForFrame(const AVFrame* frame) const
 {
     pl_render_params params = m_RenderParams;
 #ifdef Q_OS_LINUX
-    if (m_Fsr1Hook != nullptr) {
+    if (m_Ls1HookPtr != nullptr) {
+        params.hooks = &m_Ls1HookPtr;
+        params.num_hooks = 1;
+    }
+    else if (m_Fsr1Hook != nullptr) {
         const bool pq = frame != nullptr && frame->color_trc == AVCOL_TRC_SMPTE2084;
         params.hooks = pq && m_Fsr1HdrHook != nullptr ? &m_Fsr1HdrHook : &m_Fsr1Hook;
         params.num_hooks = 1;

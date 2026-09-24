@@ -292,6 +292,9 @@ public:
     Q_PROPERTY(int debandMode MEMBER debandMode NOTIFY debandModeChanged)
     Q_PROPERTY(bool fsr1Upscaling MEMBER fsr1Upscaling NOTIFY fsr1UpscalingChanged)
     Q_PROPERTY(double fsr1RcasSharpness MEMBER fsr1RcasSharpness NOTIFY fsr1RcasSharpnessChanged)
+    Q_PROPERTY(bool ls1Upscaling MEMBER ls1Upscaling NOTIFY ls1UpscalingChanged)
+    Q_PROPERTY(int ls1Sharpness MEMBER ls1Sharpness NOTIFY ls1SharpnessChanged)
+    Q_PROPERTY(QString ls1DllPath MEMBER ls1DllPath NOTIFY ls1DllPathChanged)
     Q_PROPERTY(VideoDecoderSelection videoDecoderSelection MEMBER videoDecoderSelection NOTIFY videoDecoderSelectionChanged)
     Q_PROPERTY(RendererSelection rendererSelection MEMBER rendererSelection NOTIFY rendererSelectionChanged)
     Q_PROPERTY(WindowMode windowMode MEMBER windowMode NOTIFY windowModeChanged)
@@ -399,6 +402,10 @@ public:
     bool fsr1Upscaling;
     // RCAS sharpness slider (0-100), with the shader's 0.75-stop default at 62.5.
     double fsr1RcasSharpness;
+    // Linux Vulkan LS1 uses the user's Lossless Scaling DLL at runtime.
+    bool ls1Upscaling;
+    int ls1Sharpness;
+    QString ls1DllPath;
     VideoDecoderSelection videoDecoderSelection;
     WindowMode windowMode;
     WindowMode recommendedFullScreenMode;
@@ -440,6 +447,9 @@ signals:
     void debandModeChanged();
     void fsr1UpscalingChanged();
     void fsr1RcasSharpnessChanged();
+    void ls1UpscalingChanged();
+    void ls1SharpnessChanged();
+    void ls1DllPathChanged();
     void videoDecoderSelectionChanged();
     void uiDisplayModeChanged();
     void uiScaleChanged();

@@ -416,8 +416,14 @@ libplacebo {
         streaming/video/ffmpeg-renderers/plvkpresentation.h \
         streaming/video/ffmpeg-renderers/plvkswapchain.h
     linux {
-        SOURCES += streaming/video/ffmpeg-renderers/vulkantiming.cpp
-        HEADERS += streaming/video/ffmpeg-renderers/vulkantiming.h
+        SOURCES += \
+            streaming/video/ffmpeg-renderers/vulkantiming.cpp \
+            streaming/video/ffmpeg-renderers/ls1shaders.cpp \
+            streaming/video/ffmpeg-renderers/ls1vulkan.cpp
+        HEADERS += \
+            streaming/video/ffmpeg-renderers/vulkantiming.h \
+            streaming/video/ffmpeg-renderers/ls1shaders.h \
+            streaming/video/ffmpeg-renderers/ls1vulkan.h
     }
 
     macx {

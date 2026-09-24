@@ -13,6 +13,7 @@
 #include <libplacebo/vulkan.h>
 #ifdef Q_OS_LINUX
 #include <libplacebo/shaders/custom.h>
+#include "ls1vulkan.h"
 #endif
 #include "overlaycompletion.h"
 #include "diagnostics/gputrace.h"
@@ -191,6 +192,8 @@ private:
 #ifdef Q_OS_LINUX
     const pl_hook* m_Fsr1Hook = nullptr;
     const pl_hook* m_Fsr1HdrHook = nullptr;
+    std::unique_ptr<Ls1VulkanHook> m_Ls1Hook;
+    const pl_hook* m_Ls1HookPtr = nullptr;
 #endif
 
 #ifdef Q_OS_LINUX

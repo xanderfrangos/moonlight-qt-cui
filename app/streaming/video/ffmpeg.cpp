@@ -421,13 +421,14 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
     bool vulkanIsSlow;
 #ifdef HAVE_LIBPLACEBO_VULKAN
 #if defined(Q_OS_UNIX) && !defined(Q_OS_DARWIN)
-    // VRR and FSR1 need the Vulkan frontend. The probe uses the same preference
+    // VRR, FSR1, and LS1 need the Vulkan frontend. The probe uses the same preference
     // so its color-range request matches playback. An initialization failure
     // still lets the normal renderer fallback run.
     const bool preferVulkanForVrr =
         decoderPrefersVrrCapableRenderer(params->enableVrr, params->preferVrrRenderer);
 #ifdef Q_OS_LINUX
-    const bool preferVulkan = preferVulkanForVrr || params->fsr1Upscaling;
+    const bool preferVulkan = preferVulkanForVrr || params->fsr1Upscaling ||
+                              params->ls1Upscaling;
 #else
     const bool preferVulkan = preferVulkanForVrr;
 #endif
@@ -467,8 +468,8 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
                 // rendering HDR with Vulkan if possible since it's more fully featured than DRM.
                 if (preferVulkan) {
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                                params->fsr1Upscaling && !preferVulkanForVrr ?
-                                    "FSR1 requested: preferring Vulkan frontend on Linux" :
+                                (params->fsr1Upscaling || params->ls1Upscaling) && !preferVulkanForVrr ?
+                                    "Upscaling requested: preferring Vulkan frontend on Linux" :
                                 params->enableVrr ?
                                     "VRR requested: preferring Vulkan frontend on Linux" :
                                     "VRR renderer policy: preferring Vulkan frontend on Linux without enabling VRR presentation");
@@ -516,8 +517,8 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
             if (preferVulkan || qgetenv("PREFER_VULKAN") == "1") {
                 if (preferVulkan) {
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                                params->fsr1Upscaling && !preferVulkanForVrr ?
-                                    "FSR1 requested: preferring Vulkan frontend on Linux" :
+                                (params->fsr1Upscaling || params->ls1Upscaling) && !preferVulkanForVrr ?
+                                    "Upscaling requested: preferring Vulkan frontend on Linux" :
                                 params->enableVrr ?
                                     "VRR requested: preferring Vulkan frontend on Linux" :
                                     "VRR renderer policy: preferring Vulkan frontend on Linux without enabling VRR presentation");
@@ -2030,7 +2031,7 @@ bool FFmpegVideoDecoder::tryInitializeRendererForUnknownDecoder(const AVCodec* d
         // Supported output pixel formats are unknown. We'll just try DRM/SDL and hope it can cope.
 
 #if defined(Q_OS_LINUX) && defined(HAVE_LIBPLACEBO_VULKAN)
-        if (params->fsr1Upscaling &&
+        if ((params->fsr1Upscaling || params->ls1Upscaling) &&
                 tryInitializeRenderer(decoder, AV_PIX_FMT_NONE, params, nullptr, nullptr,
                                       []() -> IFFmpegRenderer* { return new PlVkRenderer(); })) {
             return true;
@@ -2085,7 +2086,7 @@ bool FFmpegVideoDecoder::tryInitializeRendererForUnknownDecoder(const AVCodec* d
 
     // Check if any of our decoders prefer any of the pixel formats first
 #if defined(Q_OS_LINUX) && defined(HAVE_LIBPLACEBO_VULKAN)
-    if (params->fsr1Upscaling) {
+    if (params->fsr1Upscaling || params->ls1Upscaling) {
         for (int i = 0; decoder_pix_fmts[i] != AV_PIX_FMT_NONE; i++) {
             TRY_PREFERRED_PIXEL_FORMAT(PlVkRenderer);
         }

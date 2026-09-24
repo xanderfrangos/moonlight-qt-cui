@@ -1,5 +1,26 @@
 # Streaming, VRR, and timing architecture
 
+Linux Vulkan LS1 integration (2026-09-24, based on MAKO's GPL-3.0-or-later
+implementation): the opt-in `ls1upscaling` setting selects the Vulkan frontend
+and adds a four-stage LS1 Quality compute hook at libplacebo's resizable RGB
+stage. Libplacebo debands the decoded image before this hook and applies final
+output dithering afterward. The hook is limited to SDR, whole-image RGB input,
+and output sizes larger than the source. It uses the user's Steam-installed
+`Lossless.dll` (or an explicit path) and loads `libvkd3d-shader.so.1` at runtime;
+neither is linked, bundled, or persisted by the app. The DLL's model resources
+are parsed and translated in memory when the stream renderer starts. The
+reconstruction writes to libplacebo's floating-point output texture, and
+timeline semaphores synchronize the app's four Vulkan compute passes with
+libplacebo. A missing DLL, incompatible translator, or unsupported Vulkan
+feature leaves standard scaling active and logs the reason. FSR1 and LS1 are
+mutually exclusive in settings. LS1 adds GPU work; live frame rate and VRR
+readiness still need measurement on a supported Linux GPU. The user's Windows
+Steam DLL passed resource extraction and all four stages translated with
+open-source vkd3d 1.17 in a local test. A headless Lavapipe test with Vulkan
+validation submitted all five sharpness variants and read back nonzero output
+pixels without validation errors. That does not establish visual quality or
+live-stream performance.
+
 This is the persistent technical orientation for this fork. Read it at the start
 of a session working on streaming, decoding, rendering, VRR, latency, or replay.
 It explains the implementation and the reasoning needed to investigate it;
