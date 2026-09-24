@@ -4,6 +4,7 @@ TEMPLATE = subdirs
 CONFIG += ordered
 
 contains(CONFIG, tests) {
+    SUBDIRS += common
     SUBDIRS += vrr
     SUBDIRS += haptics
 } else {

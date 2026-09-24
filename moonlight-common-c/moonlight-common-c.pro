@@ -69,7 +69,7 @@ SOURCES += \
     $$COMMON_C_DIR/src/RtpVideoQueue.c \
     $$COMMON_C_DIR/src/RtspConnection.c \
     $$COMMON_C_DIR/src/RtspParser.c \
-    $$COMMON_C_DIR/src/SdpGenerator.c \
+    $$PWD/SdpGeneratorExtensions.c \
     $$COMMON_C_DIR/src/SimpleStun.c \
     $$COMMON_C_DIR/src/VideoDepacketizer.c \
     $$COMMON_C_DIR/src/VideoStream.c
