@@ -130,6 +130,7 @@ CenteredGridView {
             width: parent.width
             text: StreamingPreferences.enableMdns ? qsTr("Searching for compatible hosts on your local network...")
                                                   : qsTr("Automatic PC discovery is disabled.")
+            font.family: TvTheme.displayFontFamily
             font.pixelSize: TvTheme.fontTitle
             font.weight: Font.DemiBold
             horizontalAlignment: Text.AlignHCenter

@@ -28,7 +28,7 @@ Button {
 
     implicitHeight: TvTheme.dialogButtonHeight
     font.pixelSize: TvTheme.dialogBodyFont
-    font.weight: Font.Bold
+    font.weight: Font.DemiBold
 
     contentItem: Label {
         text: button.text

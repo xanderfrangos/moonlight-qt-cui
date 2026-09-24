@@ -10,6 +10,7 @@
 #include <QNetworkProxyFactory>
 #include <QPalette>
 #include <QFont>
+#include <QFontDatabase>
 #include <QCursor>
 #include <QElapsedTimer>
 #include <QTemporaryFile>
@@ -1104,6 +1105,21 @@ int main(int argc, char *argv[])
 
     qInfo() << "TV mode:" << tvMode << (tvModeArgument >= 0 ? "(from command line)" : "");
     SystemProperties::setTvModeState(tvMode, tvModeArgument >= 0);
+    if (tvMode) {
+        // TV mode's typefaces are bundled, with their licenses beside them.
+        // Figtree is the default and QML asks for Sora by name for titles.
+        for (const QString& fontFile : { QStringLiteral(":/res/fonts/Figtree.ttf"),
+                                         QStringLiteral(":/res/fonts/Sora.ttf") }) {
+            if (QFontDatabase::addApplicationFont(fontFile) < 0) {
+                qWarning() << "Failed to load font:" << fontFile;
+            }
+        }
+
+        QFont font = app.font();
+        font.setFamily(QStringLiteral("Figtree"));
+        font.setWeight(QFont::Medium);
+        app.setFont(font);
+    }
     if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_PRIMARY")) {
         // Qt 6.9 began to use a different shade of Material.Indigo when we use a dark theme
         // (which is all the time). The new color looks washed out, so manually specify the

@@ -107,6 +107,7 @@ Dialog {
             visible: navigableDialog.title !== ""
             text: navigableDialog.title
             color: TvTheme.textPrimary
+            font.family: TvTheme.displayFontFamily
             font.pixelSize: TvTheme.dialogTitleFont
             font.weight: Font.DemiBold
             wrapMode: Text.Wrap

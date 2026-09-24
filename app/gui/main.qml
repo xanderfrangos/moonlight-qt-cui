@@ -578,6 +578,13 @@ ApplicationWindow {
                     value: Font.DemiBold
                     when: SystemProperties.tvMode
                 }
+
+                Binding {
+                    target: titleRowLabel
+                    property: "font.family"
+                    value: TvTheme.displayFontFamily
+                    when: SystemProperties.tvMode
+                }
                 textFormat: SystemProperties.tvMode ? Text.StyledText : Text.PlainText
 
                 // We need this label to always be visible so it can occupy

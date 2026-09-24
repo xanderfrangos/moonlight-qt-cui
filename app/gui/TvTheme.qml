@@ -40,6 +40,11 @@ QtObject {
     readonly property int fontLabel: 24
     readonly property int fontCaption: 21
 
+    // Sora for page titles and dialog headlines, Figtree for everything else.
+    // main.cpp loads both and makes Figtree the default in TV mode.
+    readonly property string displayFontFamily: "Sora"
+    readonly property string bodyFontFamily: "Figtree"
+
     // Spacing scale
     readonly property int spacingSmall: 8
     readonly property int spacingMedium: 16
