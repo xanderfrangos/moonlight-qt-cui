@@ -178,7 +178,7 @@ CenteredGridView {
         grid: pcGrid
         tvCardStyle: true
 
-        // TV mode dims PCs that are off instead of marking them with a warning
+        // TV mode also dims PCs that are off, so the ones that are on stand out
         readonly property bool tvOffline: !model.statusUnknown && !model.online
         cardOpacity: tvCard && tvOffline && !tvSelected ? 0.6 : 1.0
 
@@ -245,15 +245,14 @@ CenteredGridView {
             id: stateIcon
             anchors.horizontalCenter: pcIcon.horizontalCenter
             anchors.verticalCenter: pcIcon.verticalCenter
-            anchors.verticalCenterOffset: SystemProperties.tvMode ? -10 : !model.online ? -18 : -16
-            // TV mode shows an offline PC by dimming it, and says so in its
-            // status, so only the lock for an unpaired PC is drawn on it
-            visible: !model.statusUnknown && (SystemProperties.tvMode ? model.online && !model.paired
-                                                                      : !model.online || !model.paired)
+            // TV mode's computer icon is two thirds the size, so the badge is too
+            readonly property real tvScale: SystemProperties.tvMode ? 132 / 200 : 1.0
+            anchors.verticalCenterOffset: (!model.online ? -18 : -16) * tvScale
+            visible: !model.statusUnknown && (!model.online || !model.paired)
             source: !model.online ? "qrc:/res/warning_FILL1_wght300_GRAD200_opsz24.svg" : "qrc:/res/baseline-lock-24px.svg"
             sourceSize {
-                width: SystemProperties.tvMode ? 48 : !model.online ? 75 : 70
-                height: SystemProperties.tvMode ? 48 : !model.online ? 75 : 70
+                width: (!model.online ? 75 : 70) * tvScale
+                height: (!model.online ? 75 : 70) * tvScale
             }
         }
 
