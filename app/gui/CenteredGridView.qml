@@ -15,25 +15,33 @@ GridView {
     property real leftInset: 0
     property real rightInset: 0
 
-    // TV mode: the width of each card. When set, the columns are spread so
-    // the first card starts at minMargin and a full row's last card ends
-    // minMargin from the right edge, rather than centering the grid. Cards
-    // are at least tvMinSpacing apart. Views use tvCellWidth as cellWidth.
+    // TV mode: the card width. Column capacity and scale use the grid width,
+    // not the number of cards currently present, so short rows use the same
+    // card size and spacing as full rows.
     property real tvItemWidth: 0
     property real tvMinSpacing: 0
+    property real tvGridSpacing: tvMinSpacing
     readonly property bool tvSpread: SystemProperties.tvMode && tvItemWidth > 0
-    readonly property int tvColumns: Math.max(1, Math.floor((width - 2 * minMargin + tvMinSpacing) /
+    readonly property real tvAvailableWidth: width - 2 * minMargin
+    readonly property int tvColumns: Math.max(1, Math.floor((tvAvailableWidth + tvMinSpacing) /
                                                             (tvItemWidth + tvMinSpacing)))
-    readonly property real tvCellWidth: tvColumns > 1 ? (width - 2 * minMargin - tvItemWidth) / (tvColumns - 1)
-                                                      : tvItemWidth + tvMinSpacing
+    readonly property real tvScale: tvSpread
+                                    ? Math.max(0.1, tvAvailableWidth /
+                                               (tvColumns * tvItemWidth + (tvColumns - 1) * tvGridSpacing))
+                                    : 1.0
+    readonly property real tvScaledItemWidth: tvItemWidth * tvScale
+    readonly property real tvCellWidth: tvColumns > 1 ? (tvAvailableWidth - tvScaledItemWidth) / (tvColumns - 1)
+                                                      : tvScaledItemWidth + tvGridSpacing * tvScale
 
     function updateMargins() {
         if (tvSpread) {
-            // Each card sits at the left of its cell, so the last cell runs
-            // past the last card. Let it run into the right margin, less a
-            // pixel so rounding can't cost a column.
-            leftMargin = minMargin
-            rightMargin = minMargin - (cellWidth - tvItemWidth) - 1
+            // Each card sits at the left of its cell, so a full row's last
+            // card ends at minMargin from the right edge. The extra pixel
+            // avoids rounding that could cost a column.
+            // Cards scale from their center, so offset their layout cells to
+            // keep the first and last scaled cards aligned with the margins.
+            leftMargin = minMargin + (tvScaledItemWidth - tvItemWidth) / 2
+            rightMargin = leftMargin - (cellWidth - tvItemWidth) - 1
         }
         else {
             leftMargin = horizontalMargin + leftInset
@@ -62,6 +70,10 @@ GridView {
     }
 
     onCellWidthChanged: {
+        updateMargins()
+    }
+
+    onTvScaleChanged: {
         updateMargins()
     }
 

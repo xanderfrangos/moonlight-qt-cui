@@ -13,6 +13,7 @@ ItemDelegate {
     // focused card grows, the others dim, and cards fade in on first load
     // instead of using the Material list highlight.
     property bool tvCardStyle: false
+    property real tvGridScale: 1.0
     readonly property bool tvCard: SystemProperties.tvMode && tvCardStyle
 
     // What the TV mode hint bar says the select button does on this card
@@ -42,7 +43,7 @@ ItemDelegate {
 
     // Draw the focused card above its neighbors so it can grow over them
     z: tvSelected ? 1 : 0
-    scale: tvCard && tvSelected ? TvTheme.focusScale : 1.0
+    scale: tvCard ? tvGridScale * (tvSelected ? TvTheme.focusScale : 1.0) : 1.0
     Behavior on scale {
         enabled: tvCard
         NumberAnimation { duration: TvTheme.animationNormal; easing.type: Easing.OutCubic }

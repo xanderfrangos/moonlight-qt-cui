@@ -25,14 +25,14 @@ CenteredGridView {
     minMargin: SystemProperties.tvMode ? TvTheme.focusBleed : 10
     tvItemWidth: tvCardWidth
     tvMinSpacing: 30
-    topMargin: SystemProperties.tvMode ? 30 : 20
+    topMargin: SystemProperties.tvMode ? 62 : 20
     bottomMargin: 5
     // TV mode uses bigger box art with more room around each card, since
     // the focused card grows and shows the game's name underneath
     // The card is as wide as its box art, so the art lines up with the bars
     readonly property int tvCardWidth: 240
     cellWidth: SystemProperties.tvMode ? tvCellWidth : 230
-    cellHeight: SystemProperties.tvMode ? 425 : 297
+    cellHeight: SystemProperties.tvMode ? 425 * tvScale : 297
 
     // Shown blurred behind the page in TV mode
     readonly property url tvBackdropSource: currentItem ? currentItem.backdropArt : ""
@@ -93,6 +93,7 @@ import AppModel 1.0; AppModel {}', parent, '')
         height: SystemProperties.tvMode ? 390 : 287
         grid: appGrid
         tvCardStyle: true
+        tvGridScale: appGrid.tvScale
 
         property alias appContextMenu: appContextMenuLoader.item
         property alias appNameText: appNameTextLoader.item

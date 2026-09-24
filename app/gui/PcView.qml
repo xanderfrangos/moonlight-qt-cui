@@ -17,18 +17,19 @@ CenteredGridView {
     id: pcGrid
     focus: true
     activeFocusOnTab: true
-    topMargin: SystemProperties.tvMode ? 30 : 20
+    topMargin: SystemProperties.tvMode ? 62 : 20
     bottomMargin: 5
 
-    // TV mode spreads the cards across the page, lined up with the top and
-    // bottom bars, with room at the edges for the focused card to grow
+    // TV mode scales the entire card grid to fill the page while preserving
+    // its column capacity, even when the last row has fewer cards.
     readonly property int tvCardWidth: 312
     readonly property int tvCardHeight: 354
     minMargin: SystemProperties.tvMode ? TvTheme.focusBleed : 10
     tvItemWidth: tvCardWidth
     tvMinSpacing: 54
+    tvGridSpacing: 46
     cellWidth: SystemProperties.tvMode ? tvCellWidth : 310
-    cellHeight: SystemProperties.tvMode ? tvCardHeight + 46 : 330
+    cellHeight: SystemProperties.tvMode ? (tvCardHeight + 46) * tvScale : 330
     objectName: qsTr("Computers")
 
     Component.onCompleted: {
@@ -174,6 +175,7 @@ CenteredGridView {
         height: SystemProperties.tvMode ? pcGrid.tvCardHeight : 320
         grid: pcGrid
         tvCardStyle: true
+        tvGridScale: pcGrid.tvScale
 
         // TV mode also dims PCs that are off, so the ones that are on stand out
         readonly property bool tvOffline: !model.statusUnknown && !model.online
