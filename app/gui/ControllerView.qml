@@ -342,6 +342,7 @@ Item {
                             color: modelData.enabled ? TvTheme.accentText : TvTheme.textTertiary
                             font.pixelSize: TvTheme.fontLabel
                             font.weight: Font.Bold
+                            font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
                         }
                     }
 
@@ -362,6 +363,7 @@ Item {
                             color: TvTheme.textPrimary
                             font.pixelSize: TvTheme.fontBody
                             font.weight: Font.DemiBold
+                            font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
                             elide: Text.ElideRight
                         }
 
@@ -404,6 +406,7 @@ Item {
                         checked: modelData.enabled
                         font.pixelSize: TvTheme.fontLabel
                         font.weight: Font.DemiBold
+                        font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
                         Layout.leftMargin: TvTheme.spacingSmall
                         Layout.rightMargin: TvTheme.spacingSmall
 

@@ -50,6 +50,7 @@ Row {
         id: labelMetrics
         font.pixelSize: TvTheme.fontLabel
         font.weight: Font.DemiBold
+        font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
         text: "8"
     }
 
@@ -57,6 +58,7 @@ Row {
         id: summaryMetrics
         font.pixelSize: TvTheme.fontLabel
         font.weight: Font.DemiBold
+        font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
         text: "×" + status.count
     }
 

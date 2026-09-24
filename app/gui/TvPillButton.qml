@@ -37,6 +37,7 @@ Button {
     implicitWidth: text !== "" ? contentRow.implicitWidth + 2 * TvTheme.spacingMediumLarge : implicitHeight
     font.pixelSize: TvTheme.fontLabel
     font.weight: Font.DemiBold
+    font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
 
     contentItem: Item {
         Row {

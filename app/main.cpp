@@ -1118,6 +1118,7 @@ int main(int argc, char *argv[])
         QFont font = app.font();
         font.setFamily(QStringLiteral("Figtree"));
         font.setWeight(QFont::Medium);
+        font.setStyleName(QStringLiteral("Medium"));
         app.setFont(font);
     }
     if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_PRIMARY")) {

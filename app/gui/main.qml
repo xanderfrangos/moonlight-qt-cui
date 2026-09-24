@@ -478,6 +478,7 @@ ApplicationWindow {
             id: addPcLabelMetrics
             font.pixelSize: TvTheme.fontLabel
             font.weight: Font.DemiBold
+            font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
             text: addPcButton.tvLabel
         }
 
@@ -485,6 +486,7 @@ ApplicationWindow {
             id: controllersLabelMetrics
             font.pixelSize: TvTheme.fontLabel
             font.weight: Font.DemiBold
+            font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
             text: controllersButton.tvLabel
         }
 
@@ -492,6 +494,7 @@ ApplicationWindow {
             id: settingsLabelMetrics
             font.pixelSize: TvTheme.fontLabel
             font.weight: Font.DemiBold
+            font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
             text: settingsButton.tvLabel
         }
 
@@ -576,6 +579,13 @@ ApplicationWindow {
                     target: titleRowLabel
                     property: "font.weight"
                     value: Font.DemiBold
+                    when: SystemProperties.tvMode
+                }
+
+                Binding {
+                    target: titleRowLabel
+                    property: "font.styleName"
+                    value: TvTheme.fontStyleName(TvTheme.displayFontFamily, Font.DemiBold)
                     when: SystemProperties.tvMode
                 }
 
@@ -809,6 +819,7 @@ ApplicationWindow {
                 Layout.leftMargin: 8
                 font.pixelSize: TvTheme.fontBody
                 font.weight: Font.DemiBold
+                font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
 
                 Timer {
                     interval: 1000

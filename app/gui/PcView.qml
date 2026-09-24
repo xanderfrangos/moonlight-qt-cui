@@ -133,6 +133,7 @@ CenteredGridView {
             font.family: TvTheme.displayFontFamily
             font.pixelSize: TvTheme.fontTitle
             font.weight: Font.DemiBold
+            font.styleName: TvTheme.fontStyleName(TvTheme.displayFontFamily, font.weight)
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.Wrap
         }
@@ -304,6 +305,7 @@ CenteredGridView {
                 color: TvTheme.textPrimary
                 font.pixelSize: TvTheme.fontBody
                 font.weight: Font.DemiBold
+                font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
                 horizontalAlignment: Text.AlignHCenter
                 elide: Text.ElideRight
             }
@@ -365,6 +367,7 @@ CenteredGridView {
                         color: TvTheme.textPrimary
                         font.pixelSize: TvTheme.fontCaption
                         font.weight: Font.DemiBold
+                        font.styleName: TvTheme.fontStyleName(TvTheme.bodyFontFamily, font.weight)
                         text: {
                             if (model.statusUnknown) {
                                 return qsTr("Checking...")

@@ -45,6 +45,27 @@ QtObject {
     readonly property string displayFontFamily: "Sora"
     readonly property string bodyFontFamily: "Figtree"
 
+    // Use the named instances in our variable fonts. Some Linux font backends
+    // otherwise render their default Light/Regular instances despite the
+    // requested weight.
+    function fontStyleName(family, weight) {
+        if (family === displayFontFamily) {
+            if (weight >= Font.ExtraBold) return "ExtraBold"
+            if (weight >= Font.Bold) return "Bold"
+            if (weight >= Font.DemiBold) return "SemiBold"
+            if (weight >= Font.Normal) return "Regular"
+            return "Light"
+        }
+
+        if (weight >= Font.Black) return "Black"
+        if (weight >= Font.ExtraBold) return "ExtraBold"
+        if (weight >= Font.Bold) return "Bold"
+        if (weight >= Font.DemiBold) return "SemiBold"
+        if (weight >= Font.Medium) return "Medium"
+        if (weight >= Font.Normal) return "Regular"
+        return "Light"
+    }
+
     // Spacing scale
     readonly property int spacingSmall: 8
     readonly property int spacingMedium: 16
