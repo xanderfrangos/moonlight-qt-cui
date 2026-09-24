@@ -5,6 +5,18 @@ of a session working on streaming, decoding, rendering, VRR, latency, or replay.
 It explains the implementation and the reasoning needed to investigate it;
 it does not establish that a particular deployed executable matches the source.
 
+Linux Vulkan FSR1 integration (2026-09-24, based on upstream PR #1557): the
+opt-in `fsr1upscaling` preference selects the libplacebo Vulkan frontend when
+available and attaches the PR's SDR/PQ FSR1 luma hooks to this fork's existing
+render parameters. Libplacebo debands the source planes before the luma hook
+and dithers the final output afterward. Both direct and optional offscreen VRR
+preparation use the same hook selection, preserving the existing worker and
+presenter timing policy. The hook only runs when output area exceeds source
+size; a failed shader parse falls back to ordinary Vulkan scaling. The option
+is hidden outside Linux builds with Vulkan support and defaults off. Added
+GPU work may alter frame readiness and must be measured live; this source
+change alone does not establish throughput or smoothness.
+
 On successful `LiStartConnection()`, the session records the connection start
 time. `Session::exec()` owns the SDL event loop while streaming, so it raises
 the stream window once two seconds have elapsed there; a QML timer would not

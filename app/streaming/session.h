@@ -239,6 +239,7 @@ private:
                        int frameRate, bool enableVsync, bool enableFramePacing,
                        bool testOnly, IVideoDecoder*& chosenDecoder,
                        bool enableVrr = false, bool preferVrrRenderer = false,
+                       bool fsr1Upscaling = false,
                        int vrrDisplayRefreshHz = 0,
                        bool* effectiveVrr = nullptr, bool smoothVrrFrameTiming = true,
                        bool gamescopeMailbox = false, int vrrLatencyMode = 0,
@@ -309,6 +310,7 @@ private:
         int ditheringMode = 0;
         bool temporalDithering = false;
         int debandMode = 0;
+        bool fsr1Upscaling = false;
         int refreshRate = 0;
         StreamingPreferences::WindowMode effectiveWindowMode = StreamingPreferences::WM_WINDOWED;
         StreamingPreferences::VideoDecoderSelection decoderSelection = StreamingPreferences::VDS_AUTO;

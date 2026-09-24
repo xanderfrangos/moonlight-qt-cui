@@ -112,6 +112,8 @@ typedef struct _DECODER_PARAMETERS {
     bool temporalDithering = false;
     // StreamingPreferences::DebandMode. Only libplacebo implements this.
     int debandMode = 0;
+    // Linux Vulkan FSR1 shader; ignored by other renderers.
+    bool fsr1Upscaling = false;
     // Strictly obtained during Session initialization. A value of zero means
     // the session was not qualified for VRR; Pacer must not substitute a
     // legacy 60 Hz fallback when this path is requested.

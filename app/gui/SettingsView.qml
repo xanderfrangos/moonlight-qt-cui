@@ -1113,6 +1113,20 @@ Flickable {
                                       qsTr("HDR streaming is not supported on this PC.")
                 }
 
+                CheckBox {
+                    width: parent.width
+                    text: qsTr("FSR1 upscaling (Vulkan)")
+                    font.pointSize: 12
+                    visible: SystemProperties.supportsFsr1Upscaling
+                    checked: StreamingPreferences.fsr1Upscaling
+                    onCheckedChanged: StreamingPreferences.fsr1Upscaling = checked
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 10000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Sharpens and upscales a lower-resolution stream on Linux using the Vulkan renderer. It may add GPU work and latency. Reconnect the stream after changing this setting.")
+                }
+
                 Column {
                     width: parent.width
                     spacing: 5

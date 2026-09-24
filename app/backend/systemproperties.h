@@ -22,6 +22,7 @@ public:
     Q_PROPERTY(bool isDarwin MEMBER isDarwin CONSTANT)
     Q_PROPERTY(bool supportsVideoDithering MEMBER supportsVideoDithering CONSTANT)
     Q_PROPERTY(bool supportsVideoDebanding MEMBER supportsVideoDebanding CONSTANT)
+    Q_PROPERTY(bool supportsFsr1Upscaling MEMBER supportsFsr1Upscaling CONSTANT)
     Q_PROPERTY(QString friendlyNativeArchName MEMBER friendlyNativeArchName CONSTANT)
     Q_PROPERTY(bool hasDesktopEnvironment MEMBER hasDesktopEnvironment CONSTANT)
     Q_PROPERTY(bool hasBrowser MEMBER hasBrowser CONSTANT)
@@ -87,6 +88,7 @@ private:
     bool isDarwin;
     bool supportsVideoDithering;
     bool supportsVideoDebanding;
+    bool supportsFsr1Upscaling;
     bool supportsUiScale;
     int activeUiScale;
     bool hoverEffectsDisabled;

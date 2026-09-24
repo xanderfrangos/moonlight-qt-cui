@@ -11,6 +11,9 @@
 #include <libplacebo/log.h>
 #include <libplacebo/renderer.h>
 #include <libplacebo/vulkan.h>
+#ifdef Q_OS_LINUX
+#include <libplacebo/shaders/custom.h>
+#endif
 #include "overlaycompletion.h"
 #include "diagnostics/gputrace.h"
 
@@ -105,6 +108,7 @@ private:
     static void gpuRenderInfo(void* opaque, const pl_render_info* info);
     bool renderMappedImage(pl_renderer renderer, const pl_frame& source,
                            pl_frame target, const pl_render_params& params);
+    pl_render_params renderParamsForFrame(const AVFrame* frame) const;
     std::unique_ptr<GpuTrace> m_GpuTrace;
     int64_t m_GpuTracePts = -1;
     uint64_t m_GpuTraceOutputUs = 0;
@@ -184,6 +188,10 @@ private:
     pl_render_params m_RenderParams = pl_render_fast_params;
     pl_dither_params m_DitherParams = {};
     pl_deband_params m_DebandParams = {};
+#ifdef Q_OS_LINUX
+    const pl_hook* m_Fsr1Hook = nullptr;
+    const pl_hook* m_Fsr1HdrHook = nullptr;
+#endif
 
 #ifdef Q_OS_LINUX
     struct PreparedImage;

@@ -290,6 +290,7 @@ public:
     Q_PROPERTY(int ditheringMode MEMBER ditheringMode NOTIFY ditheringModeChanged)
     Q_PROPERTY(bool temporalDithering MEMBER temporalDithering NOTIFY temporalDitheringChanged)
     Q_PROPERTY(int debandMode MEMBER debandMode NOTIFY debandModeChanged)
+    Q_PROPERTY(bool fsr1Upscaling MEMBER fsr1Upscaling NOTIFY fsr1UpscalingChanged)
     Q_PROPERTY(VideoDecoderSelection videoDecoderSelection MEMBER videoDecoderSelection NOTIFY videoDecoderSelectionChanged)
     Q_PROPERTY(RendererSelection rendererSelection MEMBER rendererSelection NOTIFY rendererSelectionChanged)
     Q_PROPERTY(WindowMode windowMode MEMBER windowMode NOTIFY windowModeChanged)
@@ -393,6 +394,8 @@ public:
     // Unlike dithering this can fix banding that arrived in the stream, at
     // the cost of some fine detail.
     int debandMode;
+    // Linux Vulkan FSR1 upscaling. Takes effect on the next stream.
+    bool fsr1Upscaling;
     VideoDecoderSelection videoDecoderSelection;
     WindowMode windowMode;
     WindowMode recommendedFullScreenMode;
@@ -432,6 +435,7 @@ signals:
     void ditheringModeChanged();
     void temporalDitheringChanged();
     void debandModeChanged();
+    void fsr1UpscalingChanged();
     void videoDecoderSelectionChanged();
     void uiDisplayModeChanged();
     void uiScaleChanged();

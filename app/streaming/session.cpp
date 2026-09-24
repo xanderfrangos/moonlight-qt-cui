@@ -288,7 +288,8 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             SDL_Window* window, int videoFormat, int width, int height,
                             int frameRate, bool enableVsync, bool enableFramePacing,
                             bool testOnly, IVideoDecoder*& chosenDecoder,
-                            bool enableVrr, bool preferVrrRenderer, int vrrDisplayRefreshHz,
+                            bool enableVrr, bool preferVrrRenderer, bool fsr1Upscaling,
+                            int vrrDisplayRefreshHz,
                             [[maybe_unused]] bool* effectiveVrr, bool smoothVrrFrameTiming,
                             bool gamescopeMailbox, int vrrLatencyMode, bool gamescopeRepaint,
                             int ditheringMode, bool temporalDithering, int debandMode)
@@ -319,6 +320,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.ditheringMode = ditheringMode;
     params.temporalDithering = temporalDithering;
     params.debandMode = debandMode;
+    params.fsr1Upscaling = fsr1Upscaling;
     params.vrrDisplayRefreshHz = vrrDisplayRefreshHz;
     params.testOnly = testOnly;
     params.vds = vds;
@@ -578,7 +580,8 @@ bool Session::populateDecoderProperties(SDL_Window* window)
                        m_StreamConfig.fps,
                        false, false, true, decoder,
                        false,
-                       m_PresentationSettings.enableVrr)) {
+                       m_PresentationSettings.enableVrr,
+                       m_PresentationSettings.fsr1Upscaling)) {
         return false;
     }
 
@@ -695,6 +698,7 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     m_PresentationSettings.ditheringMode = m_Preferences->ditheringMode;
     m_PresentationSettings.temporalDithering = m_Preferences->temporalDithering;
     m_PresentationSettings.debandMode = m_Preferences->debandMode;
+    m_PresentationSettings.fsr1Upscaling = m_Preferences->fsr1Upscaling;
 
     if (requestedVrr) {
         const bool hasAdaptiveHeadroom = hasStrictRefreshRate &&
@@ -2774,6 +2778,7 @@ void Session::exec()
                                s_ActiveSession->m_VideoDecoder,
                                m_PresentationSettings.enableVrr,
                                m_PresentationSettings.enableVrr,
+                               m_PresentationSettings.fsr1Upscaling,
                                m_PresentationSettings.refreshRate,
                                &m_PresentationSettings.enableVrr,
                                m_PresentationSettings.smoothVrrFrameTiming,

@@ -28,6 +28,9 @@ extern "C" {
 #include <vector>
 #include <set>
 #include <thread>
+#ifdef Q_OS_LINUX
+#include <QFile>
+#endif
 
 #ifndef VK_KHR_video_decode_av1
 #define VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME "VK_KHR_video_decode_av1"
@@ -332,6 +335,11 @@ PlVkRenderer::~PlVkRenderer()
         }
 #endif
         pl_renderer_destroy(&m_Renderer);
+#ifdef Q_OS_LINUX
+        // Hooks may own GPU resources, so release them before the GPU device.
+        if (m_Fsr1HdrHook) pl_mpv_user_shader_destroy(&m_Fsr1HdrHook);
+        if (m_Fsr1Hook) pl_mpv_user_shader_destroy(&m_Fsr1Hook);
+#endif
         pl_swapchain_destroy(&m_Swapchain);
 #ifdef Q_OS_DARWIN
         m_MetalTextureFactory.reset();
@@ -933,6 +941,37 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
         wideColorspace.primaries = PL_COLOR_PRIM_BT_709;
         wideColorspace.transfer = PL_COLOR_TRC_SCRGB;
         pl_swapchain_colorspace_hint(m_Swapchain, &wideColorspace);
+    }
+#endif
+
+#ifdef Q_OS_LINUX
+    if (params->fsr1Upscaling) {
+        auto loadHook = [this](const char* path) -> const pl_hook* {
+            QFile file(QString::fromLatin1(path));
+            if (!file.open(QIODevice::ReadOnly)) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "Unable to load FSR1 shader: %s", path);
+                return nullptr;
+            }
+            const QByteArray shader = file.readAll();
+            return pl_mpv_user_shader_parse(m_Vulkan->gpu,
+                                            shader.constData(), shader.size());
+        };
+
+        m_Fsr1Hook = loadHook(":/fsr1/FSR1.glsl");
+        if (m_Fsr1Hook && (params->videoFormat & VIDEO_FORMAT_MASK_10BIT)) {
+            m_Fsr1HdrHook = loadHook(":/fsr1/FSR1_HDR.glsl");
+        }
+        if (!m_Fsr1Hook || ((params->videoFormat & VIDEO_FORMAT_MASK_10BIT) && !m_Fsr1HdrHook)) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "FSR1 shader initialization failed; using standard Vulkan scaling");
+            if (m_Fsr1HdrHook) pl_mpv_user_shader_destroy(&m_Fsr1HdrHook);
+            if (m_Fsr1Hook) pl_mpv_user_shader_destroy(&m_Fsr1Hook);
+        }
+        else {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "FSR1 upscaling enabled for the Vulkan renderer");
+        }
     }
 #endif
 
@@ -1954,7 +1993,7 @@ void PlVkRenderer::prepareImage(const std::shared_ptr<PreparedImage>& image)
     image->sourceColor = source.color;
     pl_frame_from_swapchain(&target, &image->target);
     const bool rendered = renderMappedImage(m_PreparationRenderer, source, target,
-                                             m_RenderParams);
+                                             renderParamsForFrame(image->source));
     pl_gpu_flush(m_Vulkan->gpu);
     image->timing.renderEndUs = LiGetMicroseconds();
     bool pending = true;
@@ -2487,6 +2526,21 @@ bool PlVkRenderer::restoreFixedPresentation(VrrFallbackReason reason)
     return true;
 }
 
+pl_render_params PlVkRenderer::renderParamsForFrame(const AVFrame* frame) const
+{
+    pl_render_params params = m_RenderParams;
+#ifdef Q_OS_LINUX
+    if (m_Fsr1Hook != nullptr) {
+        const bool pq = frame != nullptr && frame->color_trc == AVCOL_TRC_SMPTE2084;
+        params.hooks = pq && m_Fsr1HdrHook != nullptr ? &m_Fsr1HdrHook : &m_Fsr1Hook;
+        params.num_hooks = 1;
+    }
+#else
+    Q_UNUSED(frame)
+#endif
+    return params;
+}
+
 bool PlVkRenderer::renderMappedImage(pl_renderer renderer, const pl_frame& source,
                                      pl_frame targetFrame, const pl_render_params& params)
 {
@@ -2605,7 +2659,7 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
 #endif
 
     // Render the video image and overlays into the swapchain buffer
-    auto renderParams = m_RenderParams;
+    auto renderParams = renderParamsForFrame(frame);
     if (m_GpuTrace && m_VrrPreparingFrame) {
         renderParams.info_callback = gpuRenderInfo;
         renderParams.info_priv = this;
