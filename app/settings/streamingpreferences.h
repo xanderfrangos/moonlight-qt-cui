@@ -206,6 +206,13 @@ public:
     };
     Q_ENUM(PerformanceGraph)
 
+    enum PerformanceGraphType
+    {
+        PGT_NETWORK,
+        PGT_CLIENT
+    };
+    Q_ENUM(PerformanceGraphType)
+
     // Any other value of performanceGraphSize is a fixed scale in percent.
     enum PerformanceGraphSize
     {
@@ -238,15 +245,14 @@ public:
         PerformanceGraph id;
         // Untranslated. Use performanceGraphName() for display.
         const char* name;
-        // Heads the settings list for the graphs that follow it, if set
-        const char* section;
+        PerformanceGraphType type;
         bool defaultVisible;
     };
     static const QVector<PerformanceGraphInfo>& performanceGraphs();
     static QString performanceGraphName(int id);
 
-    // Each entry is a map with "bit", "text" and "section" for QML
-    Q_INVOKABLE static QVariantList getPerformanceGraphs();
+    // Each entry is a map with "bit" and "text" for QML
+    Q_INVOKABLE static QVariantList getPerformanceGraphs(PerformanceGraphType type);
 
     Q_PROPERTY(int width MEMBER width NOTIFY displayModeChanged)
     Q_PROPERTY(int height MEMBER height NOTIFY displayModeChanged)

@@ -2821,35 +2821,68 @@ Flickable {
                         wrapMode: Text.Wrap
                     }
 
-                    Repeater {
-                        // The C++ side owns the list of graphs, their names,
-                        // sections and defaults
-                        model: StreamingPreferences.getPerformanceGraphs()
+                    Row {
+                        width: parent.width
+                        spacing: 10
 
-                        delegate: Column {
-                            width: parent.width
+                        Column {
+                            width: (parent.width - parent.spacing) / 2
                             spacing: 0
 
                             Label {
-                                visible: modelData.section !== ""
+                                width: parent.width
                                 topPadding: 5
-                                leftPadding: 5
-                                text: modelData.section
+                                text: qsTr("Client")
                                 font.pointSize: 10
                                 font.bold: true
                                 opacity: 0.7
                             }
 
-                            CheckBox {
+                            Repeater {
+                                model: StreamingPreferences.getPerformanceGraphs(StreamingPreferences.PGT_CLIENT)
+
+                                delegate: CheckBox {
+                                    width: parent.width
+                                    text: modelData.text
+                                    font.pointSize: 12
+                                    // The preference records changes from each
+                                    // graph's default, so a click just flips its bit
+                                    checked: ((StreamingPreferences.performanceGraphsDefault ^
+                                               StreamingPreferences.performanceGraphsToggled) & (1 << modelData.bit)) !== 0
+                                    onToggled: {
+                                        StreamingPreferences.performanceGraphsToggled ^= (1 << modelData.bit)
+                                    }
+                                }
+                            }
+                        }
+
+                        Column {
+                            width: (parent.width - parent.spacing) / 2
+                            spacing: 0
+
+                            Label {
                                 width: parent.width
-                                text: modelData.text
-                                font.pointSize: 12
-                                // The preference records changes from each
-                                // graph's default, so a click just flips its bit
-                                checked: ((StreamingPreferences.performanceGraphsDefault ^
-                                           StreamingPreferences.performanceGraphsToggled) & (1 << modelData.bit)) !== 0
-                                onToggled: {
-                                    StreamingPreferences.performanceGraphsToggled ^= (1 << modelData.bit)
+                                topPadding: 5
+                                text: qsTr("Network")
+                                font.pointSize: 10
+                                font.bold: true
+                                opacity: 0.7
+                            }
+
+                            Repeater {
+                                model: StreamingPreferences.getPerformanceGraphs(StreamingPreferences.PGT_NETWORK)
+
+                                delegate: CheckBox {
+                                    width: parent.width
+                                    text: modelData.text
+                                    font.pointSize: 12
+                                    // The preference records changes from each
+                                    // graph's default, so a click just flips its bit
+                                    checked: ((StreamingPreferences.performanceGraphsDefault ^
+                                               StreamingPreferences.performanceGraphsToggled) & (1 << modelData.bit)) !== 0
+                                    onToggled: {
+                                        StreamingPreferences.performanceGraphsToggled ^= (1 << modelData.bit)
+                                    }
                                 }
                             }
                         }
@@ -2857,6 +2890,7 @@ Flickable {
 
                     Label {
                         width: parent.width
+                        topPadding: 8
                         wrapMode: Text.Wrap
                         text: qsTr("While the text stats are hidden, the graphs also show the stream's resolution, frame rate, VRR or V-Sync, codec, bit depth, HDR, chroma subsampling and renderer.")
                     }

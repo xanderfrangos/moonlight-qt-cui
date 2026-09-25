@@ -481,19 +481,19 @@ bool StreamingPreferences::loadTvMode()
 const QVector<StreamingPreferences::PerformanceGraphInfo>& StreamingPreferences::performanceGraphs()
 {
     static const QVector<PerformanceGraphInfo> k_Graphs = {
-        { PG_INCOMING_FRAMETIME, QT_TR_NOOP("Incoming frametime"), QT_TR_NOOP("Network"), true },
-        { PG_BANDWIDTH, QT_TR_NOOP("Bandwidth"), nullptr, true },
-        { PG_NETWORK_LATENCY, QT_TR_NOOP("Network latency"), nullptr, true },
-        { PG_NETWORK_JITTER, QT_TR_NOOP("Network jitter"), nullptr, true },
-        { PG_NETWORK_DROPS, QT_TR_NOOP("Dropped by network"), nullptr, true },
-        { PG_RENDERING_FRAMETIME, QT_TR_NOOP("Rendering frametime"), QT_TR_NOOP("Client"), true },
-        { PG_DECODING_FRAMETIME, QT_TR_NOOP("Decoding frametime"), nullptr, false },
-        { PG_HOST_PROCESSING_LATENCY, QT_TR_NOOP("Host processing latency"), nullptr, true },
-        { PG_REASSEMBLY, QT_TR_NOOP("Reassembly time"), nullptr, true },
-        { PG_DECODING_TIME, QT_TR_NOOP("Decoding time"), nullptr, false },
-        { PG_QUEUE_DEPTH, QT_TR_NOOP("Frame queue depth"), nullptr, true },
-        { PG_RENDERING_TIME, QT_TR_NOOP("Rendering time"), nullptr, false },
-        { PG_JITTER_DROPS, QT_TR_NOOP("Dropped by client pacer"), nullptr, true },
+        { PG_INCOMING_FRAMETIME, QT_TR_NOOP("Incoming frametime"), PGT_NETWORK, true },
+        { PG_BANDWIDTH, QT_TR_NOOP("Bandwidth"), PGT_NETWORK, true },
+        { PG_NETWORK_LATENCY, QT_TR_NOOP("Network latency"), PGT_NETWORK, true },
+        { PG_NETWORK_JITTER, QT_TR_NOOP("Network jitter"), PGT_NETWORK, true },
+        { PG_NETWORK_DROPS, QT_TR_NOOP("Dropped by network"), PGT_NETWORK, true },
+        { PG_RENDERING_FRAMETIME, QT_TR_NOOP("Rendering frametime"), PGT_CLIENT, true },
+        { PG_DECODING_FRAMETIME, QT_TR_NOOP("Decoding frametime"), PGT_CLIENT, false },
+        { PG_HOST_PROCESSING_LATENCY, QT_TR_NOOP("Host processing latency"), PGT_CLIENT, true },
+        { PG_REASSEMBLY, QT_TR_NOOP("Reassembly time"), PGT_CLIENT, true },
+        { PG_DECODING_TIME, QT_TR_NOOP("Decoding time"), PGT_CLIENT, false },
+        { PG_QUEUE_DEPTH, QT_TR_NOOP("Frame queue depth"), PGT_CLIENT, true },
+        { PG_RENDERING_TIME, QT_TR_NOOP("Rendering time"), PGT_CLIENT, false },
+        { PG_JITTER_DROPS, QT_TR_NOOP("Dropped by client pacer"), PGT_CLIENT, true },
     };
     return k_Graphs;
 }
@@ -508,14 +508,17 @@ QString StreamingPreferences::performanceGraphName(int id)
     return QString();
 }
 
-QVariantList StreamingPreferences::getPerformanceGraphs()
+QVariantList StreamingPreferences::getPerformanceGraphs(PerformanceGraphType type)
 {
     QVariantList graphs;
     for (const PerformanceGraphInfo& graph : performanceGraphs()) {
+        if (graph.type != type) {
+            continue;
+        }
+
         QVariantMap entry;
         entry.insert(QStringLiteral("bit"), (int)graph.id);
         entry.insert(QStringLiteral("text"), tr(graph.name));
-        entry.insert(QStringLiteral("section"), graph.section != nullptr ? tr(graph.section) : QString());
         graphs.append(entry);
     }
     return graphs;
