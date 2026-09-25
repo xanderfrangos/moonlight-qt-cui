@@ -836,6 +836,25 @@ uint8_t SdlInputHandler::moonlightControllerType(SDL_GameController* controller)
 #endif
         return LI_CTYPE_NINTENDO;
     default:
+        // SDL may report a Steam Controller as an unknown type. These VID/PID
+        // pairs come from SDL's controller_list.h.
+        if (SDL_GameControllerGetVendor(controller) == 0x28de) {
+            switch (SDL_GameControllerGetProduct(controller)) {
+            case 0x1101:
+            case 0x1102:
+            case 0x1105:
+            case 0x1106:
+            case 0x1142:
+            case 0x1201:
+            case 0x1202:
+            case 0x1205:
+            case 0x1302:
+            case 0x1303:
+            case 0x1304:
+            case 0x1305:
+                return LI_CTYPE_STEAM;
+            }
+        }
         return LI_CTYPE_UNKNOWN;
     }
 }

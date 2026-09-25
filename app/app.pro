@@ -163,7 +163,7 @@ win32:!winrt {
 }
 macx {
     !disable-prebuilts {
-        LIBS += -lssl.3 -lcrypto.3 -lavcodec.62 -lavutil.60 -lswscale.9 -lopus.0 -lSDL2 -lSDL2_ttf -lplacebo
+        LIBS += -lssl.3 -lcrypto.3 -lavcodec.63 -lavutil.61 -lswscale.10 -lopus.0 -lSDL2 -lSDL2_ttf -lplacebo
         CONFIG += discord-rpc libplacebo
     }
 
@@ -540,9 +540,6 @@ wayland {
     HEADERS += streaming/video/ffmpeg-renderers/waylandfeedback/wayland.h
     HEADERS += streaming/video/ffmpeg-renderers/pacer/waylandvsyncsource.h
 }
-!disable-h264bitstream {
-    DEFINES += HAVE_H264BITSTREAM
-}
 
 # PyroWave decoding (Vulkan compute) presents through the D3D11 renderer, so it
 # is Windows-only for now. Granite has no MSVC ARM64 SIMD path.
@@ -630,8 +627,12 @@ win32:CONFIG(release, debug|release): LIBS += -L$$OUT_PWD/../h264bitstream/relea
 else:win32:CONFIG(debug, debug|release): LIBS += -L$$OUT_PWD/../h264bitstream/debug/ -lh264bitstream
 else:unix: LIBS += -L$$OUT_PWD/../h264bitstream/ -lh264bitstream
 
-INCLUDEPATH += $$PWD/../h264bitstream/h264bitstream
-DEPENDPATH += $$PWD/../h264bitstream/h264bitstream
+INCLUDEPATH += $$PWD/../h264bitstream
+DEPENDPATH += $$PWD/../h264bitstream
+
+!disable-h264bitstream {
+    DEFINES += HAVE_H264BITSTREAM
+}
 
 !winrt {
     win32:CONFIG(release, debug|release): LIBS += -L$$OUT_PWD/../AntiHooking/release/ -lAntiHooking

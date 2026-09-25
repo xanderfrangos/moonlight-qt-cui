@@ -261,6 +261,7 @@ private:
     QStringList m_ControllerOrder;
     QStringList m_DisabledControllers;
 
+    bool m_NeedsManualCaptureOnLeave;
     bool m_MouseWasInVideoRegion;
     bool m_PendingMouseButtonsAllUpOnVideoRegionLeave;
     bool m_PointerRegionLockActive;

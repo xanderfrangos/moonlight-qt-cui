@@ -1,5 +1,13 @@
 # Streaming, VRR, and timing architecture
 
+Original Moonlight `master` merge (2026-09-25, `032529d7`): D3D11VA now
+logs the adapter driver version and uses upstream's vendor and driver checks
+when choosing separate decode and render devices. This fork's texture bind
+policy remains active after that choice. The common library includes upstream's
+frame-loss fixes alongside the fork's PyroWave frame handling; speculative
+loss reports require reference-frame invalidation and exclude PyroWave frames.
+These source changes still need a build and live validation on supported GPUs.
+
 Linux Vulkan LS1 integration (2026-09-24, based on MAKO's GPL-3.0-or-later
 implementation): the opt-in `ls1upscaling` setting selects the Vulkan frontend
 and adds a four-stage LS1 Quality compute hook at libplacebo's resizable RGB
