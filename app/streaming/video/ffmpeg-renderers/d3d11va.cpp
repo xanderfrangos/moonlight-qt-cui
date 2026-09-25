@@ -67,6 +67,7 @@ static const std::array<const char*, D3D11VARenderer::PixelShaders::_COUNT> k_Vi
     "d3d11_yuv420_pixel.fxc",
     "d3d11_ayuv_pixel.fxc",
     "d3d11_y410_pixel.fxc",
+    "d3d11_yuv_planar_pixel.fxc",
 };
 
 // The same shaders built with DITHER_OUTPUT. They quantize to the display's
@@ -86,7 +87,7 @@ static_assert(sizeof(DITHER_FRAME_CONST_BUF) % 16 == 0, "Constant buffer sizes m
 // evenly over the threshold range instead of cycling through a short pattern.
 static const float k_DitherPhaseStep = 0.6180339887f;
 
-static const std::array<const char*, D3D11VARenderer::PixelShaders::_COUNT> k_VideoDitherShaderNames =
+static const std::array<const char*, 3> k_VideoDitherShaderNames =
 {
     "d3d11_yuv420_dither_pixel.fxc",
     "d3d11_ayuv_dither_pixel.fxc",
@@ -350,6 +351,8 @@ D3D11VARenderer::~D3D11VARenderer()
     m_DecodeR2DFence.Reset();
     m_RenderD2RFence.Reset();
     m_RenderR2DFence.Reset();
+
+    m_PyroWaveSurfaces.reset();
 
     m_VrrPresentReadyFence.Reset();
     if (m_VrrPresentReadyFenceEvent != nullptr) {
@@ -622,6 +625,27 @@ bool D3D11VARenderer::createDeviceByAdapterIndex(int adapterIndex, bool* adapter
         }
     }
 
+    if (isPyroWave()) {
+        // PyroWave decodes in Vulkan into textures owned by this device, and
+        // the two APIs synchronize through shared monitored fences.
+        if (m_FenceType != SupportedFenceType::Monitored || featureLevel < D3D_FEATURE_LEVEL_11_0) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "PyroWave needs monitored D3D11 fences on this GPU");
+            goto Exit;
+        }
+
+        m_DecodeDevice = m_RenderDevice;
+        m_DecodeDeviceContext = m_RenderDeviceContext;
+        m_BindDecoderOutputTextures = false;
+        m_DevicesWithCodecSupport++;
+        m_RenderAdapterIndex = adapterIndex;
+        m_RenderAdapterLuid = adapterDesc.AdapterLuid;
+        m_VrrRenderAdapterLuidValid = true;
+        m_VrrRenderAdapterLuid = packLuid(adapterDesc.AdapterLuid);
+        success = true;
+        goto Exit;
+    }
+
     bool separateDevices;
     if (Utils::getEnvironmentVariableOverride("D3D11VA_FORCE_SEPARATE_DEVICES", &separateDevices)) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
@@ -842,7 +866,7 @@ bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)
 
     // DXVA2 may let us take over for FSE V-sync off cases. However, if we don't have DXGI_FEATURE_PRESENT_ALLOW_TEARING
     // then we should not attempt to do this unless there's no other option (HDR, DXVA2 failed in pass 1, etc).
-    if (!m_AllowTearing && !params->enableVsync && m_DecoderSelectionPass == 0 && !(params->videoFormat & VIDEO_FORMAT_MASK_10BIT) &&
+    if (!isPyroWave() && !m_AllowTearing && !params->enableVsync && m_DecoderSelectionPass == 0 && !(params->videoFormat & VIDEO_FORMAT_MASK_10BIT) &&
             (SDL_GetWindowFlags(params->window) & SDL_WINDOW_FULLSCREEN_DESKTOP) == SDL_WINDOW_FULLSCREEN) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Defaulting to DXVA2 for FSE without DXGI_FEATURE_PRESENT_ALLOW_TEARING support");
@@ -917,7 +941,18 @@ bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)
                         "DXGI (per-frame tearing/synchronized, estimated timing)");
     }
 
-    {
+    if (isPyroWave()) {
+        // The PyroWave decoder writes into these surfaces; FFmpeg is not involved.
+        m_PyroWaveSurfaces = std::make_unique<D3D11PyroWaveSurfaces>();
+        if (!m_PyroWaveSurfaces->initialize(m_RenderDevice.Get(), m_RenderAdapterLuid,
+                                            params->width, params->height,
+                                            (params->videoFormat & VIDEO_FORMAT_MASK_YUV444) != 0,
+                                            (params->videoFormat & VIDEO_FORMAT_MASK_10BIT) != 0)) {
+            m_PyroWaveSurfaces.reset();
+            return false;
+        }
+    }
+    else {
         m_HwDeviceContext = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA);
         if (!m_HwDeviceContext) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -1095,10 +1130,15 @@ void D3D11VARenderer::bindVideoVertexBuffer(bool frameChanged, AVFrame* frame)
         SDL_FRect renderRect;
         StreamUtils::screenSpaceToNormalizedDeviceCoords(&dst, &renderRect, m_DisplayWidth, m_DisplayHeight);
 
-        // Don't sample from the alignment padding area
-        auto framesContext = (AVHWFramesContext*)frame->hw_frames_ctx->data;
-        float uMax = (float)frame->width / framesContext->width;
-        float vMax = (float)frame->height / framesContext->height;
+        // Don't sample from the alignment padding area. PyroWave planes have
+        // no padding and no FFmpeg frames context.
+        float uMax = 1.0f;
+        float vMax = 1.0f;
+        if (frame->hw_frames_ctx != nullptr) {
+            auto framesContext = (AVHWFramesContext*)frame->hw_frames_ctx->data;
+            uMax = (float)frame->width / framesContext->width;
+            vMax = (float)frame->height / framesContext->height;
+        }
 
         VERTEX verts[] =
         {
@@ -1237,7 +1277,6 @@ void D3D11VARenderer::refreshDitherState()
 void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame)
 {
     bool yuv444 = (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_YUV444);
-    auto framesContext = (AVHWFramesContext*)frame->hw_frames_ctx->data;
 
     // PQ output is quantized by the display's own HDR pipeline, so dither only
     // the SDR case where we know what the final encoding is.
@@ -1266,7 +1305,20 @@ void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame)
         m_RenderDeviceContext->PSSetConstantBuffers(1, 1, m_DitherFrameBuffer.GetAddressOf());
     }
 
-    if (yuv444) {
+    // PyroWave planes are exactly the frame size; D3D11VA surfaces may be padded
+    int textureWidth = frame->width;
+    int textureHeight = frame->height;
+    if (frame->hw_frames_ctx != nullptr) {
+        auto framesContext = (AVHWFramesContext*)frame->hw_frames_ctx->data;
+        textureWidth = framesContext->width;
+        textureHeight = framesContext->height;
+    }
+
+    if (isPyroWave()) {
+        // Separate Y, Cb and Cr planes at 4:2:0 or 4:4:4
+        m_RenderDeviceContext->PSSetShader(m_VideoPixelShaders[PixelShaders::GENERIC_YUV_PLANAR].Get(), nullptr, 0);
+    }
+    else if (yuv444) {
         // We'll need to use one of the 4:4:4 shaders for this pixel format
         switch (m_TextureFormat)
         {
@@ -1316,14 +1368,14 @@ void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame)
 
     std::array<float, 2> chromaOffset;
     getFrameChromaCositingOffsets(frame, chromaOffset);
-    constBuf.chromaOffset[0] = chromaOffset[0] / framesContext->width;
-    constBuf.chromaOffset[1] = chromaOffset[1] / framesContext->height;
+    constBuf.chromaOffset[0] = chromaOffset[0] / textureWidth;
+    constBuf.chromaOffset[1] = chromaOffset[1] / textureHeight;
 
     // Limit chroma texcoords to avoid sampling from alignment texels
-    constBuf.chromaUVMax[0] = frame->width != framesContext->width ?
-                                  ((float)(frame->width - 1) / framesContext->width) : 1.0f;
-    constBuf.chromaUVMax[1] = frame->height != (int)framesContext->height ?
-                                  ((float)(frame->height - 1) / framesContext->height) : 1.0f;
+    constBuf.chromaUVMax[0] = frame->width != textureWidth ?
+                                  ((float)(frame->width - 1) / textureWidth) : 1.0f;
+    constBuf.chromaUVMax[1] = frame->height != textureHeight ?
+                                  ((float)(frame->height - 1) / textureHeight) : 1.0f;
 
     constBuf.ditherLevels = m_DitherLevels;
 
@@ -1377,8 +1429,12 @@ uint64_t D3D11VARenderer::captureDecodeBoundary()
     return fenceValue;
 }
 
-uint64_t D3D11VARenderer::waitForDecode(AVFrame*, uint64_t decodeBoundary)
+uint64_t D3D11VARenderer::waitForDecode(AVFrame* frame, uint64_t decodeBoundary)
 {
+    if (auto* pyroWaveRef = PyroWaveFrameRef::fromFrame(frame)) {
+        return waitForPyroWaveDecode(pyroWaveRef);
+    }
+
     if (decodeBoundary == 0 || m_DecodeD2RFence == nullptr) {
         return 0;
     }
@@ -1447,8 +1503,108 @@ uint64_t D3D11VARenderer::waitForDecode(AVFrame*, uint64_t decodeBoundary)
     return LiGetMicroseconds() - startUs;
 }
 
+bool D3D11VARenderer::renderPyroWaveVideo(AVFrame* frame, PyroWaveFrameRef* ref)
+{
+    const auto* views = m_PyroWaveSurfaces ? m_PyroWaveSurfaces->planeViews(ref->surface) : nullptr;
+    if (views == nullptr) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "PyroWave frame references unknown surface %d", ref->surface);
+        return false;
+    }
+
+    // The GPU-side wait is the correctness mechanism; the CPU wait in
+    // waitForDecode() only provides the VRR readiness observation.
+    if (!m_PyroWaveSurfaces->waitForDecode(m_RenderDeviceContext.Get(), ref)) {
+        if (m_DecoderParams.enableVrr) {
+            m_VrrPresentReadyAvailable = false;
+            m_VrrFallbackReason = VrrFallbackReason::AdaptivePresentationUnavailable;
+        }
+        queueRenderDeviceReset();
+        return false;
+    }
+
+    bool frameChanged = hasFrameFormatChanged(frame);
+    bindVideoVertexBuffer(frameChanged, frame);
+    bindColorConversion(frameChanged, frame);
+
+    ID3D11ShaderResourceView* frameSrvs[] = { (*views)[0].Get(), (*views)[1].Get(), (*views)[2].Get() };
+    m_RenderDeviceContext->PSSetShaderResources(0, 3, frameSrvs);
+    m_RenderDeviceContext->DrawIndexed(6, 0, 0);
+
+    ID3D11ShaderResourceView* nullSrvs[3] = {};
+    m_RenderDeviceContext->PSSetShaderResources(0, 3, nullSrvs);
+
+    // Hand the surface back once this read retires on the GPU
+    if (!m_PyroWaveSurfaces->signalRelease(m_RenderDeviceContext.Get(), ref)) {
+        queueRenderDeviceReset();
+        return false;
+    }
+
+    return true;
+}
+
+uint64_t D3D11VARenderer::waitForPyroWaveDecode(const PyroWaveFrameRef* ref)
+{
+    ID3D11Fence* fence = m_PyroWaveSurfaces ? m_PyroWaveSurfaces->decodeFence() : nullptr;
+    if (fence == nullptr || m_VrrDecodeReadyEvent == nullptr) {
+        return 0;
+    }
+
+    const uint64_t target = ref->decodeFenceValue;
+    const uint64_t startUs = LiGetMicroseconds();
+    const auto completed = fence->GetCompletedValue();
+    if (completed == (std::numeric_limits<UINT64>::max)()) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "PyroWave decode fence reported device removal (target=%llu)",
+                     static_cast<unsigned long long>(target));
+        m_VrrPresentReadyAvailable = false;
+        m_VrrFallbackReason = VrrFallbackReason::AdaptivePresentationUnavailable;
+        queueRenderDeviceReset();
+        return 0;
+    }
+    if (completed >= target) {
+        return 0;
+    }
+
+    // Vulkan signals this fence when the decode finishes; no D3D11 context
+    // lock is involved.
+    const HRESULT eventResult = fence->SetEventOnCompletion(target, m_VrrDecodeReadyEvent);
+    const auto result = D3D11FenceWait::wait(target, LiGetMicroseconds,
+        [&] { return fence->GetCompletedValue(); },
+        [&](unsigned timeoutMs) {
+            if (FAILED(eventResult)) {
+                Sleep(timeoutMs);
+                return true;
+            }
+            const DWORD waitResult = WaitForSingleObject(m_VrrDecodeReadyEvent, timeoutMs);
+            return waitResult == WAIT_OBJECT_0 || waitResult == WAIT_TIMEOUT;
+        });
+    if (result.status != D3D11FenceWait::Status::Complete) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "PyroWave decode fence wait failed (target=%llu completed=%llu stop=%s elapsed_us=%llu)",
+                     static_cast<unsigned long long>(target),
+                     static_cast<unsigned long long>(result.completedValue),
+                     D3D11FenceWait::stopReasonName(result.stopReason),
+                     static_cast<unsigned long long>(result.elapsedUs));
+        m_VrrPresentReadyAvailable = false;
+        m_VrrFallbackReason = VrrFallbackReason::AdaptivePresentationUnavailable;
+        queueRenderDeviceReset();
+        return 0; // Failure must never advertise GPU readiness.
+    }
+    return LiGetMicroseconds() - startUs;
+}
+
+IPyroWaveSurfacePool* D3D11VARenderer::getPyroWaveSurfacePool()
+{
+    return m_PyroWaveSurfaces.get();
+}
+
 bool D3D11VARenderer::renderVideo(AVFrame* frame, uint64_t decodeBoundary)
 {
+    if (auto* pyroWaveRef = PyroWaveFrameRef::fromFrame(frame)) {
+        return renderPyroWaveVideo(frame, pyroWaveRef);
+    }
+
     const auto failGpuSynchronization = [this]() {
         // The asynchronous VRR path has no CPU decode wait to fall back on.
         // Once an ordering primitive fails, presenting this frame could read
@@ -3050,11 +3206,51 @@ VrrPresentFeedback D3D11VARenderer::presentAdaptive(
         return feedback;
     }
 
+    // Native flip protection. The controller anchors a tearing present's flip
+    // at its call, but DXGI can take several milliseconds to flip it, so a
+    // latched successor reaches scanout later than anchored and this tearing
+    // present would land inside that scanout. Ask DXGI instead: if the
+    // predecessor is not on screen yet, or its refresh began less than the
+    // window ago, latch. The flip queue then shows this frame at the first
+    // untorn refresh, and a panel already idle in its VRR blank flips a
+    // latched present at once, so an unneeded latch costs almost nothing.
+    bool latchedPresentation = request.latchedPresentation;
+    if (!latchedPresentation && request.flipProtectionWindowUs != 0 &&
+            m_VrrPriorPresentCountValid) {
+        DXGI_FRAME_STATISTICS guardStats = {};
+        feedback.flipProtectionChecked = true;
+        feedback.flipProtectionQueryStartUs = LiGetMicroseconds();
+        const HRESULT guardResult =
+            m_SwapChain->GetFrameStatistics(&guardStats);
+        feedback.flipProtectionQueryEndUs = LiGetMicroseconds();
+        feedback.flipProtectionQueryResult =
+            static_cast<int64_t>(guardResult);
+        uint64_t refreshUs = 0;
+        uint64_t qpcFrequency = 0;
+        // A failed query (for example FRAME_STATISTICS_DISJOINT after a mode
+        // change) proves nothing and keeps the planned mode.
+        if (guardResult == S_OK) {
+            if (guardStats.PresentCount < m_VrrPriorPresentCount) {
+                feedback.flipProtectionPending = true;
+                latchedPresentation = true;
+            }
+            else if (translateVrrSyncQpcTime(guardStats.SyncQPCTime,
+                                             refreshUs, qpcFrequency)) {
+                feedback.flipProtectionReferenceUs = refreshUs;
+                latchedPresentation =
+                    feedback.flipProtectionQueryEndUs - refreshUs <
+                        request.flipProtectionWindowUs ||
+                    feedback.flipProtectionQueryEndUs < refreshUs;
+            }
+        }
+        feedback.flipProtectionLatched = latchedPresentation;
+    }
+
     // The risk decision is per frame. Sync interval 1 protects risky frames;
     // other frames retain interval-zero replacement semantics. Active DXGI
     // VRR always permits tearing for those adaptive submissions.
     const auto presentParameters = DxgiPresentParameters::adaptive(
-        request.latchedPresentation, DXGI_PRESENT_ALLOW_TEARING);
+        latchedPresentation, DXGI_PRESENT_ALLOW_TEARING);
     feedback.nativeBackendValid = true;
     feedback.nativeBackend = VrrNativePresentationBackend::Dxgi;
     feedback.nativePresentParametersValid = true;
@@ -3673,7 +3869,7 @@ bool D3D11VARenderer::setupRenderingResources()
                         m_DecoderParams.ditheringMode);
         }
 
-        for (int i = 0; i < PixelShaders::_COUNT; i++)
+        for (size_t i = 0; i < k_VideoDitherShaderNames.size(); i++)
         {
             QByteArray ditherPixelShaderBytecode = Path::readDataFile(k_VideoDitherShaderNames[i]);
 

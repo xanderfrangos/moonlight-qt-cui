@@ -50,6 +50,12 @@
     X(size_t, playout_interval_initial_minimum_samples, playoutIntervalInitialMinimumSamples, 2) \
     X(uint64_t, playout_mean_miss_hold_us, playoutMeanMissHoldUs, 4000000) \
     X(uint64_t, playout_mean_miss_release_us_per_second, playoutMeanMissReleaseUsPerSecond, 200) \
+    /* Nonzero floors the adaptive playout delay at this per-mille percentile */ \
+    /* of recent timestamp-playout ready offsets (decode completion after the */ \
+    /* mapped source slot), so release cannot drain below what current frames */ \
+    /* need; rare stalls cannot raise a percentile, and it follows load down. */ \
+    X(uint64_t, playout_readiness_floor_per_mille, playoutReadinessFloorPerMille, 0) \
+    X(uint64_t, playout_readiness_floor_window_us, playoutReadinessFloorWindowUs, 10000000) \
     X(uint64_t, playout_on_time_target_per_million, playoutOnTimeTargetPerMillion, 990000) \
     X(uint64_t, playout_readiness_window_us, playoutReadinessWindowUs, 3000000) \
     X(uint64_t, playout_readiness_hitch_threshold_us, playoutReadinessHitchThresholdUs, 0) \
@@ -151,6 +157,9 @@
     /* Nonzero latches the first present after a gap at least this long, so */ \
     /* it cannot tear against the driver's below-VRR-range frame repeat. */ \
     X(uint64_t, vrr_floor_latch_gap_us, vrrFloorLatchGapUs, 0) \
+    /* Nonzero lets the presenter latch a planned tearing present when native */ \
+    /* frame statistics show its predecessor still pending or scanning out. */ \
+    X(uint64_t, native_flip_protection, nativeFlipProtection, 0) \
     X(uint64_t, readiness_ceiling_us, readinessCeilingUs, 10000) \
     X(uint64_t, minimum_readiness_reserve_us, minimumReadinessReserveUs, 500) \
     X(uint64_t, cold_start_readiness_demand_us, coldStartReadinessDemandUs, 1500) \
@@ -380,6 +389,11 @@ public:
     // Reference the pending present must clear by one display period to be
     // untorn: the predecessor's flip for a tearing present, its call otherwise.
     uint64_t untornReferenceUs() const;
+    // The presenter latched the pending (planned tearing) present because
+    // native statistics showed its predecessor still pending or scanning out.
+    // observedFlipUs is the predecessor's refresh start, zero while pending.
+    // Call immediately before noteSubmission() for that same present.
+    void noteNativeFlipProtection(uint64_t observedFlipUs);
     bool hasLastSubmission() const;
     // Timestamp playout: the applied sender-to-local clock offset and whether
     // the last scheduled frame used the fixed-delay timestamp path.
@@ -514,6 +528,7 @@ private:
     void resetCadenceSmoothing();
     uint64_t playoutDelayStartUs() const;
     uint64_t playoutDelayMinimumUs() const;
+    void noteReadinessFloorSample(uint64_t submissionUs, int64_t readyOffsetUs);
     uint64_t playoutDelayMaximumUs() const;
     void updatePlayoutHistory(const PacedFrame& frame,
                               const CadenceObservation& cadence,
@@ -616,6 +631,9 @@ private:
     // Earliest time the last submission can reach scanout; equals
     // m_LastSubmissionUs unless latchedFlipAnchor projects a latched flip.
     uint64_t m_SpacingAnchorUs = 0;
+    // Pending native latch of the next submission (nativeFlipProtection).
+    bool m_NativeLatchPending = false;
+    uint64_t m_NativeLatchFlipUs = 0;
     unsigned int m_CleanSpacingFrames = 0;
     unsigned int m_PhaseErrorFrames = 0;
 
@@ -707,6 +725,10 @@ private:
     std::deque<CadenceSample> m_CadenceSamples;
     std::deque<CadenceSample> m_RateCandidateSamples;
     std::deque<int64_t> m_ReadyOffsets;
+    // playoutReadinessFloorPerMille: (submission, ready offset) window.
+    std::deque<std::pair<uint64_t, int64_t>> m_ReadinessFloorSamples;
+    uint64_t m_ReadinessFloorUs = 0;
+    uint64_t m_ReadinessFloorUpdatedUs = 0;
     std::deque<uint64_t> m_PreparationDurations;
     std::deque<uint64_t> m_RenderSchedulerDelays;
     std::deque<uint64_t> m_TargetSchedulerDelays;

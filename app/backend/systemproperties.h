@@ -27,6 +27,7 @@ public:
     Q_PROPERTY(bool hasDesktopEnvironment MEMBER hasDesktopEnvironment CONSTANT)
     Q_PROPERTY(bool hasBrowser MEMBER hasBrowser CONSTANT)
     Q_PROPERTY(bool hasDiscordIntegration MEMBER hasDiscordIntegration CONSTANT)
+    Q_PROPERTY(bool hasPyroWave MEMBER hasPyroWave CONSTANT)
     Q_PROPERTY(bool usesMaterial3Theme MEMBER usesMaterial3Theme CONSTANT)
     Q_PROPERTY(QString versionString MEMBER versionString CONSTANT)
     Q_PROPERTY(bool supportsUiScale MEMBER supportsUiScale CONSTANT)
@@ -83,6 +84,7 @@ private:
     bool hasDesktopEnvironment;
     bool hasBrowser;
     bool hasDiscordIntegration;
+    bool hasPyroWave;
     QString versionString;
     bool usesMaterial3Theme;
     bool isDarwin;

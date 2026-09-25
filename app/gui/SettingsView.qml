@@ -416,10 +416,7 @@ Flickable {
                                 StreamingPreferences.height = selectedHeight
 
                                 if (StreamingPreferences.autoAdjustBitrate) {
-                                    StreamingPreferences.bitrateKbps = StreamingPreferences.getDefaultBitrate(StreamingPreferences.width,
-                                                                                                              StreamingPreferences.height,
-                                                                                                              StreamingPreferences.fps,
-                                                                                                              StreamingPreferences.enableYUV444);
+                                    StreamingPreferences.bitrateKbps = slider.defaultBitrate();
                                     slider.value = StreamingPreferences.bitrateKbps
                                 }
                             }
@@ -582,10 +579,7 @@ Flickable {
                             StreamingPreferences.fps = selectedFps
 
                             if (fpsChanged && StreamingPreferences.autoAdjustBitrate) {
-                                StreamingPreferences.bitrateKbps = StreamingPreferences.getDefaultBitrate(StreamingPreferences.width,
-                                                                                                          StreamingPreferences.height,
-                                                                                                          StreamingPreferences.fps,
-                                                                                                          StreamingPreferences.enableYUV444);
+                                StreamingPreferences.bitrateKbps = slider.defaultBitrate();
                                 slider.value = StreamingPreferences.bitrateKbps
                             }
 
@@ -810,11 +804,27 @@ Flickable {
                     NavigableSlider {
                         id: slider
 
+                        readonly property bool pyroWave: StreamingPreferences.videoCodecConfig === StreamingPreferences.VCC_FORCE_PYROWAVE
+
+                        // PyroWave needs several hundred Mbps, up to multi-gigabit LANs
+                        function defaultBitrate() {
+                            if (pyroWave) {
+                                return StreamingPreferences.getDefaultPyroWaveBitrate(StreamingPreferences.width,
+                                                                                      StreamingPreferences.height,
+                                                                                      StreamingPreferences.fps,
+                                                                                      StreamingPreferences.enableYUV444)
+                            }
+                            return StreamingPreferences.getDefaultBitrate(StreamingPreferences.width,
+                                                                          StreamingPreferences.height,
+                                                                          StreamingPreferences.fps,
+                                                                          StreamingPreferences.enableYUV444)
+                        }
+
                         value: StreamingPreferences.bitrateKbps
 
-                        stepSize: 500
+                        stepSize: pyroWave ? 5000 : 500
                         from : 500
-                        to: StreamingPreferences.unlockBitrate ? 500000 : 150000
+                        to: pyroWave ? 3000000 : (StreamingPreferences.unlockBitrate ? 500000 : 150000)
 
                         snapMode: "SnapOnRelease"
                         width: Math.min(bitrateDesc.implicitWidth, parent.width - (resetBitrateButton.visible ? resetBitrateButton.width + parent.spacing : 0))
@@ -836,10 +846,10 @@ Flickable {
 
                     Button {
                         id: resetBitrateButton
-                        text: qsTr("Use Default (%1 Mbps)").arg(StreamingPreferences.getDefaultBitrate(StreamingPreferences.width, StreamingPreferences.height, StreamingPreferences.fps, StreamingPreferences.enableYUV444) / 1000.0)
-                        visible: StreamingPreferences.bitrateKbps !== StreamingPreferences.getDefaultBitrate(StreamingPreferences.width, StreamingPreferences.height, StreamingPreferences.fps, StreamingPreferences.enableYUV444)
+                        text: qsTr("Use Default (%1 Mbps)").arg(slider.defaultBitrate() / 1000.0)
+                        visible: StreamingPreferences.bitrateKbps !== slider.defaultBitrate()
                         onClicked: {
-                            var defaultBitrate = StreamingPreferences.getDefaultBitrate(StreamingPreferences.width, StreamingPreferences.height, StreamingPreferences.fps, StreamingPreferences.enableYUV444)
+                            var defaultBitrate = slider.defaultBitrate()
                             StreamingPreferences.bitrateKbps = defaultBitrate
                             StreamingPreferences.autoAdjustBitrate = true
                             slider.value = defaultBitrate
@@ -2322,6 +2332,13 @@ Flickable {
                 AutoResizingComboBox {
                     // ignore setting the index at first, and actually set it when the component is loaded
                     Component.onCompleted: {
+                        if (SystemProperties.hasPyroWave) {
+                            codecListModel.append({
+                                "text": qsTr("PyroWave (wired LAN, experimental)"),
+                                "val": StreamingPreferences.VCC_FORCE_PYROWAVE
+                            })
+                        }
+
                         var saved_vcc = StreamingPreferences.videoCodecConfig
 
                         // Default to Automatic (relevant if HDR is enabled,
@@ -2363,9 +2380,26 @@ Flickable {
                     // ::onActivated must be used, as it only listens for when the index is changed by a human
                     onActivated : {
                         if (enabled) {
+                            var wasPyroWave = slider.pyroWave
                             StreamingPreferences.videoCodecConfig = codecListModel.get(currentIndex).val
+
+                            // PyroWave's useful bitrates are an order of magnitude above
+                            // the other codecs', so switching in or out resets a default.
+                            if (slider.pyroWave !== wasPyroWave && StreamingPreferences.autoAdjustBitrate) {
+                                StreamingPreferences.bitrateKbps = slider.defaultBitrate()
+                                slider.value = StreamingPreferences.bitrateKbps
+                            }
+                            else if (StreamingPreferences.bitrateKbps > slider.to) {
+                                StreamingPreferences.bitrateKbps = slider.to
+                                slider.value = StreamingPreferences.bitrateKbps
+                            }
                         }
                     }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 8000
+                    ToolTip.visible: hovered && slider.pyroWave
+                    ToolTip.text: qsTr("PyroWave is an intra-only GPU wavelet codec with sub-millisecond encode and decode latency. It needs a wired connection with hundreds of Mbps to spare and a host with PyroWave support; other hosts fall back to H.264.")
                 }
 
                 Label {
@@ -2436,10 +2470,7 @@ Flickable {
                         if (StreamingPreferences.enableYUV444 != checked) {
                             StreamingPreferences.enableYUV444 = checked
                             if (StreamingPreferences.autoAdjustBitrate) {
-                                StreamingPreferences.bitrateKbps = StreamingPreferences.getDefaultBitrate(StreamingPreferences.width,
-                                                                                                          StreamingPreferences.height,
-                                                                                                          StreamingPreferences.fps,
-                                                                                                          StreamingPreferences.enableYUV444);
+                                StreamingPreferences.bitrateKbps = slider.defaultBitrate();
                                 slider.value = StreamingPreferences.bitrateKbps
                             }
                         }

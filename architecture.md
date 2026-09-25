@@ -47,6 +47,74 @@ time. `Session::exec()` owns the SDL event loop while streaming, so it raises
 the stream window once two seconds have elapsed there; a QML timer would not
 run during that loop.
 
+PyroWave decode path (2026-09-24, `pyrowave` branch): the `PyroWave` codec choice
+negotiates Themaister's intra-only wavelet codec (protocol in
+[docs/pyrowave-protocol.md](docs/pyrowave-protocol.md)). It reuses
+`FFmpegVideoDecoder`, the pacer, VRR worker, stats and `D3D11VARenderer`, but no
+FFmpeg decoder: `initializePyroWave()` creates the D3D11 renderer on one device
+(PyroWave requires monitored fences) and a `PyroWaveDecoder`, whose Vulkan device
+is created by the renderer adapter's LUID. `submitDecodeUnit()` parses the frame
+(`PyroWaveFraming`, record or length-prefixed framing), pushes it and submits the
+Vulkan decode into one of ten D3D11-owned surfaces (three R8/R16 planes each, UAV +
+SRV, NT-shared), then `receiveFrame()` hands the pacer an `AVFrame` tagged with a
+software planar format (for CSC normalization) whose `buf[0]` is a
+`PyroWaveFrameRef` (surface, decode fence value). Two shared D3D11 fences carry
+the synchronization: Vulkan signals the decode fence; `renderPyroWaveVideo()`
+queues `Wait()` on it, draws with `d3d11_yuv_planar_pixel` and signals the
+release fence (with a `Flush`), whose value the decoder's next use of that surface
+waits for on the GPU. `decoderOutputUs` is the submission time, as for D3D11VA;
+VRR `waitForDecode()` blocks on the decode fence value from the frame, so decode
+completion lands in the existing readiness observation. `captureDecodeBoundary()`
+stays 0 (single device). Frames are never partial yet: an incomplete or rejected
+frame is dropped without an IDR request, since the next frame is independent.
+Verified on the Radeon 890M by `tests/pyrowave` (framing rules, real-encoder
+round trip, and 40-frame D3D11 surface/fence cycles at 4:2:0/4:4:4, R8/R16);
+no live host session yet. VRR policy and replay are unchanged.
+
+Balanced readiness floor (2026-09-24), based on `fae3eefe`: the interval-quality
+score averages absolute interval error over one second, which dilutes an
+isolated 4 ms late frame ~100x. Capture `20260923-232347-186` (116 FPS Balanced,
+4K HEVC on the 890M) scored 99.77% against the 99.5% target while visibly
+hitching every few seconds, so the buffer never grew and released 8.2 -> 6.9 ms
+although decode waits ran 6.4 ms p50 and 8.7-11.4 ms on the hitching frames.
+Production Balanced now sets `playout_readiness_floor_per_mille=500` and
+`playout_readiness_floor_window_us=10000000`: `playoutDelayMinimumUs()` is at
+least the median ready offset (decode completion after the mapped source slot)
+of the last ten seconds of timestamp-playout frames, recomputed ten times per
+second. It rises with sustained decode/network load, cannot be inflated by rare
+stalls, and falls within the window, after which the normal hold/release
+drains the buffer. Replay: `232347-186` >2 ms jerk 81 -> 44 per mille for
++1.0 ms median decode-to-submission; its startup connection 86 -> 78 for
++0.25 ms; the 19-minute `20260922-224404-796` session 372 -> 366 for +0.17 ms,
+draining to 8.3-10 ms in clean 116 FPS stretches; Smooth `221707-518` neutral.
+Rejected alternative: scoring each interval individually. At 0.5-1 ms
+tolerance it pinned Balanced and Smooth at their caps for whole sessions (the
+two-minute score remembers bad periods and late frames keep renewing the
+hold); at 2 ms it drained below today's policy. Smooth and Low Latency are
+unchanged. `tests/vrr/configs/latency-presets-stress.json` fails identically
+with the previous replay binary because its assertions name metrics the
+replay no longer emits; it needs updating before it can gate changes.
+
+Native flip protection (2026-09-23), based on `5c5ba95b`: the flip anchor
+assumes a tearing present flips at its call, but on the Radeon 890M DXGI took
+p50 ~3.2 ms / p95 ~6.7 ms. A latched successor therefore flipped 2-8 ms later
+than anchored, and in capture `20260922-224404-796` 68% of adaptive presents
+following a latched frame were issued inside its scanout (its SyncQPCTime
+refresh start, recorded in the latch/frame-stats fields). Production now sets
+`native_flip_protection=1`. Immediately before an unlatched DXGI Present the
+worker passes one display period as `VrrPresentRequest::flipProtectionWindowUs`;
+D3D11 queries `GetFrameStatistics` (~6 us) and presents `Present(1, 0)` instead
+when the predecessor is not yet displayed or the last refresh began less than
+one period earlier. The controller keeps its planned latch decision and
+hysteresis; `noteNativeFlipProtection()` only advances the flip anchor from
+the observed refresh. Frames that were safe keep their adaptive flip; a latch
+on a panel already idle in its VRR blank flips at once. Trace rows append
+`flip_protection_*` columns (still schema 5); replay applies the recorded
+latch as execution evidence rather than simulating DXGI, so older captures
+reproduce unchanged (verified on `224404-796`: all submissions, targets, tear
+classes and controller state exact, as before). Vulkan and composition
+presenters ignore the request. Needs a live capture to confirm tear removal.
+
 Reduce judder follow-up (2026-09-22), based on `e053b5cb`: the smoother's
 positive retiming cap rises from 2 ms to 6 ms, a learned readiness reserve
 delays the smoothed schedule by the lateness the smoother itself causes, and

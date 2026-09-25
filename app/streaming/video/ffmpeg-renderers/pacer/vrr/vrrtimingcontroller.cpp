@@ -213,6 +213,16 @@ VrrTimingParameters vrrTimingParametersForSession(
     // until matching live traces justify changing them.
     parameters.playoutMeanMissReleaseUsPerSecond = latencyMode == 0 ? 50 :
         latencyMode == 2 ? 125 : 250;
+    // The one-second mean error dilutes isolated late frames, so Balanced
+    // released below the delay its 4K decode tail needed and hitched on each
+    // slow frame. Floor it at the median ready offset of the last ten
+    // seconds: it follows decode/network load both ways within the window
+    // and rare stalls cannot inflate it. Replay of 20260923-232347-186: >2 ms
+    // jerk 81 -> 44 per mille for +1.0 ms median latency; the 19-minute
+    // 20260922-224404-796 session stays within +0.2 ms. Smooth gained nothing;
+    // Low Latency awaits a matching capture.
+    parameters.playoutReadinessFloorPerMille = latencyMode == 1 ? 500 : 0;
+    parameters.playoutReadinessFloorWindowUs = 10000000;
     parameters.playoutOnTimeTargetPerMillion = latencyMode == 2 ? 990000 :
         latencyMode == 1 ? 995000 : 999900;
     parameters.playoutReadinessWindowUs = latencyMode == 2 ? 60000000 :
@@ -312,6 +322,12 @@ VrrTimingParameters vrrTimingParametersForSession(
     // Beyond ~50 Hz the panel may be repeating the last frame (LFC); an
     // immediate tearing present can then land mid-repeat.
     parameters.vrrFloorLatchGapUs = 20000;
+    // The flip anchor assumes a tearing present flips at its call, but DXGI
+    // can take several milliseconds, so a latched successor flips later than
+    // anchored and the next tearing present landed inside its scanout. Let the
+    // presenter latch that present from live frame statistics instead; the
+    // flip queue then shows it at the earliest untorn refresh.
+    parameters.nativeFlipProtection = 1;
     parameters.pacingLatencyQueueModeExtra = 0;
     if (!config.smoothFrameTiming) {
         // Preserve the mapped RTP intervals instead of regularizing the
@@ -362,6 +378,11 @@ void VrrTimingController::reset()
     m_CatchupActive = false;
     m_LastSubmissionUs = 0;
     m_SpacingAnchorUs = 0;
+    m_NativeLatchPending = false;
+    m_NativeLatchFlipUs = 0;
+    m_ReadinessFloorSamples.clear();
+    m_ReadinessFloorUs = 0;
+    m_ReadinessFloorUpdatedUs = 0;
     m_CleanSpacingFrames = 0;
     m_PhaseErrorFrames = 0;
     clearTimeline(false);
@@ -2195,12 +2216,18 @@ void VrrTimingController::noteSubmission(bool submitted, bool cancelled,
         }
         else m_SubmissionSmoothness.breakSequence();
     }
+    const bool nativeLatch = m_NativeLatchPending;
+    m_NativeLatchPending = false;
     if (submitted) {
         // Cancellation is a reason, not proof that nothing reached the native
         // presentation queue (Vulkan must submit some abandoned images).
         // A latched present waits in the flip queue for the panel's minimum
         // period after the previous flip; it cannot reach scanout sooner.
-        m_SpacingAnchorUs = m_HaveLastSubmission && m_LatchedPresentation ?
+        // A native latch queues behind the observed refresh when available.
+        if (nativeLatch) {
+            m_SpacingAnchorUs = std::max(m_SpacingAnchorUs, m_NativeLatchFlipUs);
+        }
+        m_SpacingAnchorUs = m_HaveLastSubmission && (m_LatchedPresentation || nativeLatch) ?
             std::max(submissionUs, saturatingAdd(spacingAnchorUs(), m_DisplayPeriodUs)) :
             submissionUs;
         m_HaveLastSubmission = true;
@@ -2219,6 +2246,10 @@ void VrrTimingController::noteSubmission(bool submitted, bool cancelled,
             if (m_Pending.cadenceEligible) {
                 appendBounded(m_ReadyOffsets, m_Pending.readyOffsetUs,
                               readinessLearningSampleLimit());
+            }
+            if (m_Parameters.playoutReadinessFloorPerMille != 0 &&
+                    m_Pending.intervalValid) {
+                noteReadinessFloorSample(submissionUs, m_Pending.readyOffsetUs);
             }
             if (m_Pending.hasPreparationDuration) {
                 if (m_Parameters.playoutPredictionEnabled &&
@@ -2632,6 +2663,17 @@ uint64_t VrrTimingController::untornReferenceUs() const
     return m_LatchedPresentation ? m_LastSubmissionUs : spacingAnchorUs();
 }
 
+void VrrTimingController::noteNativeFlipProtection(uint64_t observedFlipUs)
+{
+    if (m_Parameters.nativeFlipProtection == 0) {
+        return;
+    }
+    // Deliberately leaves m_LatchedPresentation (the planned decision and its
+    // entry/exit hysteresis) alone; only the flip anchor learns the latch.
+    m_NativeLatchPending = true;
+    m_NativeLatchFlipUs = observedFlipUs;
+}
+
 bool VrrTimingController::hasLastSubmission() const
 {
     return m_HaveLastSubmission;
@@ -2809,9 +2851,43 @@ uint64_t VrrTimingController::effectivePlayoutDelayUs() const
     return m_Parameters.sourcePlayoutDelayUs;
 }
 
+void VrrTimingController::noteReadinessFloorSample(uint64_t submissionUs,
+                                                  int64_t readyOffsetUs)
+{
+    m_ReadinessFloorSamples.emplace_back(submissionUs, readyOffsetUs);
+    const uint64_t windowUs = m_Parameters.playoutReadinessFloorWindowUs;
+    while (!m_ReadinessFloorSamples.empty() &&
+           (submissionUs < m_ReadinessFloorSamples.front().first ||
+            submissionUs - m_ReadinessFloorSamples.front().first > windowUs)) {
+        m_ReadinessFloorSamples.pop_front();
+    }
+    // Ten updates per second bound the selection cost at high frame rates.
+    if (m_ReadinessFloorUpdatedUs != 0 &&
+            submissionUs >= m_ReadinessFloorUpdatedUs &&
+            submissionUs - m_ReadinessFloorUpdatedUs < 100000) {
+        return;
+    }
+    m_ReadinessFloorUpdatedUs = submissionUs;
+    if (m_ReadinessFloorSamples.size() < 32) {
+        m_ReadinessFloorUs = 0;
+        return;
+    }
+    std::vector<int64_t> offsets;
+    offsets.reserve(m_ReadinessFloorSamples.size());
+    for (const auto& sample : m_ReadinessFloorSamples) {
+        offsets.push_back(sample.second);
+    }
+    const size_t index = std::min(offsets.size() - 1,
+        static_cast<size_t>(offsets.size() *
+            std::min<uint64_t>(m_Parameters.playoutReadinessFloorPerMille, 1000) / 1000));
+    std::nth_element(offsets.begin(), offsets.begin() + index, offsets.end());
+    m_ReadinessFloorUs = offsets[index] > 0 ? static_cast<uint64_t>(offsets[index]) : 0;
+}
+
 uint64_t VrrTimingController::playoutDelayMinimumUs() const
 {
-    uint64_t minimumUs = std::min(m_Parameters.playoutDelayMinimumUs,
+    uint64_t minimumUs = std::min(std::max(m_Parameters.playoutDelayMinimumUs,
+                                           m_ReadinessFloorUs),
                                   playoutDelayCapUs());
     return m_Parameters.playoutHistoryEnabled != 0 ?
         std::min(minimumUs, playoutQueueLimitUs()) : minimumUs;

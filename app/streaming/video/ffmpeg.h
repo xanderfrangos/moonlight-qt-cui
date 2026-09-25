@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <QQueue>
 #include <set>
 
@@ -12,10 +13,13 @@
 #include "ffmpeg-renderers/renderer.h"
 #include "ffmpeg-renderers/pacer/pacer.h"
 #include "statsgraphs.h"
+#include "pyrowave/pyrowaveframing.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 }
+
+class PyroWaveDecoder;
 
 class FFmpegVideoDecoder : public IVideoDecoder {
 public:
@@ -53,6 +57,13 @@ private:
                                 PDECODER_PARAMETERS params,
                                 TestMode testMode,
                                 bool useAlternateFrontend);
+
+    bool initializeAVCodecContext(const AVCodec* decoder,
+                                  enum AVPixelFormat requiredFormat,
+                                  PDECODER_PARAMETERS params,
+                                  TestMode testMode);
+
+    bool finishRenderInitialization(PDECODER_PARAMETERS params);
 
     void stringifyVideoStats(VIDEO_STATS& stats, char* output, int length);
 
@@ -105,6 +116,12 @@ private:
     static bool isSeparateTestDecoderRequired(const AVCodec* decoder);
 
     void reset();
+
+    // PyroWave frames skip FFmpeg: a Vulkan decoder writes into surfaces owned
+    // by the renderer, and these two calls stand in for avcodec send/receive.
+    bool initializePyroWave(PDECODER_PARAMETERS params);
+    int sendPyroWaveFrame(int length);
+    int receiveFrame(AVFrame* frame);
 
     void writeBuffer(PLENTRY entry, int& offset);
 
@@ -171,6 +188,19 @@ private:
     QQueue<DECODE_UNIT> m_FrameInfoQueue;
     // Parallel to m_FrameInfoQueue: when each packet was handed to the decoder.
     QQueue<uint64_t> m_FrameSubmitTimeQueue;
+
+#ifdef HAVE_PYROWAVE
+    std::unique_ptr<PyroWaveDecoder> m_PyroWave;
+#endif
+    bool m_PyroWaveActive = false;
+    QQueue<AVFrame*> m_PyroWaveOutput;
+    // The current frame's RTP packets, and which were lost
+    std::vector<PyroWaveFraming::Segment> m_PyroWavePackets;
+    // Leading packets of the current frame that hold its coarsest wavelet level
+    size_t m_PyroWaveCriticalPackets = 0;
+    uint32_t m_PyroWaveRejectedFrames = 0;
+    uint32_t m_PyroWavePartialFrames = 0;
+    uint64_t m_PyroWaveLastErrorLogUs = 0;
 
     static const uint8_t k_H264TestFrame[];
     static const uint8_t k_HEVCMainTestFrame[];
