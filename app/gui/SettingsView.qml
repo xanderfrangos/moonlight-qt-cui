@@ -1263,6 +1263,9 @@ Flickable {
                     ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: vrrForced ?
                                       qsTr("Borderless windowed mode is required for active VRR streaming. Your saved display mode will be restored for non-VRR sessions.")
+                                    : SystemProperties.tvMode ?
+                                      qsTr("Fullscreen generally provides the best performance, but borderless windowed may work better with features like macOS Spaces, Alt+Tab, screenshot tools, on-screen overlays, etc.") + "\n\n" +
+                                      qsTr("This setting has no effect while the controller UI is on, which always streams in borderless windowed mode.")
                                     :
                                       qsTr("Fullscreen generally provides the best performance, but borderless windowed may work better with features like macOS Spaces, Alt+Tab, screenshot tools, on-screen overlays, etc.")
                 }

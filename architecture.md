@@ -1432,6 +1432,9 @@ A saved custom FPS remains selectable. Toggling VRR does not rewrite saved FPS;
 
 `snapshotPresentationSettings()` resolves that request for the session:
 
+0. Start from the saved window mode, but use borderless desktop fullscreen
+   whenever the controller UI (`SystemProperties::isTvMode()`) is active for
+   this launch. The saved preference is not rewritten.
 1. Query the actual window display refresh. An unavailable refresh may fall
    back to 60 Hz for legacy behavior, but that fallback cannot qualify VRR.
 2. Resolve effective V-sync. A requested FPS over refresh plus 5 disables it.

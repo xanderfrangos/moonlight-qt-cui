@@ -8,6 +8,7 @@
 #include "streaming/streamutils.h"
 #include "streaming/vrrratepolicy.h"
 #include "backend/richpresencemanager.h"
+#include "backend/systemproperties.h"
 #include "backend/networkbuffers.h"
 
 #include <Limelight.h>
@@ -679,6 +680,14 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     m_PresentationSettings.decoderSelection = m_Preferences->videoDecoderSelection;
     m_PresentationSettings.rendererSelection = m_Preferences->rendererSelection;
     m_PresentationSettings.effectiveWindowMode = m_Preferences->windowMode;
+
+    // The controller UI always streams borderless, like its own fullscreen
+    // window, without overwriting the saved display mode
+    if (SystemProperties::isTvMode()) {
+        m_PresentationSettings.effectiveWindowMode = StreamingPreferences::WM_FULLSCREEN_DESKTOP;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Controller UI active; using borderless desktop fullscreen for this session");
+    }
 
     int strictRefreshRate = 0;
     const bool hasStrictRefreshRate = StreamUtils::tryGetDisplayRefreshRate(window, strictRefreshRate);
