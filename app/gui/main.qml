@@ -911,6 +911,7 @@ ApplicationWindow {
         acceptText: qsTr("Quit")
         rejectText: qsTr("Keep using Moonlight")
         destructive: true
+        tvAcceptFirst: true
         imageSrc: SystemProperties.tvMode ? "qrc:/res/power.svg" : "qrc:/res/baseline-help_outline-24px.svg"
         // For keyboard/gamepad navigation
         onAccepted: Qt.quit()

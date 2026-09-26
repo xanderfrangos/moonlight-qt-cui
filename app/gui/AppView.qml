@@ -496,6 +496,7 @@ import AppModel 1.0; AppModel {}', parent, '')
         imageSrc: SystemProperties.tvMode ? "qrc:/res/stop_FILL1_wght700_GRAD200_opsz48.svg" : "qrc:/res/baseline-help_outline-24px.svg"
         rejectText: qsTr("Cancel")
         destructive: true
+        tvAcceptFirst: true
 
         function quitApp() {
             var component = Qt.createComponent("QuitSegue.qml")

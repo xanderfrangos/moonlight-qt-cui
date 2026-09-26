@@ -599,6 +599,7 @@ CenteredGridView {
         imageSrc: SystemProperties.tvMode ? "qrc:/res/delete.svg" : "qrc:/res/baseline-help_outline-24px.svg"
         rejectText: qsTr("Cancel")
         destructive: true
+        tvAcceptFirst: true
 
         onAccepted: {
             computerModel.deleteComputer(pcIndex)

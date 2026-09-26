@@ -25,6 +25,9 @@ Dialog {
     // opens, and the accept button is drawn in the error color.
     property bool destructive: false
 
+    // Some TV dialogs should put their destructive action first and focused.
+    property bool tvAcceptFirst: false
+
     // Whether the OK or Yes button can be pressed, such as while the text
     // entered is valid. Use this rather than standardButton(), since TV mode
     // draws its own buttons.
@@ -52,7 +55,7 @@ Dialog {
         }
 
         var buttons = []
-        if (destructive) {
+        if (destructive && !tvAcceptFirst) {
             if (reject) buttons.push(reject)
             if (accept) buttons.push(accept)
         }
