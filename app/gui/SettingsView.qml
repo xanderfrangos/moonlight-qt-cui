@@ -1200,7 +1200,7 @@ Flickable {
 
                     Label {
                         width: parent.width
-                        text: qsTr("RCAS sharpness: %1").arg(StreamingPreferences.fsr1RcasSharpness.toFixed(1))
+                        text: qsTr("RCAS sharpness: %1").arg(StreamingPreferences.fsr1RcasSharpness.toFixed(0))
                         font.pointSize: 12
                         wrapMode: Text.Wrap
                     }
@@ -1209,10 +1209,10 @@ Flickable {
                         width: parent.width
                         from: 0
                         to: 100
-                        stepSize: 0.5
+                        stepSize: 10
                         snapMode: "SnapAlways"
                         value: StreamingPreferences.fsr1RcasSharpness
-                        onMoved: StreamingPreferences.fsr1RcasSharpness = Math.round(value * 2) / 2
+                        onMoved: StreamingPreferences.fsr1RcasSharpness = Math.round(value / 10) * 10
 
                         ToolTip.delay: 1000
                         ToolTip.timeout: 10000

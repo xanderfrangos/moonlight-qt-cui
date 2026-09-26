@@ -412,7 +412,7 @@ public:
     int debandMode;
     // Linux Vulkan FSR1 upscaling. Takes effect on the next stream.
     bool fsr1Upscaling;
-    // RCAS sharpness slider (0-100), with the shader's 0.75-stop default at 62.5.
+    // RCAS sharpness slider (0-100) in steps of 10, defaulting to 20 (1.6 stops).
     double fsr1RcasSharpness;
     // Linux Vulkan LS1 uses the user's Lossless Scaling DLL at runtime.
     bool ls1Upscaling;

@@ -244,9 +244,9 @@ private:
                        bool testOnly, IVideoDecoder*& chosenDecoder,
                        bool enableVrr = false, bool preferVrrRenderer = false,
                        bool fsr1Upscaling = false,
-                       double fsr1RcasSharpness = 62.5,
+                       double fsr1RcasSharpness = 20.0,
                        bool ls1Upscaling = false,
-                       int ls1Sharpness = 50,
+                       int ls1Sharpness = 0,
                        const QString& ls1DllPath = QString(),
                        int vrrDisplayRefreshHz = 0,
                        bool* effectiveVrr = nullptr, bool smoothVrrFrameTiming = true,
@@ -319,9 +319,9 @@ private:
         bool temporalDithering = false;
         int debandMode = 0;
         bool fsr1Upscaling = false;
-        double fsr1RcasSharpness = 62.5;
+        double fsr1RcasSharpness = 20.0;
         bool ls1Upscaling = false;
-        int ls1Sharpness = 50;
+        int ls1Sharpness = 0;
         QString ls1DllPath;
         int refreshRate = 0;
         StreamingPreferences::WindowMode effectiveWindowMode = StreamingPreferences::WM_WINDOWED;

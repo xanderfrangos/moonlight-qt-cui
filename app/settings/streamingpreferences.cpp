@@ -183,9 +183,9 @@ void StreamingPreferences::reload()
         }
     }
     fsr1Upscaling = settings.value(SER_FSR1UPSCALING, false).toBool();
-    fsr1RcasSharpness = qBound(0.0, settings.value(SER_FSR1RCASSHARPNESS, 62.5).toDouble(), 100.0);
+    fsr1RcasSharpness = qBound(0.0, settings.value(SER_FSR1RCASSHARPNESS, 20.0).toDouble(), 100.0);
     ls1Upscaling = settings.value(SER_LS1UPSCALING, false).toBool();
-    ls1Sharpness = qBound(0, settings.value(SER_LS1SHARPNESS, 50).toInt(), 100);
+    ls1Sharpness = qBound(0, settings.value(SER_LS1SHARPNESS, 0).toInt(), 100);
     ls1DllPath = settings.value(SER_LS1DLLPATH).toString();
     bitrateKbps = settings.value(SER_BITRATE, getDefaultBitrate(width, height, fps, enableYUV444)).toInt();
     unlockBitrate = settings.value(SER_UNLOCK_BITRATE, false).toBool();
