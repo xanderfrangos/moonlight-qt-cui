@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QRect>
+#include <QVariantMap>
 
 #include "SDL_compat.h"
 
@@ -48,6 +49,10 @@ public:
     Q_INVOKABLE QRect getNativeResolution(int displayIndex);
     Q_INVOKABLE QRect getSafeAreaResolution(int displayIndex);
     Q_INVOKABLE int getRefreshRate(int displayIndex);
+
+    // The current mode of the display a stream started now would use, as a
+    // map with "width", "height" and "refreshRate" (0 if unknown)
+    Q_INVOKABLE QVariantMap getStreamDisplayMode();
 
     Q_INVOKABLE void startAsyncLoad();
     Q_INVOKABLE void waitForAsyncLoad();

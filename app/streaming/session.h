@@ -179,6 +179,10 @@ private:
 
     void snapshotPresentationSettings(SDL_Window* window);
 
+    // Replaces the stream's resolution and frame rate with the target
+    // display's current mode where the Native options are selected
+    void applyNativeStreamMode();
+
     IAudioRenderer* createAudioRenderer(const POPUS_MULTISTREAM_CONFIGURATION opusConfig);
 
     bool initializeAudioRenderer();

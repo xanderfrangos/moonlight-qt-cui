@@ -265,6 +265,10 @@ public:
     Q_PROPERTY(int width MEMBER width NOTIFY displayModeChanged)
     Q_PROPERTY(int height MEMBER height NOTIFY displayModeChanged)
     Q_PROPERTY(int fps MEMBER fps NOTIFY displayModeChanged)
+    // Native options resolve width/height or fps from the stream's display
+    // when it starts. The fields above keep the last placeholder values.
+    Q_PROPERTY(bool nativeResolution MEMBER nativeResolution NOTIFY displayModeChanged)
+    Q_PROPERTY(bool nativeFps MEMBER nativeFps NOTIFY displayModeChanged)
     Q_PROPERTY(int bitrateKbps MEMBER bitrateKbps NOTIFY bitrateChanged)
     Q_PROPERTY(bool unlockBitrate MEMBER unlockBitrate NOTIFY unlockBitrateChanged)
     Q_PROPERTY(bool autoAdjustBitrate MEMBER autoAdjustBitrate NOTIFY autoAdjustBitrateChanged)
@@ -338,6 +342,8 @@ public:
     int width;
     int height;
     int fps;
+    bool nativeResolution;
+    bool nativeFps;
     int bitrateKbps;
     bool unlockBitrate;
     bool autoAdjustBitrate;

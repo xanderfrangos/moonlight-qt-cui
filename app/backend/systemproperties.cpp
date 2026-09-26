@@ -2,6 +2,7 @@
 #include "utils.h"
 
 #include <QGuiApplication>
+#include <QQuickWindow>
 #include <QLibraryInfo>
 #include <QDir>
 #include <QProcess>
@@ -239,6 +240,38 @@ int SystemProperties::getRefreshRate(int displayIndex)
 {
     // Returns 0 if out of bounds
     return monitorRefreshRates.value(displayIndex);
+}
+
+QVariantMap SystemProperties::getStreamDisplayMode()
+{
+    // Streams open on the screen showing the app's window
+    QScreen* screen = QGuiApplication::primaryScreen();
+    const auto windows = QGuiApplication::topLevelWindows();
+    for (QWindow* window : windows) {
+        if (qobject_cast<QQuickWindow*>(window) != nullptr && window->isVisible()) {
+            screen = window->screen();
+            break;
+        }
+    }
+
+    int width = 0, height = 0, refreshHz = 0;
+    if (SDL_InitSubSystem(SDL_INIT_VIDEO) == 0) {
+        StreamUtils::getDisplayOutputMode(
+            StreamUtils::getDisplayIndexForScreen(screen),
+            width, height, refreshHz);
+        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    }
+    else {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "SDL_InitSubSystem(SDL_INIT_VIDEO) failed: %s",
+                     SDL_GetError());
+    }
+
+    QVariantMap mode;
+    mode.insert("width", width);
+    mode.insert("height", height);
+    mode.insert("refreshRate", refreshHz);
+    return mode;
 }
 
 void SystemProperties::startAsyncLoad()

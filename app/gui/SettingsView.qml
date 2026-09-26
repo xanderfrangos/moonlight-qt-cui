@@ -291,10 +291,13 @@ Flickable {
                             if (indexToAdd >= 0) {
                                 resolutionListModel.insert(indexToAdd,
                                                            {
-                                                               "text": friendlyNamePrefix+" ("+rect.width+"x"+rect.height+")",
+                                                               "text": friendlyNamePrefix ?
+                                                                           friendlyNamePrefix+" ("+rect.width+"x"+rect.height+")" :
+                                                                           rect.width+"x"+rect.height,
                                                                "video_width": ""+rect.width,
                                                                "video_height": ""+rect.height,
-                                                               "is_custom": false
+                                                               "is_custom": false,
+                                                               "is_native": false
                                                            })
                             }
                         }
@@ -316,8 +319,10 @@ Flickable {
                                     break
                                 }
 
-                                addDetectedResolution(qsTr("Native"), screenRect)
-                                addDetectedResolution(qsTr("Native (Excluding Notch)"), safeAreaRect)
+                                // Fixed entries for each display. "Native" is kept for
+                                // the option that follows the stream's display.
+                                addDetectedResolution("", screenRect)
+                                addDetectedResolution(qsTr("Excluding Notch"), safeAreaRect)
                             }
 
                             // Prune resolutions that are over the decoder's maximum
@@ -334,12 +339,31 @@ Flickable {
                                 }
                             }
 
+                            // Native follows the stream's display. Show the current
+                            // display's mode here; the stream detects it again at launch.
+                            var displayMode = SystemProperties.getStreamDisplayMode()
+                            var hasNativeMode = displayMode.width > 0 && displayMode.height > 0
+                            resolutionListModel.insert(0,
+                                                       {
+                                                           "text": hasNativeMode ?
+                                                                       qsTr("Native (%1x%2)").arg(displayMode.width).arg(displayMode.height) :
+                                                                       qsTr("Native"),
+                                                           "video_width": ""+(hasNativeMode ? displayMode.width : StreamingPreferences.width),
+                                                           "video_height": ""+(hasNativeMode ? displayMode.height : StreamingPreferences.height),
+                                                           "is_custom": false,
+                                                           "is_native": true
+                                                       })
+
                             // load the saved width/height, and iterate through the ComboBox until a match is found
                             // and set it to that index.
                             var saved_width = StreamingPreferences.width
                             var saved_height = StreamingPreferences.height
                             var index_set = false
-                            for (var i = 0; i < resolutionListModel.count; i++) {
+                            if (StreamingPreferences.nativeResolution) {
+                                currentIndex = 0
+                                index_set = true
+                            }
+                            for (var i = 1; i < resolutionListModel.count && !index_set; i++) {
                                 var el_width = parseInt(resolutionListModel.get(i).video_width);
                                 var el_height = parseInt(resolutionListModel.get(i).video_height);
 
@@ -356,7 +380,8 @@ Flickable {
                                                                "text": qsTr("Custom")+" ("+StreamingPreferences.width+"x"+StreamingPreferences.height+")",
                                                                "video_width": ""+StreamingPreferences.width,
                                                                "video_height": ""+StreamingPreferences.height,
-                                                               "is_custom": true
+                                                               "is_custom": true,
+                                                               "is_native": false
                                                            })
                                 currentIndex = resolutionListModel.count - 1
                             }
@@ -365,7 +390,8 @@ Flickable {
                                                                "text": qsTr("Custom"),
                                                                "video_width": "",
                                                                "video_height": "",
-                                                               "is_custom": true
+                                                               "is_custom": true,
+                                                               "is_native": false
                                                            })
                             }
 
@@ -374,6 +400,11 @@ Flickable {
                             recalculateWidth()
 
                             lastIndexValue = currentIndex
+
+                            // Size the bitrate for this display's native mode
+                            if (StreamingPreferences.nativeResolution) {
+                                updateBitrateForSelection()
+                            }
                         }
 
                         id: resolutionComboBox
@@ -388,30 +419,35 @@ Flickable {
                                 video_width: "1280"
                                 video_height: "720"
                                 is_custom: false
+                                is_native: false
                             }
                             ListElement {
                                 text: qsTr("1080p")
                                 video_width: "1920"
                                 video_height: "1080"
                                 is_custom: false
+                                is_native: false
                             }
                             ListElement {
                                 text: qsTr("1440p")
                                 video_width: "2560"
                                 video_height: "1440"
                                 is_custom: false
+                                is_native: false
                             }
                             ListElement {
                                 text: qsTr("4K")
                                 video_width: "3840"
                                 video_height: "2160"
                                 is_custom: false
+                                is_native: false
                             }
                         }
 
                         function updateBitrateForSelection() {
                             var selectedWidth = parseInt(resolutionListModel.get(currentIndex).video_width)
                             var selectedHeight = parseInt(resolutionListModel.get(currentIndex).video_height)
+                            StreamingPreferences.nativeResolution = resolutionListModel.get(currentIndex).is_native
 
                             // Only modify the bitrate if the values actually changed
                             if (StreamingPreferences.width !== selectedWidth || StreamingPreferences.height !== selectedHeight) {
@@ -579,6 +615,7 @@ Flickable {
                         function updateBitrateForSelection() {
                             var selectedFps = parseInt(model.get(fpsComboBox.currentIndex).video_fps)
                             var fpsChanged = StreamingPreferences.fps !== selectedFps
+                            StreamingPreferences.nativeFps = model.get(fpsComboBox.currentIndex).is_native
                             StreamingPreferences.fps = selectedFps
 
                             if (fpsChanged && StreamingPreferences.autoAdjustBitrate) {
@@ -712,9 +749,29 @@ Flickable {
                         }
 
                         function reinitialize() {
+                            // Native follows the stream's display. Show the current
+                            // display's refresh rate here; the stream detects it again at launch.
+                            var nativeFps = SystemProperties.getStreamDisplayMode().refreshRate
+                            if (StreamingPreferences.nativeFps && nativeFps > 0 && StreamingPreferences.fps !== nativeFps) {
+                                // Update the placeholder before building the choices, so
+                                // an old display's rate is not offered as a custom value
+                                StreamingPreferences.fps = nativeFps
+                                if (StreamingPreferences.autoAdjustBitrate) {
+                                    StreamingPreferences.bitrateKbps = slider.defaultBitrate()
+                                    slider.value = StreamingPreferences.bitrateKbps
+                                }
+                            }
+
                             var choices = StreamingPreferences.getFpsChoices(getRefreshRates())
                             model.clear()
                             var hasCustomChoice = false
+
+                            model.append({
+                                             "text": nativeFps > 0 ? qsTr("Native (%1 Hz)").arg(nativeFps) : qsTr("Native"),
+                                             "video_fps": "" + (nativeFps > 0 ? nativeFps : StreamingPreferences.fps),
+                                             "is_custom": false,
+                                             "is_native": true
+                                         })
 
                             for (var i = 0; i < choices.length; i++) {
                                 var choice = choices[i]
@@ -722,13 +779,17 @@ Flickable {
                                 model.append({
                                                  "text": choiceText(choice),
                                                  "video_fps": choice.video_fps,
-                                                 "is_custom": choice.is_custom
+                                                 "is_custom": choice.is_custom,
+                                                 "is_native": false
                                              })
                             }
 
                             var saved_fps = StreamingPreferences.fps
-                            var found = false
-                            for (var i = 0; i < model.count; i++) {
+                            var found = StreamingPreferences.nativeFps
+                            if (found) {
+                                currentIndex = 0
+                            }
+                            for (var i = 1; i < model.count && !found; i++) {
                                 var el_fps = parseInt(model.get(i).video_fps);
 
                                 // Look for a matching frame rate
@@ -740,15 +801,17 @@ Flickable {
                             }
 
                             // Saved custom and native maximum choices remain visible.
+                            // Fall back to the first fixed rate, after Native
                             if (!found) {
-                                currentIndex = model.count > 0 ? 0 : -1
+                                currentIndex = model.count > 1 ? 1 : -1
                             }
 
                             if (!hasCustomChoice) {
                                 model.append({
                                                  "text": qsTr("Custom"),
                                                  "video_fps": "",
-                                                 "is_custom": true
+                                                 "is_custom": true,
+                                                 "is_native": false
                                              })
                             }
 

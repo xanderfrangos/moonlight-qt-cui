@@ -2,6 +2,8 @@
 
 #include "SDL_compat.h"
 
+class QScreen;
+
 class StreamUtils
 {
 public:
@@ -22,6 +24,16 @@ public:
 
     static
     bool getNativeDesktopMode(int displayIndex, SDL_DisplayMode* mode, SDL_Rect* safeArea);
+
+    // The SDL display showing a Qt screen, which is where a stream started
+    // from that screen opens. Returns 0 if no display matches.
+    static
+    int getDisplayIndexForScreen(QScreen* screen);
+
+    // The resolution and refresh rate a display is currently outputting, used
+    // by the Native resolution and frame rate options. A value is 0 if unknown.
+    static
+    void getDisplayOutputMode(int displayIndex, int& width, int& height, int& refreshHz);
 
     static
     int getDisplayRefreshRate(SDL_Window* window);

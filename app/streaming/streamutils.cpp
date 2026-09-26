@@ -2,6 +2,7 @@
 
 #include <Qt>
 #include <QDir>
+#include <QScreen>
 
 #ifdef Q_OS_DARWIN
 #include <ApplicationServices/ApplicationServices.h>
@@ -270,6 +271,63 @@ bool StreamUtils::hasFastAes()
     #warning Unknown 64-bit platform. Assuming AES is fast on this CPU.
     return true;
 #endif
+}
+
+int StreamUtils::getDisplayIndexForScreen(QScreen* screen)
+{
+    if (screen == nullptr) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Qt window is not associated with a QScreen!");
+        return 0;
+    }
+
+    QRect displayRect = screen->geometry();
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Qt UI screen is at (%d,%d)",
+                displayRect.x(), displayRect.y());
+    for (int i = 0; i < SDL_GetNumVideoDisplays(); i++) {
+        SDL_Rect displayBounds;
+
+        if (SDL_GetDisplayBounds(i, &displayBounds) == 0) {
+            if (displayBounds.x == displayRect.x() &&
+                displayBounds.y == displayRect.y()) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "SDL found matching display %d",
+                            i);
+                return i;
+            }
+        }
+        else {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "SDL_GetDisplayBounds(%d) failed: %s",
+                        i, SDL_GetError());
+        }
+    }
+
+    return 0;
+}
+
+void StreamUtils::getDisplayOutputMode(int displayIndex, int& width, int& height, int& refreshHz)
+{
+    width = height = refreshHz = 0;
+
+    SDL_DisplayMode mode;
+    SDL_Rect safeArea;
+    if (getNativeDesktopMode(displayIndex, &mode, &safeArea)) {
+        width = mode.w;
+        height = mode.h;
+    }
+
+    // The current mode is what the display is actually running at, which
+    // is also what VRR qualification checks the stream's frame rate against
+    if (SDL_GetCurrentDisplayMode(displayIndex, &mode) == 0 && mode.refresh_rate > 0) {
+        refreshHz = mode.refresh_rate;
+    }
+    else {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Refresh rate of display %d is unknown",
+                    displayIndex);
+    }
 }
 
 bool StreamUtils::getNativeDesktopMode(int displayIndex, SDL_DisplayMode* mode, SDL_Rect* safeArea)

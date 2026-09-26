@@ -428,10 +428,14 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
             preferences->height = resolution.second;
         }
     }
+    if (displaySet) {
+        preferences->nativeResolution = false;
+    }
 
     // Resolve --fps option
     if (parser.isSet("fps")) {
         preferences->fps = parser.getIntOption("fps");
+        preferences->nativeFps = false;
         if (!inRange(preferences->fps, 10, 480)) {
             fprintf(stderr, "Warning: FPS is out of the supported range (10 - 480 FPS). Performance may suffer!\n");
         }
@@ -440,6 +444,8 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     // Resolve --bitrate option
     if (parser.isSet("bitrate")) {
         preferences->bitrateKbps = parser.getIntOption("bitrate");
+        // Keep an explicit bitrate when a Native option resolves a new mode
+        preferences->autoAdjustBitrate = false;
         if (!inRange(preferences->bitrateKbps, 500, 500000)) {
             fprintf(stderr, "Warning: Bitrate is out of the supported range (500 - 500000 Kbps). Performance may suffer!\n");
         }

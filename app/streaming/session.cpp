@@ -764,6 +764,63 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
                 static_cast<int>(m_PresentationSettings.effectiveWindowMode));
 }
 
+void Session::applyNativeStreamMode()
+{
+    if (!m_Preferences->nativeResolution && !m_Preferences->nativeFps) {
+        return;
+    }
+
+    // The stream window opens on the display showing the Qt UI
+    int displayIndex = StreamUtils::getDisplayIndexForScreen(m_QtWindow != nullptr ? m_QtWindow->screen() : nullptr);
+    int width, height, refreshHz;
+    StreamUtils::getDisplayOutputMode(displayIndex, width, height, refreshHz);
+
+    if (m_Preferences->nativeResolution) {
+        if (width > 0 && height > 0) {
+            m_StreamConfig.width = width;
+            m_StreamConfig.height = height;
+        }
+        else {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Native resolution unavailable; using %dx%d",
+                        m_StreamConfig.width, m_StreamConfig.height);
+        }
+    }
+
+    if (m_Preferences->nativeFps) {
+        if (refreshHz > 0) {
+            m_StreamConfig.fps = refreshHz;
+        }
+        else {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Native frame rate unavailable; using %d FPS",
+                        m_StreamConfig.fps);
+        }
+    }
+
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Native stream mode for display %d: %dx%d at %d FPS",
+                displayIndex, m_StreamConfig.width, m_StreamConfig.height, m_StreamConfig.fps);
+
+    // The saved bitrate was sized for the settings page's placeholder mode,
+    // so follow the mode actually detected here
+    if (m_Preferences->autoAdjustBitrate &&
+            (m_StreamConfig.width != m_Preferences->width ||
+             m_StreamConfig.height != m_Preferences->height ||
+             m_StreamConfig.fps != m_Preferences->fps)) {
+        if (m_Preferences->videoCodecConfig == StreamingPreferences::VCC_FORCE_PYROWAVE) {
+            m_StreamConfig.bitrate = StreamingPreferences::getDefaultPyroWaveBitrate(
+                m_StreamConfig.width, m_StreamConfig.height, m_StreamConfig.fps,
+                m_Preferences->enableYUV444, m_Preferences->enableHdr);
+        }
+        else {
+            m_StreamConfig.bitrate = StreamingPreferences::getDefaultBitrate(
+                m_StreamConfig.width, m_StreamConfig.height, m_StreamConfig.fps,
+                m_Preferences->enableYUV444);
+        }
+    }
+}
+
 bool Session::initialize(QQuickWindow* qtWindow)
 {
     m_QtWindow = qtWindow;
@@ -826,6 +883,9 @@ bool Session::initialize(QQuickWindow* qtWindow)
     LiInitializeStreamConfiguration(&m_StreamConfig);
     m_StreamConfig.width = m_Preferences->width;
     m_StreamConfig.height = m_Preferences->height;
+    m_StreamConfig.fps = m_Preferences->fps;
+    m_StreamConfig.bitrate = m_Preferences->bitrateKbps;
+    applyNativeStreamMode();
 
     int x, y, width, height;
     getWindowDimensions(x, y, width, height);
@@ -852,9 +912,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
     LiInitializeVideoCallbacks(&m_VideoCallbacks);
     m_VideoCallbacks.setup = drSetup;
 
-    m_StreamConfig.fps = m_Preferences->fps;
     snapshotPresentationSettings(testWindow);
-    m_StreamConfig.bitrate = m_Preferences->bitrateKbps;
 
 #ifndef STEAM_LINK
     // Opt-in to all encryption features if we detect that the platform
@@ -1557,37 +1615,7 @@ void Session::getWindowDimensions(int& x, int& y,
     else {
         Q_ASSERT(m_QtWindow != nullptr);
         if (m_QtWindow != nullptr) {
-            QScreen* screen = m_QtWindow->screen();
-            if (screen != nullptr) {
-                QRect displayRect = screen->geometry();
-
-                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                            "Qt UI screen is at (%d,%d)",
-                            displayRect.x(), displayRect.y());
-                for (int i = 0; i < SDL_GetNumVideoDisplays(); i++) {
-                    SDL_Rect displayBounds;
-
-                    if (SDL_GetDisplayBounds(i, &displayBounds) == 0) {
-                        if (displayBounds.x == displayRect.x() &&
-                            displayBounds.y == displayRect.y()) {
-                            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                                        "SDL found matching display %d",
-                                        i);
-                            displayIndex = i;
-                            break;
-                        }
-                    }
-                    else {
-                        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                                    "SDL_GetDisplayBounds(%d) failed: %s",
-                                    i, SDL_GetError());
-                    }
-                }
-            }
-            else {
-                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                            "Qt window is not associated with a QScreen!");
-            }
+            displayIndex = StreamUtils::getDisplayIndexForScreen(m_QtWindow->screen());
         }
     }
 
