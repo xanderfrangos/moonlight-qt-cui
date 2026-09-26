@@ -76,6 +76,40 @@ runs inside `prepareFrameForPresent()`, so it adds to both the legacy and the
 VRR preparation time. This has only been compiled, not measured on a live
 stream.
 
+Windows D3D11 LS1 integration (2026-09-25): the `ls1upscaling`, LS1 sharpness
+and DLL path settings now also drive `D3D11Ls1Upscaler` in `d3d11ls1.cpp`.
+Both it and `D3D11Fsr1Upscaler` derive from `D3D11Upscaler`
+(`d3d11upscaler.cpp`), which owns the enlargement rule, the stream-sized RGB
+intermediate, and the letterbox viewport. The renderer holds at most one
+upscaler; LS1 wins if both settings are on, as on Linux.
+
+Lossless Scaling is itself a D3D11 application, so its compute shaders run
+without translation:
+- `Lossless.dll` is mapped as a data file with `LoadLibraryEx`, and resources
+  147+3×variant through 149+3×variant plus 146 go directly to
+  `CreateComputeShader`.
+- The resource IDs, registers (t0/t1, u0, b0, s0), the 48-byte parameter block
+  and the 16×16 dispatch sizes match `ls1shaders.cpp`/`ls1vulkan.cpp`.
+- D3D11 orders the dependent dispatches itself, so no explicit barriers are
+  needed.
+
+The pipeline:
+1. Stages 1 and 2 write RGBA8 intermediates at stream size.
+2. Stage 3 writes an R8_SNORM feature texture at twice the stream size.
+3. The reconstruction writes an RGBA16F texture at destination size.
+4. `d3d11_upscale_copy_pixel.hlsl` copies that into the letterbox rectangle,
+   with a dither variant for SDR.
+
+LS1 is SDR only. `drawVideoPlanes()` draws PQ frames directly and hides the
+overlay chip for them. The DLL is found from an explicit path,
+`MOONLIGHT_LOSSLESS_SCALING_DLL`, or the Steam registry keys plus
+`libraryfolders.vdf`. Nothing from it is stored.
+
+A headless WARP test ran variants 0, 2 and 4 against the user's installed DLL:
+the output was complete, left the letterbox untouched, stayed close to the
+bilinear reference with steeper edges, and reconfigured cleanly. That doesn't
+establish visual quality, and GPU cost hasn't been measured on a live stream.
+
 On successful `LiStartConnection()`, the session records the connection start
 time. `Session::exec()` owns the SDL event loop while streaming, so it raises
 the stream window once two seconds have elapsed there; a QML timer would not

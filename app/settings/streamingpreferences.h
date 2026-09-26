@@ -414,7 +414,7 @@ public:
     bool fsr1Upscaling;
     // RCAS sharpness slider (0-100) in steps of 10, defaulting to 20 (1.6 stops).
     double fsr1RcasSharpness;
-    // Linux Vulkan LS1 uses the user's Lossless Scaling DLL at runtime.
+    // LS1 (D3D11 on Windows, Vulkan on Linux) uses the user's Lossless Scaling DLL at runtime.
     bool ls1Upscaling;
     int ls1Sharpness;
     QString ls1DllPath;

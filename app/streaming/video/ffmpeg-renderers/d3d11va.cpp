@@ -4,6 +4,8 @@
 #include "d3d11va.h"
 #include "d3d11bindpolicy.h"
 #include "d3d11fencewait.h"
+#include "d3d11fsr1.h"
+#include "d3d11ls1.h"
 #include "dxutil.h"
 #include "path.h"
 #include "utils.h"
@@ -1161,15 +1163,16 @@ void D3D11VARenderer::bindVideoVertexBuffer(bool frameChanged, AVFrame* frame)
             vMax = (float)frame->height / framesContext->height;
         }
 
-        if (m_Fsr1) {
+        if (m_Upscaler) {
             // SDL_Rect places the destination from the bottom of the window,
             // while D3D11 viewports and pixel positions start at the top.
-            if (!m_Fsr1->configure(m_RenderDevice.Get(), m_RenderDeviceContext.Get(),
-                                   src.w, src.h,
-                                   dst.x, m_DisplayHeight - dst.y - dst.h, dst.w, dst.h,
-                                   uMax, vMax)) {
+            if (!m_Upscaler->configure(m_RenderDevice.Get(), m_RenderDeviceContext.Get(),
+                                       src.w, src.h,
+                                       dst.x, m_DisplayHeight - dst.y - dst.h, dst.w, dst.h,
+                                       uMax, vMax)) {
                 SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                            "FSR1 resources could not be created; using standard D3D11 scaling");
+                            "%s resources could not be created; using standard D3D11 scaling",
+                            m_Upscaler->name());
             }
         }
 
@@ -1213,19 +1216,25 @@ void D3D11VARenderer::drawVideoPlanes(AVFrame* frame, ID3D11ShaderResourceView* 
 
     bool frameChanged = hasFrameFormatChanged(frame);
 
-    // Bind our vertex buffer. This also decides whether FSR1 runs at the
-    // current frame and window sizes.
+    // Bind our vertex buffer. This also decides whether the upscaler runs at
+    // the current frame and window sizes.
     bindVideoVertexBuffer(frameChanged, frame);
 
-    // FSR1 needs the whole frame in RGB at stream size before upscaling it
-    const bool fsr = m_Fsr1 && m_Fsr1->active();
-    if (fsr) {
-        m_Fsr1->beginSourcePass(m_RenderDeviceContext.Get());
+    // Same rule as bindColorConversion(): PQ output is left to the display
+    const bool pq = frame->color_trc == AVCOL_TRC_SMPTE2084;
+
+    // The upscaler needs the whole frame in RGB at stream size. LS1 is SDR
+    // only, so HDR frames are drawn directly instead.
+    const bool upscale = m_Upscaler && m_Upscaler->active() &&
+                         (!pq || m_Upscaler->handlesPq());
+    m_UpscalerRunning.store(upscale, std::memory_order_relaxed);
+    if (upscale) {
+        m_Upscaler->beginSourcePass(m_RenderDeviceContext.Get());
     }
 
-    // Bind our CSC shader (and constant buffer, if required). With FSR1 the
-    // dithering happens after upscaling, so the pattern isn't smeared.
-    bindColorConversion(frameChanged, frame, !fsr);
+    // Bind our CSC shader (and constant buffer, if required). When upscaling,
+    // the dithering happens afterward so the pattern isn't smeared.
+    bindColorConversion(frameChanged, frame, !upscale);
 
     // Draw the video
     m_RenderDeviceContext->PSSetShaderResources(0, planeCount, planes);
@@ -1235,11 +1244,9 @@ void D3D11VARenderer::drawVideoPlanes(AVFrame* frame, ID3D11ShaderResourceView* 
     ID3D11ShaderResourceView* nullSrvs[3] = {};
     m_RenderDeviceContext->PSSetShaderResources(0, planeCount, nullSrvs);
 
-    if (fsr) {
-        // Same rule as bindColorConversion(): PQ output is left to the display
-        const bool pq = frame->color_trc == AVCOL_TRC_SMPTE2084;
-        m_Fsr1->upscale(m_RenderDeviceContext.Get(), m_RenderTargetView.Get(),
-                        pq, m_DitherActive && !pq, m_DitherLevels, m_FullViewport);
+    if (upscale) {
+        m_Upscaler->upscale(m_RenderDeviceContext.Get(), m_RenderTargetView.Get(),
+                            pq, m_DitherActive && !pq, m_DitherLevels, m_FullViewport);
     }
 }
 
@@ -3973,20 +3980,43 @@ bool D3D11VARenderer::setupRenderingResources()
     // dithering is disabled.
     refreshDitherState();
 
-    // FSR1 is a quality option, so a failure keeps ordinary scaling
-    if (m_DecoderParams.fsr1Upscaling) {
-        m_Fsr1 = std::make_unique<D3D11Fsr1Upscaler>();
-        if (m_Fsr1->initialize(m_RenderDevice.Get(),
-                               (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_10BIT) != 0,
-                               m_DecoderParams.fsr1RcasSharpness)) {
+    // Upscalers are quality options, so a failure keeps ordinary scaling. The
+    // settings make them exclusive; LS1 wins if both are set, as on Linux.
+    const bool tenBit = (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_10BIT) != 0;
+    if (m_DecoderParams.ls1Upscaling) {
+        const QString dllPath = D3D11Ls1Upscaler::findLosslessScalingDll(m_DecoderParams.ls1DllPath);
+        if (dllPath.isEmpty()) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "LS1 requested, but no Steam-installed Lossless.dll was found");
+        }
+        else {
+            auto ls1 = std::make_unique<D3D11Ls1Upscaler>();
+            QString error;
+            const int variant = qBound(0, m_DecoderParams.ls1Sharpness, 100) / 25;
+            if (ls1->initialize(m_RenderDevice.Get(), dllPath, variant, tenBit, &error)) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "LS1 upscaling enabled for the D3D11 renderer (variant %d) with %s",
+                            variant, qPrintable(dllPath));
+                m_Upscaler = std::move(ls1);
+            }
+            else {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "LS1 unavailable: %s; using standard D3D11 scaling",
+                             qPrintable(error));
+            }
+        }
+    }
+    else if (m_DecoderParams.fsr1Upscaling) {
+        auto fsr1 = std::make_unique<D3D11Fsr1Upscaler>();
+        if (fsr1->initialize(m_RenderDevice.Get(), tenBit, m_DecoderParams.fsr1RcasSharpness)) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "FSR1 upscaling enabled for the D3D11 renderer (RCAS sharpness %.1f/100)",
                         m_DecoderParams.fsr1RcasSharpness);
+            m_Upscaler = std::move(fsr1);
         }
         else {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "FSR1 shader initialization failed; using standard D3D11 scaling");
-            m_Fsr1.reset();
         }
     }
 

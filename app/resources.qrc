@@ -123,6 +123,8 @@
         <file alias="d3d11_fsr1_rcas_pixel.fxc">shaders/d3d11_fsr1_rcas_pixel.fxc</file>
         <file alias="d3d11_fsr1_rcas_pq_pixel.fxc">shaders/d3d11_fsr1_rcas_pq_pixel.fxc</file>
         <file alias="d3d11_fsr1_rcas_dither_pixel.fxc">shaders/d3d11_fsr1_rcas_dither_pixel.fxc</file>
+        <file alias="d3d11_upscale_copy_pixel.fxc">shaders/d3d11_upscale_copy_pixel.fxc</file>
+        <file alias="d3d11_upscale_copy_dither_pixel.fxc">shaders/d3d11_upscale_copy_dither_pixel.fxc</file>
         <file alias="vt_renderer.metal">shaders/vt_renderer.metal</file>
     </qresource>
     <qresource prefix="/fsr1">

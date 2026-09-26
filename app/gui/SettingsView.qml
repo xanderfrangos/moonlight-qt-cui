@@ -1142,7 +1142,7 @@ Flickable {
 
                 CheckBox {
                     width: parent.width
-                    text: qsTr("LS1 upscaling (Vulkan)")
+                    text: qsTr("LS1 upscaling")
                     font.pointSize: 12
                     visible: SystemProperties.supportsLs1Upscaling
                     checked: StreamingPreferences.ls1Upscaling
@@ -1154,7 +1154,7 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 10000
                     ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                    ToolTip.text: qsTr("Uses LS1 from your Steam-installed Lossless Scaling on Linux. Requires a compatible libvkd3d-shader on this PC. Works with SDR streams. Reconnect after changing this setting.")
+                    ToolTip.text: qsTr("Upscales a stream that is smaller than the window using LS1 from your Steam-installed Lossless Scaling. Uses the D3D11 renderer on Windows and the Vulkan renderer on Linux, where it also requires a compatible libvkd3d-shader. Works with SDR streams. Reconnect after changing this setting.")
                 }
 
                 Column {

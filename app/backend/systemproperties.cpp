@@ -112,16 +112,13 @@ SystemProperties::SystemProperties()
     supportsVideoDebanding = false;
 #endif
 
-    // FSR1 is integrated with the D3D11 renderer on Windows and the libplacebo
-    // Vulkan renderer on Linux. LS1 exists only for the latter.
+    // FSR1 and LS1 are integrated with the D3D11 renderer on Windows and the
+    // libplacebo Vulkan renderer on Linux.
 #if defined(Q_OS_WIN32) || (defined(Q_OS_LINUX) && defined(HAVE_LIBPLACEBO_VULKAN))
     supportsFsr1Upscaling = true;
-#else
-    supportsFsr1Upscaling = false;
-#endif
-#if defined(Q_OS_LINUX) && defined(HAVE_LIBPLACEBO_VULKAN)
     supportsLs1Upscaling = true;
 #else
+    supportsFsr1Upscaling = false;
     supportsLs1Upscaling = false;
 #endif
 

@@ -2,7 +2,7 @@
 
 #include "dxgipresent.h"
 #include "d3d11composition.h"
-#include "d3d11fsr1.h"
+#include "d3d11upscaler.h"
 #include "d3d11pyrowave.h"
 #include "ivrrframepresenter.h"
 #include "renderer.h"
@@ -55,7 +55,7 @@ public:
         return m_OutputBitsPerComponent.load(std::memory_order_relaxed);
     }
     virtual const char* getActiveUpscalerName() const override {
-        return m_Fsr1 && m_Fsr1->active() ? "FSR" : nullptr;
+        return m_UpscalerRunning.load(std::memory_order_relaxed) ? m_Upscaler->name() : nullptr;
     }
     virtual InitFailureReason getInitFailureReason() override;
     virtual IPyroWaveSurfacePool* getPyroWaveSurfacePool() override;
@@ -279,8 +279,10 @@ private:
     // Covers the whole window. FSR1 narrows the viewport and restores this.
     D3D11_VIEWPORT m_FullViewport = {};
 
-    // Null unless FSR1 upscaling was requested and its shaders loaded
-    std::unique_ptr<D3D11Fsr1Upscaler> m_Fsr1;
+    // FSR1 or LS1. Null unless one was requested and could be loaded.
+    std::unique_ptr<D3D11Upscaler> m_Upscaler;
+    // Whether the last frame went through m_Upscaler, for the stats overlay
+    std::atomic<bool> m_UpscalerRunning{false};
 
     // Only valid if !m_BindDecoderOutputTextures
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_VideoTexture;

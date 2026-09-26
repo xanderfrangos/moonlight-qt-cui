@@ -474,6 +474,8 @@ win32:!winrt {
         streaming/video/ffmpeg-renderers/d3d11va.cpp \
         streaming/video/ffmpeg-renderers/d3d11composition.cpp \
         streaming/video/ffmpeg-renderers/d3d11fsr1.cpp \
+        streaming/video/ffmpeg-renderers/d3d11ls1.cpp \
+        streaming/video/ffmpeg-renderers/d3d11upscaler.cpp \
         streaming/video/ffmpeg-renderers/d3d11pyrowave.cpp \
         streaming/video/ffmpeg-renderers/pacer/dxvsyncsource.cpp
 
@@ -482,6 +484,8 @@ win32:!winrt {
         streaming/video/ffmpeg-renderers/d3d11va.h \
         streaming/video/ffmpeg-renderers/d3d11composition.h \
         streaming/video/ffmpeg-renderers/d3d11fsr1.h \
+        streaming/video/ffmpeg-renderers/d3d11ls1.h \
+        streaming/video/ffmpeg-renderers/d3d11upscaler.h \
         streaming/video/ffmpeg-renderers/d3d11pyrowave.h \
         streaming/video/pyrowave/pyrowavesurfaces.h \
         streaming/video/ffmpeg-renderers/presentationclock.h \
