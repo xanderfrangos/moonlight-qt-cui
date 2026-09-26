@@ -170,6 +170,37 @@ critical-data protection and draining buffered datagrams. A fresh live capture
 is needed to measure the resulting buffer behavior; existing replay starts
 after reassembly and cannot simulate this receive-policy change.
 
+PyroWave on-time release (2026-09-26, after `ce818ec9`): capture
+`20260926-162709` (1440p116, 895.5 Mbps, Low Latency) delivered 16,162 of about
+17,400 frames with lost packets, 14,029 of them by the silence deadline. At equal
+packet counts those frames finished reassembly about 1.6 ms later than frames
+completed by the next block boundary (6.26 vs 4.69 ms median at 250-300
+packets): the 1 ms interval is rounded up to a whole-millisecond `WSAPoll`.
+Measured against `sourceTime + playoutDelay`, 15.6% of them completed decode
+late versus 2.5% of intact frames; 271 of 279 submissions more than 1 ms past
+target were lossy frames. Presented jerk above 2 ms was 155 per mille for pairs
+touching a lossy frame versus 58 for intact pairs. The session overlay reported
+0% network frame loss because partial frames count as delivered.
+
+The receive thread now asks the client for each frame's on-time bound through
+`LiSetVideoReassemblyDeadlineCallback()`, once per final block. The VRR worker
+publishes, after each `schedule()` under timestamp playout, the anchor
+`sourceTime + playoutDelay - p95(decodeComplete - reassembled) - 250 us` for that
+frame's RTP timestamp (`vrr/receivedeadline.h`: one packed atomic word, rebuilt
+relative to now, extrapolated at 90 kHz, ignored beyond one second of RTP
+distance, cleared when timestamp playout is inactive and on worker shutdown).
+Without cadence smoothing this matches the lateness the delay calibrator sees.
+When that bound is nearer than the 1 ms silence, the silence shrinks to
+`max(bound, lastUniquePacket + 250 us)`, and the receive loop wakes a
+millisecond early and polls without blocking so the release is not rounded
+late. A frame still receiving packets is never cut: each unique packet renews
+the 250 us floor, so a genuinely slow burst remains late and visible to the
+buffer instead of silently turning into blur that the calibrator cannot see.
+The same critical-prefix, parity and final-block conditions apply, and such
+releases log as "on-time deadline" instead of "packet silence". The controller
+is unchanged (replay of `162709` is identical); no live capture has measured it
+yet.
+
 On Windows, `initializePyroWave()` creates `D3D11VARenderer` and a PyroWave
 Vulkan device matched by adapter LUID. Decode submits into one of ten D3D11-owned
 three-plane R8/R16 surfaces. The software-planar-format `AVFrame` holds a
@@ -219,6 +250,21 @@ container) to set 32 MB now and in `/etc/sysctl.d/60-moonlight-pyrowave.conf`,
 plus a copyable command. Flatpak builds cannot run host commands, so they offer
 only the command. Launching a PyroWave stream with the low limit adds a launch
 warning.
+
+On Windows the same `NetworkBuffers` checks the receive rings of every
+connected wired adapter (2026-09-26): the standard NDIS `*ReceiveBuffers` and
+the Realtek USB driver's `ReceiveBufferLen` / `PendingReceives`, read from the
+adapter's class key with ranges from `Ndi\Params`. A value below
+min(driver maximum, 256) is flagged. The Realtek Gaming USB 2.5GbE on the test
+Ally shipped with 16 of 256 receive buffers and 6 of 64 receive URBs; in
+capture `20260926-143554` 72% of PyroWave frames lost ~24 packets, almost all
+in the last FEC block (the tail of each ~2 Gbps burst), while Windows counted
+no discards, and still images shimmered as the missing detail moved. Settings
+shows the adapter and values with a "Fix it" button that raises each flagged
+value to its maximum (capped at 2048) through one elevated PowerShell
+(`Set-NetAdapterAdvancedProperty -NoRestart`, then one `Restart-NetAdapter`),
+plus a copyable command; streams launch with a warning. Whether raising the
+ring removes the loss still needs a capture after the change.
 
 The "Average decoding time" statistic runs from the reassembled frame's
 enqueue in moonlight-common-c to decoder output, so it includes time waiting in
@@ -271,9 +317,74 @@ Rejected alternative: scoring each interval individually. At 0.5-1 ms
 tolerance it pinned Balanced and Smooth at their caps for whole sessions (the
 two-minute score remembers bad periods and late frames keep renewing the
 hold); at 2 ms it drained below today's policy. Smooth and Low Latency are
-unchanged. `tests/vrr/configs/latency-presets-stress.json` fails identically
-with the previous replay binary because its assertions name metrics the
-replay no longer emits; it needs updating before it can gate changes.
+unchanged. `tests/vrr/configs/latency-presets-stress.json` is a `vrrqueuesim`
+config (it takes a decoded trace CSV); run through `vrrreplay` every assertion
+reads null because those metrics are queue-simulator outputs.
+
+Balanced p90 floor (2026-09-26): a median cannot see a tail. On lossy 900 Mbps
+PyroWave (`20260926-131302`, 1440p and 4K, after the on-time release) 17-30% of
+frames per ten seconds finished decode after their slot while the median floor
+and the one-second mean (p50 254 us against the 500 us tolerance) stayed quiet,
+so the buffer released 8.2 -> 4.6 ms with 10 growth decisions in 2.5 minutes.
+Production Balanced now uses `playout_readiness_floor_per_mille=900`. Replay
+(exploratory; the captures fail the strict gate): >2 ms presented jerk 1440p
+106 -> 54, 4K 88 -> 54, `232347-186` 44 -> 21 per mille, for +1.1, +0.6 and
++2.6 ms median decode-to-submission. p95 bought 46/47/21 for +1.4/+0.9/+3.4 ms.
+`responsive-buffer-stress.json` passes on both new captures (delay max 10.4 ms,
+p99 13.7 ms, zero modelled interval violations) and `latency-presets-stress.json`
+passes in `vrrqueuesim`.
+
+Decode hold clear of the Present (2026-09-26): the full sandbox capture
+`Moonlight-sandbox-20260926-133637-302` (4K Balanced, 890M, PresentMon joined
+by QPC) showed Present calls with 75 per mille >2 ms jerk but 161 per mille on
+screen. On-screen time equals PresentMon render-complete time on every frame;
+Moonlight's render fence was always ready before the call. Flips landed
+1.10 ms (p99 1.95) after Present when the next frame's PyroWave decode was
+submitted after the Present call returned, but 2.6 ms (p90 3.9) when that
+decode was already running (11% of frames). Attribution of on-screen jumps:
+decode on the GPU at Present 75, late arrival 41, latched presents 40 per mille.
+The pacing worker now publishes a window per frame from its target minus this
+machine's learned p95 decode GPU time (`decode_complete - decode_submit`) and
+closes it when its Present call returns; a PyroWave decode submitted inside it
+waits for the close (yield loop), only if the frame's reassembly deadline is
+still met at target + learned p95 Present-call duration, never beyond that
+deadline or 4 ms. Nothing in it is a GPU-specific constant: the benefit scales
+with how much a GPU delays flips behind compute. The hold is excluded from the
+controller's decoder-queue term, the overlay decode statistics and the receive
+deadline's learned cost; the trace records it as `decode_hold_us` and replay
+applies it. Replay cannot model GPU contention; a live PresentMon capture must
+confirm it.
+
+Latched presents on the 890M were also slow: `Present(1,0)` ran as
+"Hardware Composed: Independent Flip" and reached the screen 4.5 ms (p50) /
+16 ms (p90) after the call versus 1.1 ms for tearing presents, and one latch
+pushes the flip anchor so the next frame latches too (603 of 733 controller
+latches came 8.4-20 ms after the previous target). A latch-only-after-floor-gap
+policy was tried and rejected for now: replay jerk 66 -> 59 per mille, but the
+controller tests showed post-stall catch-up bursts serializing on the software
+floor (drops, windowed-smoothing latency bounds) where the flip queue absorbed
+them, and the slowness was measured on one driver. A general version would
+first measure latched flip lateness per machine (DXGI's latched flip times are
+reliable) and switch only where latching is slow.
+
+Raster flip guard (2026-09-26): after the decode hold, PresentMon on
+`Moonlight-sandbox-20260926-140622-380` (4K Balanced) showed on-screen jerk
+>2 ms at 59 per mille (from 161) and 57 tear candidates in ~290 s (on-screen
+interval below the panel's 8.15 ms latched minimum, excluding latched pairs):
+33 tearing->tearing pairs whose calls were 9.75 ms apart but whose first flip
+landed late (3.4 ms p50, up to 12 ms), and 24 tearing->latched pairs. The
+SyncQPCTime check missed them because a tearing flip's refresh time is
+credited to an earlier refresh. `D3DKMTGetScanLine` does follow VRR on this
+panel (aligned capture 20260901-192940: 1% in vblank 8-9 ms after the previous
+Present, 84-99% at 9-16 ms, ~50% beyond 17 ms where the panel re-scans at its
+floor). Native flip protection now always opens the raster source and, before
+a tearing present, polls frame statistics and the raster until nothing is
+pending and the panel is in vertical blank, then presents with tearing
+allowed. After two display periods it latches, and three consecutive timeouts
+disable the raster wait for the session (logged) in favour of the old
+frame-statistics check, which also remains the fallback when the raster
+cannot be read. The wait is inside the presenter, so recorded submission
+times include it and replay stays exact. Unverified live.
 
 Native flip protection (2026-09-23), based on `5c5ba95b`: the flip anchor
 assumes a tearing present flips at its call, but on the Radeon 890M DXGI took

@@ -360,6 +360,97 @@ static void testMissingCriticalFromEarlierBlockBlocksExpiry(void) {
     RtpvCleanupQueue(&queue);
 }
 
+// The client's on-time bound, relative to fakeNowUs when the callback runs.
+static int64_t onTimeFromNowUs;
+static bool onTimeKnown;
+static unsigned onTimeQueries;
+static uint32_t onTimeLastRtp;
+
+static uint64_t fakeReassemblyDeadline(uint32_t rtpTimestamp) {
+    onTimeQueries++;
+    onTimeLastRtp = rtpTimestamp;
+    return onTimeKnown ? (uint64_t)((int64_t)fakeNowUs + onTimeFromNowUs) : 0;
+}
+
+static void beginOnTimeQueue(RTP_VIDEO_QUEUE* queue, bool known, int64_t fromNowUs) {
+    beginQueue(queue, PYROWAVE_FORMAT);
+    onTimeKnown = known;
+    onTimeFromNowUs = fromNowUs;
+    onTimeQueries = 0;
+    LiSetVideoReassemblyDeadlineCallback(fakeReassemblyDeadline);
+}
+
+static void addPartialFinalBlock(RTP_VIDEO_QUEUE* queue, unsigned frame, unsigned baseSequence) {
+    // Critical prefix of one packet, optional packet 2 lost.
+    addPacket(queue, frame, 0, 0, 0, baseSequence, FLAG_SOF | FLAG_CONTAINS_PIC_DATA, true, true, 1);
+    addPacket(queue, frame, 0, 0, 1, baseSequence, FLAG_CONTAINS_PIC_DATA, false, false, 0);
+    addPacket(queue, frame, 0, 0, 3, baseSequence, FLAG_EOF | FLAG_CONTAINS_PIC_DATA, false, false, 0);
+}
+
+static void testOnTimeDeadlineAheadKeepsSilence(void) {
+    RTP_VIDEO_QUEUE queue;
+    beginOnTimeQueue(&queue, true, 10000);
+    addPartialFinalBlock(&queue, 1, 100);
+    uint64_t deadline = RtpvGetPendingFrameDeadlineUs(&queue);
+    EXPECT(!RtpvPendingFrameDeadlineIsPrecise(&queue), "a distant slot keeps the reorder allowance");
+    EXPECT(deadline > fakeNowUs + DEADLINE_US / 2, "a distant slot keeps the full silence interval");
+    EXPECT(onTimeQueries == 1, "the on-time bound is queried once per final block");
+    EXPECT(onTimeLastRtp == 900, "the query carries the frame's RTP timestamp");
+    EXPECT(RtpvExpirePendingFrame(&queue, deadline), "silence expiry still delivers the frame");
+    RtpvCleanupQueue(&queue);
+
+    beginOnTimeQueue(&queue, false, 0);
+    addPartialFinalBlock(&queue, 1, 100);
+    EXPECT(!RtpvPendingFrameDeadlineIsPrecise(&queue), "an unknown slot keeps the silence interval");
+    EXPECT(onTimeQueries == 1, "an unknown slot is not re-queried for each packet");
+    RtpvCleanupQueue(&queue);
+}
+
+static void testOnTimeDeadlineShortensSilence(void) {
+    RTP_VIDEO_QUEUE queue;
+    beginOnTimeQueue(&queue, true, 400);
+    addPartialFinalBlock(&queue, 1, 100);
+    uint64_t deadline = RtpvGetPendingFrameDeadlineUs(&queue);
+    EXPECT(RtpvPendingFrameDeadlineIsPrecise(&queue), "a near slot governs the deadline");
+    EXPECT(deadline < fakeNowUs + DEADLINE_US / 2, "the frame is released by its slot, not after 1 ms");
+    EXPECT(!RtpvExpirePendingFrame(&queue, deadline - 1), "the frame waits for missing detail until its slot");
+    EXPECT(RtpvExpirePendingFrame(&queue, deadline), "the frame is released at its slot");
+    EXPECT(submittedPackets[1] == DATA_PACKETS && submittedLost[1] == 1, "slot release fills only the lost detail");
+    RtpvCleanupQueue(&queue);
+}
+
+static void testLateFrameStillReceivingIsNotCut(void) {
+    RTP_VIDEO_QUEUE queue;
+    beginOnTimeQueue(&queue, true, -5000);
+    addPacket(&queue, 1, 0, 0, 0, 100, FLAG_SOF | FLAG_CONTAINS_PIC_DATA, true, true, 1);
+    uint64_t first = RtpvGetPendingFrameDeadlineUs(&queue);
+    EXPECT(RtpvPendingFrameDeadlineIsPrecise(&queue), "a late frame uses the short silence");
+    EXPECT(first > fakeNowUs && first < fakeNowUs + DEADLINE_US / 2, "a late frame waits only a short silence");
+    fakeNowUs += 100;
+    addPacket(&queue, 1, 0, 0, 1, 100, FLAG_CONTAINS_PIC_DATA, false, false, 0);
+    uint64_t second = RtpvGetPendingFrameDeadlineUs(&queue);
+    EXPECT(second > first, "a packet still arriving renews the short silence");
+    EXPECT(!RtpvExpirePendingFrame(&queue, first), "a frame still receiving packets is not cut short");
+    EXPECT(RtpvExpirePendingFrame(&queue, second), "a late frame is released once the burst goes quiet");
+    EXPECT(submittedLost[1] == 2, "only the packets that never arrived are filled");
+    RtpvCleanupQueue(&queue);
+}
+
+static void testOnTimeDeadlineRequeriedPerFrame(void) {
+    RTP_VIDEO_QUEUE queue;
+    beginOnTimeQueue(&queue, true, 10000);
+    addPartialFinalBlock(&queue, 1, 100);
+    EXPECT(RtpvExpirePendingFrame(&queue, RtpvGetPendingFrameDeadlineUs(&queue)), "first frame expires");
+    onTimeFromNowUs = -1000;
+    addPartialFinalBlock(&queue, 2, 104);
+    EXPECT(onTimeQueries == 2, "each frame queries its own slot");
+    EXPECT(onTimeLastRtp == 1800, "the second query carries the second frame's RTP timestamp");
+    EXPECT(RtpvPendingFrameDeadlineIsPrecise(&queue), "the late second frame uses its own slot");
+    RtpvCleanupQueue(&queue);
+    EXPECT(!RtpvPendingFrameDeadlineIsPrecise(&queue), "cleanup clears the precise deadline");
+    LiSetVideoReassemblyDeadlineCallback(NULL);
+}
+
 int main(void) {
     StreamConfig.packetSize = PACKET_SIZE;
     testCodecControls();
@@ -372,6 +463,10 @@ int main(void) {
     testUnknownHeadersAndCriticalLossDoNotFlush();
     testCriticalCompleteAndOptionalMissingMultiblock();
     testMissingCriticalFromEarlierBlockBlocksExpiry();
+    testOnTimeDeadlineAheadKeepsSilence();
+    testOnTimeDeadlineShortensSilence();
+    testLateFrameStillReceivingIsNotCut();
+    testOnTimeDeadlineRequeriedPerFrame();
     if (failures != 0) {
         fprintf(stderr, "%d queue test(s) failed\n", failures);
         return 1;

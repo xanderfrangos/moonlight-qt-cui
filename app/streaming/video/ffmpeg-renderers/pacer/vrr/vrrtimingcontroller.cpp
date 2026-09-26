@@ -221,7 +221,13 @@ VrrTimingParameters vrrTimingParametersForSession(
     // jerk 81 -> 44 per mille for +1.0 ms median latency; the 19-minute
     // 20260922-224404-796 session stays within +0.2 ms. Smooth gained nothing;
     // Low Latency awaits a matching capture.
-    parameters.playoutReadinessFloorPerMille = latencyMode == 1 ? 500 : 0;
+    // A median cannot see a tail. On lossy 900 Mbps PyroWave (20260926-131302)
+    // 10-20% of frames finished decoding after their slot while the median
+    // floor and the one-second mean both stayed quiet, so the buffer released
+    // to 5.5 ms. The p90 floor halves >2 ms presented jerk on all three
+    // Balanced captures (1440p 106 -> 54, 4K 88 -> 54, 232347 44 -> 21 per
+    // mille) for +1.1, +0.6 and +2.6 ms median latency; p95 buys little more.
+    parameters.playoutReadinessFloorPerMille = latencyMode == 1 ? 900 : 0;
     parameters.playoutReadinessFloorWindowUs = 10000000;
     parameters.playoutOnTimeTargetPerMillion = latencyMode == 2 ? 990000 :
         latencyMode == 1 ? 995000 : 999900;
@@ -1135,7 +1141,7 @@ VrrTimingDecision VrrTimingController::schedule(const PacedFrame& frame,
             typicalRenderUs(), playoutDelayUs,
             m_Parameters.playoutReadinessDrivenAdaptation ? 0 : recoveryHeadroomUs(),
             m_Parameters.playoutDelayMarginUs,
-            frame.reassembledUs() && frame.decodeSubmitUs() >= frame.reassembledUs() ? frame.decodeSubmitUs() - frame.reassembledUs() : 0,
+            frame.decoderQueueUs(),
             timestampPlayout && !rebased && cadence.eligible && !cadence.phaseDiscontinuity &&
             cadence.frameDelta == 1 && cadence.intervalUs <= stall &&
             cadence.intervalUs >= scaledPerMille(m_SourcePeriodUs, m_Parameters.playoutBurstExclusionPerMille)};
@@ -3365,9 +3371,7 @@ void VrrTimingController::updatePlayoutHistory(
         const auto ns = [](uint64_t us) {
             return int64_t(std::min<uint64_t>(us, INT64_MAX / 1000)) * 1000;
         };
-        const uint64_t decoderQueueUs = frame.reassembledUs() &&
-            frame.decodeSubmitUs() >= frame.reassembledUs() ?
-            frame.decodeSubmitUs() - frame.reassembledUs() : 0;
+        const uint64_t decoderQueueUs = frame.decoderQueueUs();
         m_WorkloadEpisode.observe(m_PlayoutHistory, ns(covered),
             ns(m_AppliedPlayoutDelayUs), ns(at), decoderQueueUs, m_SourcePeriodUs);
     }

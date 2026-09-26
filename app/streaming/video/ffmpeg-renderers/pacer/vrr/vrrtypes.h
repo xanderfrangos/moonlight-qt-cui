@@ -5,6 +5,7 @@
 // by the legacy pacing path, while these values describe the frame as it
 // crossed the decoder/pacer boundary.
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -157,6 +158,29 @@ public:
         return m_DecodeSubmitUs;
     }
 
+    // Time the decoder deliberately held this frame before decodeSubmitUs so
+    // its GPU decode would not delay the previous frame's flip. It is part of
+    // reassembled -> submit but is neither decoder backlog nor decode cost.
+    void setDecodeHoldUs(uint64_t holdUs)
+    {
+        m_DecodeHoldUs = holdUs;
+    }
+
+    uint64_t decodeHoldUs() const
+    {
+        return m_DecodeHoldUs;
+    }
+
+    // Reassembled -> decode submission, excluding a deliberate hold.
+    uint64_t decoderQueueUs() const
+    {
+        if (!m_ReassembledUs || m_DecodeSubmitUs < m_ReassembledUs) {
+            return 0;
+        }
+        const uint64_t queueUs = m_DecodeSubmitUs - m_ReassembledUs;
+        return queueUs - (std::min)(queueUs, m_DecodeHoldUs);
+    }
+
     void setDecodeBoundary(uint64_t decodeBoundary)
     {
         m_DecodeBoundary = decodeBoundary;
@@ -185,5 +209,6 @@ private:
     uint64_t m_ReceiveUs = 0;
     uint64_t m_ReassembledUs = 0;
     uint64_t m_DecodeSubmitUs = 0;
+    uint64_t m_DecodeHoldUs = 0;
     uint64_t m_DecodeBoundary = 0;
 };

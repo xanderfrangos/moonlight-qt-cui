@@ -928,7 +928,7 @@ Flickable {
                 Column {
                     width: parent.width
                     spacing: 5
-                    visible: slider.pyroWave && Qt.platform.os === "linux"
+                    visible: slider.pyroWave && (Qt.platform.os === "linux" || Qt.platform.os === "windows")
 
                     Component.onCompleted: NetworkBuffers.refresh()
 
@@ -937,8 +937,7 @@ Flickable {
                         wrapMode: Text.Wrap
                         visible: NetworkBuffers.needsFix
                         color: "#ffb74d"
-                        text: qsTr("Linux limits this PC's network receive buffer to %1 KB. PyroWave needs about %2 MB, or frames arrive with missing packets.")
-                              .arg(NetworkBuffers.currentKb).arg(NetworkBuffers.recommendedMb)
+                        text: NetworkBuffers.problemText
                     }
 
                     Row {
@@ -954,7 +953,7 @@ Flickable {
                             ToolTip.delay: 1000
                             ToolTip.timeout: 10000
                             ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                            ToolTip.text: qsTr("Raises net.core.rmem_max now and saves it for future boots. Asks for your password.")
+                            ToolTip.text: NetworkBuffers.fixDescription
                         }
 
                         Button {
@@ -968,7 +967,7 @@ Flickable {
                         wrapMode: Text.Wrap
                         visible: NetworkBuffers.needsFix && !NetworkBuffers.canApply
                         font.pointSize: 9
-                        text: qsTr("Run this in a terminal (Konsole on Steam Deck):") + "\n" + NetworkBuffers.manualCommand
+                        text: NetworkBuffers.manualHint + "\n" + NetworkBuffers.manualCommand
                     }
 
                     Label {

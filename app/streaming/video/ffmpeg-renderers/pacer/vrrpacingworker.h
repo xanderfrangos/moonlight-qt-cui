@@ -4,6 +4,7 @@
 #include "../ivrrframepresenter.h"
 #include "../vrrpreparedframe.h"
 #include "pacertelemetry.h"
+#include "vrr/receivedeadline.h"
 #include "vrr/vrrtargetwaiter.h"
 #include "vrr/vrrtypes.h"
 #include "vrr/vrrtimingcontroller.h"
@@ -158,6 +159,7 @@ private:
         uint64_t receiveUs = 0;
         uint64_t reassembledUs = 0;
         uint64_t decodeSubmitUs = 0;
+        uint64_t decodeHoldUs = 0;
         FrameTraceContext input;
         VrrTimingDecision decision;
         VrrTimingDiagnostics diagnostics;
@@ -195,6 +197,8 @@ private:
                           FrameTelemetry& telemetry);
     void deferFrame(PacedFrame&& frame);
     void noteDrop();
+    void publishReceiveDeadline(const PacedFrame& frame,
+                                const VrrTimingDecision& decision);
     void recordFrameCompletion(const QueuedFrame& frame,
                     const VrrTimingDecision& decision,
                     const VrrPresentFeedback& feedback,
@@ -222,6 +226,9 @@ private:
     int m_HistoryVersion = 0;
 
     std::unique_ptr<VrrTimingController> m_TimingController;
+    VrrReceiveDeadline::RecentDuration m_RecentDuration;
+    VrrReceiveDeadline::RecentDuration m_DecodeGpuCost;
+    VrrReceiveDeadline::RecentDuration m_PresentCallCost;
     std::unique_ptr<VrrTargetWaiter> m_TargetWaiter;
 
     QMutex m_FrameQueueLock;

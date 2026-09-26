@@ -3,7 +3,7 @@ param(
     [string]$Portable,
     [string]$TraceRoot = (Join-Path $env:USERPROFILE 'vrr-traces'),
     [string]$ShareRoot = '\\allytwo\ChaseShare\vrr-traces\full',
-    [ValidateRange(3,900)][int]$MaxSeconds = 300,
+    [ValidateRange(3,3600)][int]$MaxSeconds = 900,
     [string]$Label = 'RTSS mode not recorded',
     [switch]$Alignment,
     [switch]$DryRun,
@@ -78,7 +78,7 @@ try {
         $manifest.environment['MOONLIGHT_VRR_TRACE'] = $env:MOONLIGHT_VRR_TRACE
         $manifest.environment['MOONLIGHT_VRR_DEEP_TRACE'] = '1'
         $manifest.environment['MOONLIGHT_VRR_ALIGN'] = $env:MOONLIGHT_VRR_ALIGN
-        Write-Host "Capture ready. Pan for 45-60 seconds, then close Moonlight. OS capture limit: $MaxSeconds seconds."
+        Write-Host "Capture ready. Play normally, then close Moonlight. PresentMon records up to $MaxSeconds seconds; the scheduler trace keeps the last minute or so."
         $app = Start-Process (Join-Path $Portable 'Moonlight.exe') -WorkingDirectory $Portable -Wait -PassThru
         $manifest.process_id = $app.Id
         $manifest.moonlight_exit = $app.ExitCode
@@ -110,16 +110,15 @@ try {
             $manifest.trace_integrity = [bool]$data.capture.recorded_sequence_integrity_valid
         }
     }
-    $etl = Join-Path $directory 'Windows.etl'
-    if ((Test-Path $etl) -and $null -ne $manifest.process_id) {
-        $manifest.presentmon_exit = RunTool (Join-Path $Portable 'PresentMon-2.5.1-x64.exe') @('--etl_file',$etl,'--process_id',"$($manifest.process_id)",
-            '--output_file',(Join-Path $directory 'PresentMon.csv'),'--v1_metrics','--qpc_time','--no_console_stats','--no_track_input','--track_gpu_video') 'presentmon'
-        $csv = Join-Path $directory 'PresentMon.csv'
-        if (Test-Path $csv) {
-            $header = Get-Content -LiteralPath $csv -TotalCount 1
-            $manifest.presentmon_display_columns = $header.Contains('QPCTime') -and $header.Contains('PresentMode') -and $header.Contains('msUntilDisplayed')
-            $manifest.presentmon_rows = (Import-Csv -LiteralPath $csv | Measure-Object).Count
-        }
+    # PresentMon ran live in the recorder for the whole capture.
+    if ($null -ne $manifest.recorder) { $manifest.presentmon_exit = $manifest.recorder.presentmon_exit }
+    $csv = Join-Path $directory 'PresentMon.csv'
+    if (Test-Path $csv) {
+        $header = Get-Content -LiteralPath $csv -TotalCount 1
+        $manifest.presentmon_display_columns = $header.Contains('QPCTime') -and $header.Contains('PresentMode') -and $header.Contains('msUntilDisplayed')
+        $lines = 0
+        foreach ($line in [IO.File]::ReadLines($csv)) { $lines++ }
+        $manifest.presentmon_rows = [Math]::Max(0, $lines - 1)
     }
     $sidecars = @(Get-ChildItem -LiteralPath $directory -Filter 'Moonlight.vrrtrace.gpu-*.csv' -File)
     $manifest.gpu_sidecars_complete = $sidecars.Count -gt 0
@@ -138,7 +137,10 @@ if ($ShareRoot -and -not $RecorderSmokeTest) {
     New-Item -ItemType Directory -Path $ShareRoot -Force | Out-Null
     $destination = Join-Path $ShareRoot (Split-Path $directory -Leaf)
     if (Test-Path $destination) { throw "Capture destination already exists: $destination" }
-    Copy-Item -LiteralPath $directory -Destination $destination -Recurse
+    # The scheduler ETL stays local: it is large and rarely needed off-box.
+    New-Item -ItemType Directory -Path $destination | Out-Null
+    Get-ChildItem -LiteralPath $directory -File | Where-Object Extension -ne '.etl' |
+        ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $destination }
 }
 Write-Host "Capture saved: $directory"
 if ($manifest.errors.Count -or $null -eq $manifest.recorder -or $manifest.recorder.start_exit -ne 0 -or $manifest.recorder.stop_exit -ne 0) { exit 1 }

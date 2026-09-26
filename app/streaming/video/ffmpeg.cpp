@@ -7,7 +7,10 @@
 #include <h264_stream.h>
 
 #include <algorithm>
+#include <thread>
 #include <utility>
+
+#include "ffmpeg-renderers/pacer/vrr/receivedeadline.h"
 
 extern "C" {
 #include <libavutil/mastering_display_metadata.h>
@@ -346,6 +349,7 @@ void FFmpegVideoDecoder::reset()
     m_StatsGraphSyncMode = Overlay::StatsGraphSyncMode::Off;
     m_FrameInfoQueue.clear();
     m_FrameSubmitTimeQueue.clear();
+    m_FrameDecodeHoldQueue.clear();
 
     while (!m_PyroWaveOutput.isEmpty()) {
         AVFrame* frame = m_PyroWaveOutput.dequeue();
@@ -396,12 +400,20 @@ void FFmpegVideoDecoder::reset()
                         "PyroWave decoded %u frames with lost packets this session",
                         m_PyroWavePartialFrames);
         }
+        if (m_PyroWaveHeldDecodes != 0) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "PyroWave held %u decodes clear of a VRR flip this session (average %.2f ms)",
+                        m_PyroWaveHeldDecodes,
+                        m_PyroWaveHeldUs / 1000.0 / m_PyroWaveHeldDecodes);
+        }
         m_PyroWave.reset();
     }
 #endif
     m_PyroWaveActive = false;
     m_PyroWaveRejectedFrames = 0;
     m_PyroWavePartialFrames = 0;
+    m_PyroWaveHeldDecodes = 0;
+    m_PyroWaveHeldUs = 0;
 
     if (m_CurrentTestMode != TestMode::TestFrameOnly) {
         Session::get()->getOverlayManager().setOverlayRenderer(nullptr);
@@ -3030,17 +3042,24 @@ void FFmpegVideoDecoder::decoderThreadProc()
                     frame->pkt_dts = static_cast<int64_t>(decoderOutputUs);
 
                     float statsGraphDecodeMs = -1;
+                    // A deliberate hold clear of a VRR flip is pacing, not
+                    // decoding or decoder backlog; keep it out of both stats.
+                    const uint64_t decodeHoldUs = m_FrameDecodeHoldQueue.isEmpty() ?
+                        0 : m_FrameDecodeHoldQueue.head();
                     if (!m_FrameInfoQueue.isEmpty()) {
                         // Data buffers in the DU are not valid here!
                         DECODE_UNIT du = m_FrameInfoQueue.dequeue();
 
                         const uint64_t decodeTimeUs = LiGetMicroseconds() - du.enqueueTimeUs;
-                        m_ActiveWndVideoStats.totalDecodeTimeUs += decodeTimeUs;
-                        statsGraphDecodeMs = (float)(decodeTimeUs / 1000.0);
+                        const uint64_t activeDecodeTimeUs =
+                            decodeTimeUs - (std::min)(decodeTimeUs, decodeHoldUs);
+                        m_ActiveWndVideoStats.totalDecodeTimeUs += activeDecodeTimeUs;
+                        statsGraphDecodeMs = (float)(activeDecodeTimeUs / 1000.0);
                         if (!m_FrameSubmitTimeQueue.isEmpty() &&
                                 m_FrameSubmitTimeQueue.head() > du.enqueueTimeUs) {
+                            const uint64_t queueUs = m_FrameSubmitTimeQueue.head() - du.enqueueTimeUs;
                             m_ActiveWndVideoStats.totalDecodeQueueTimeUs +=
-                                m_FrameSubmitTimeQueue.head() - du.enqueueTimeUs;
+                                queueUs - (std::min)(queueUs, decodeHoldUs);
                         }
 
                         // Store the presentation time (90 kHz timebase) for
@@ -3049,6 +3068,9 @@ void FFmpegVideoDecoder::decoderThreadProc()
                     }
                     if (!m_FrameSubmitTimeQueue.isEmpty()) {
                         m_FrameSubmitTimeQueue.dequeue();
+                    }
+                    if (!m_FrameDecodeHoldQueue.isEmpty()) {
+                        m_FrameDecodeHoldQueue.dequeue();
                     }
 
                     m_ActiveWndVideoStats.decodedFrames++;
@@ -3078,6 +3100,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
                         pacedFrame.setDeliveryTimeline(receiveUs,
                                                        reassembledUs,
                                                        decodeSubmitUs);
+                        pacedFrame.setDecodeHoldUs(decodeHoldUs);
                         const auto handoffBeginUs = gpuTrace ? LiGetMicroseconds() : 0;
                         m_Pacer->submitFrame(std::move(pacedFrame));
                         if (gpuTrace) gpuTrace->record({"decoder_handoff", rtpTimestamp,
@@ -3263,6 +3286,8 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
         const auto now = LiGetMicroseconds();
         gpuTrace->record({"packet_send_enter", du->rtpTimestamp, 0, now, now, 0, du->frameNumber});
     }
+    const uint64_t decodeHoldUs = m_PyroWaveActive ?
+        holdPyroWaveDecodeForPresent(du->rtpTimestamp) : 0;
     const auto sendCpu = gpuTrace ? GpuTrace::ThreadSample::capture() : GpuTrace::ThreadSample{};
     const uint64_t decodeSubmitUs = LiGetMicroseconds();
 
@@ -3274,6 +3299,7 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
         if (m_PyroWaveOutput.size() != queuedBefore) {
             m_FrameInfoQueue.enqueue(*du);
             m_FrameSubmitTimeQueue.enqueue(decodeSubmitUs);
+            m_FrameDecodeHoldQueue.enqueue(decodeHoldUs);
             m_FramesIn++;
         }
         return DR_OK;
@@ -3311,9 +3337,32 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
 
     m_FrameInfoQueue.enqueue(*du);
     m_FrameSubmitTimeQueue.enqueue(decodeSubmitUs);
+    m_FrameDecodeHoldQueue.enqueue(0);
 
     m_FramesIn++;
     return DR_OK;
+}
+
+uint64_t FFmpegVideoDecoder::holdPyroWaveDecodeForPresent(uint32_t rtpTimestamp)
+{
+    // A decode already running on the GPU can delay the flip of the frame the
+    // pacer is about to present (see VrrReceiveDeadline::g_PresentWindow).
+    // Wait for that Present call to return, but only when this frame still
+    // makes its own slot afterwards.
+    const uint64_t startUs = LiGetMicroseconds();
+    const auto hold = VrrReceiveDeadline::decodeHold(rtpTimestamp, startUs);
+    if (hold.window == 0) {
+        return 0;
+    }
+    uint64_t nowUs = startUs;
+    while (!VrrReceiveDeadline::decodeHoldReleased(hold, nowUs) &&
+           !SDL_AtomicGet(&m_DecoderThreadShouldQuit)) {
+        std::this_thread::yield();
+        nowUs = LiGetMicroseconds();
+    }
+    m_PyroWaveHeldDecodes++;
+    m_PyroWaveHeldUs += nowUs - startUs;
+    return nowUs - startUs;
 }
 
 void FFmpegVideoDecoder::renderFrameOnMainThread()

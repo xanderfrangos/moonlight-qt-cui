@@ -226,7 +226,10 @@ first repairs what parity can (the critical packets). It does not drop a PyroWav
 frame whose FEC block cannot complete: once the next block or frame starts
 arriving, each missing data packet is replaced by zeros and delivered as a
 `BUFFER_TYPE_LOST` buffer. A final block without parity can also complete after
-1 ms of packet silence, without waiting for the next frame. This requires a
+1 ms of packet silence, without waiting for the next frame. When the client
+reports that the frame's VRR slot is nearer than that
+(`LiSetVideoReassemblyDeadlineCallback()`), the silence shrinks to the slot, but
+never below 250 us after the last unique packet. This requires a
 record-start flag, the short frame header's nonzero critical packet count, and
 all packets in that critical prefix to be present. Unique arrivals renew the
 deadline, including reordered packets; duplicates do not. The receiver drains

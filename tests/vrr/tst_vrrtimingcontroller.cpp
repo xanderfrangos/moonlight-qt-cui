@@ -2987,22 +2987,22 @@ void testNativeFlipProtectionPreventsScanoutTears()
 
 void testBalancedReadinessFloorFollowsLoad()
 {
-    // Balanced floors its delay at the recent median ready offset. Slow
+    // Balanced floors its delay at the recent p90 ready offset. Slow
     // decode on most frames must raise the delay; once decode recovers the
     // floor must fall away within its window rather than pin the buffer.
     auto session = config(116, 120);
     session.latencyMode = 1;
     const auto production = vrrTimingParametersForSession(session);
-    expect(production.playoutReadinessFloorPerMille == 500 &&
+    expect(production.playoutReadinessFloorPerMille == 900 &&
                production.playoutReadinessFloorWindowUs == 10000000,
-           "Balanced must floor its delay at the recent median ready offset");
+           "Balanced must floor its delay at the recent p90 ready offset");
     for (int mode : {0, 2}) {
         auto other = config(116, 120);
         other.latencyMode = mode;
         expect(vrrTimingParametersForSession(other).playoutReadinessFloorPerMille == 0,
                "Smooth and Low Latency must keep their existing delay policy");
     }
-    const auto run = [&](uint64_t perMille) {
+    const auto run = [&](uint64_t perMille, bool tailOnly = false) {
         auto policy = production;
         policy.playoutReadinessFloorPerMille = perMille;
         VrrTimingController controller(session, true, policy);
@@ -3010,8 +3010,9 @@ void testBalancedReadinessFloorFollowsLoad()
         constexpr int kFrames = 116 * 70;
         for (int i = 0; i < kFrames; ++i) {
             const uint32_t rtp = uint32_t(uint64_t(i) * 90000 / 116);
-            // For 30 s, three of five frames finish decoding 6 ms late.
-            const bool slow = i < 116 * 30 && i % 5 < 3;
+            // For 30 s, three of five frames finish decoding 6 ms late, or
+            // for the tail case one of eight frames finishes 6 ms late.
+            const bool slow = i < 116 * 30 && (tailOnly ? i % 8 == 0 : i % 5 < 3);
             const uint64_t at = decodedTimeForRtp(1000000, rtp) + (slow ? 6000 : 0);
             const auto d = controller.schedule(frame(i, rtp, true, at), at);
             controller.notePreparationDuration(1000);
@@ -3022,7 +3023,16 @@ void testBalancedReadinessFloorFollowsLoad()
         return std::array<uint64_t, 2>{loadedUs, relievedUs};
     };
     const auto without = run(0);
-    const auto with = run(500);
+    const auto with = run(production.playoutReadinessFloorPerMille);
+    // A late tail that a median cannot see must still raise the p90 floor.
+    const auto medianTail = run(500, true);
+    const auto tail = run(production.playoutReadinessFloorPerMille, true);
+    std::printf("readiness floor with a 12.5%% late tail: median %llu us, p90 %llu us\n",
+                (unsigned long long) medianTail[0], (unsigned long long) tail[0]);
+    expect(tail[0] > medianTail[0] + 1000,
+           "the p90 floor must cover a late tail that the median ignores");
+    expect(tail[1] + 1000 < tail[0],
+           "the tail floor must release once the late frames stop");
     std::printf("readiness floor delay loaded %llu -> %llu us, relieved %llu -> %llu us\n",
                 (unsigned long long) without[0], (unsigned long long) with[0],
                 (unsigned long long) without[1], (unsigned long long) with[1]);

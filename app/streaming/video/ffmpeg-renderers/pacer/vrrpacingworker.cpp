@@ -31,6 +31,9 @@ constexpr int kTraceChunkBytes = 256 * 1024;
 // A decode sync shorter than this did not wait on the GPU; the frame keeps
 // the decoder's completion time as its readiness.
 constexpr uint64_t kDecodeSyncNoticeUs = 200;
+// Slack between the published PyroWave reassembly deadline and the latest
+// on-time reassembly, covering receive-thread wake-up and depacketizing.
+constexpr uint64_t kReceiveDeadlineMarginUs = 250;
 // Always preserve at least an hour, including the maximum supported 480 FPS
 // stream cadence. The physical cap takes effect only after that duration, so
 // an unusually incompressible trace remains complete rather than silently
@@ -87,6 +90,7 @@ constexpr char kTraceHeader[] =
     ",prepared_ahead,stage_start_us,stage_decode_ready_us,stage_decode_wait_us,stage_render_start_us,stage_render_end_us,stage_ready_us"
     ",flip_protection_checked,flip_protection_query_result,flip_protection_query_start_us,flip_protection_query_end_us"
     ",flip_protection_pending,flip_protection_reference_us,flip_protection_latched"
+    ",decode_hold_us"
     "\n";
 #undef VRR_TRACE_PARAMETER_HEADER
 constexpr uint32_t kVrrWindowStateMask =
@@ -200,6 +204,8 @@ VrrPacingWorker::~VrrPacingWorker()
 
     if (m_Presenter) m_Presenter->stopFramePreparation();
 
+    VrrReceiveDeadline::clear();
+    VrrReceiveDeadline::clearPresentWindow();
     discardQueuedFrames(false, TraceDisposition::ShutdownDiscard);
     closeTrace();
     if (m_WorkerStarted && !m_Config.calibrationKey.empty() && !m_CalibrationInvalidated.load()) {
@@ -453,6 +459,7 @@ int VrrPacingWorker::run()
         const uint64_t decisionTimeUs = LiGetMicroseconds();
         VrrTimingDecision decision = m_TimingController->schedule(
             frame, decisionTimeUs);
+        publishReceiveDeadline(frame, decision);
         FrameTelemetry telemetry;
         telemetry.preparedAhead = preparedAhead;
         if (preparedAhead) telemetry.preparationStage = queuedFrame.preparation->timing;
@@ -841,6 +848,9 @@ int VrrPacingWorker::run()
         VrrPresentFeedback feedback =
             m_Presenter->presentAdaptive(presentRequest);
         telemetry.presentEndUs = LiGetMicroseconds();
+        // Our Present is queued ahead of any decode submitted from now on.
+        VrrReceiveDeadline::clearPresentWindow();
+        m_PresentCallCost.observe(telemetry.presentStartUs, telemetry.presentEndUs);
         telemetry.presentDurationUs =
             telemetry.presentEndUs >= telemetry.presentStartUs ?
                 telemetry.presentEndUs - telemetry.presentStartUs : 0;
@@ -1203,6 +1213,45 @@ void VrrPacingWorker::noteDrop()
     }
 }
 
+void VrrPacingWorker::publishReceiveDeadline(const PacedFrame& frame,
+                                             const VrrTimingDecision& decision)
+{
+    // A frame is on time when its decode-complete boundary reaches the mapped
+    // source slot plus the playout delay (the lateness the delay calibrator
+    // sees, before cadence retiming). Later frames follow at the RTP rate from
+    // this anchor. Without a timestamp slot there is nothing to protect.
+    if (!m_TimingController->timestampPlayoutActive() || !frame.timestampValid()) {
+        VrrReceiveDeadline::clear();
+        VrrReceiveDeadline::clearPresentWindow();
+        return;
+    }
+    // A deliberate decode hold is spare time, not cost: counting it would
+    // move every deadline earlier and cut more detail for nothing.
+    if (frame.reassembledUs()) {
+        m_RecentDuration.observe(frame.reassembledUs() + frame.decodeHoldUs(),
+                                 frame.decodeCompleteUs());
+    }
+    m_DecodeGpuCost.observe(frame.decodeSubmitUs(), frame.decodeCompleteUs());
+    if (m_DecodeGpuCost.ready() && m_PresentCallCost.ready()) {
+        // A decode submitted from here on would still be running when this
+        // frame is presented. The window closes when the Present call returns;
+        // the expected close only decides whether a hold is affordable.
+        const uint64_t startUs = decision.targetUs -
+            std::min(decision.targetUs, m_DecodeGpuCost.percentileUs());
+        VrrReceiveDeadline::publishPresentWindow(
+            startUs, decision.targetUs + m_PresentCallCost.percentileUs());
+    }
+    if (!m_RecentDuration.ready()) {
+        return;
+    }
+    const uint64_t onTimeUs = decision.sourceTimeUs + decision.playoutDelayUs;
+    const uint64_t leadUs = m_RecentDuration.percentileUs() + kReceiveDeadlineMarginUs;
+    if (onTimeUs <= leadUs) {
+        return;
+    }
+    VrrReceiveDeadline::publish(frame.rtpTimestamp(), onTimeUs - leadUs);
+}
+
 void VrrPacingWorker::recordFrameCompletion(const QueuedFrame& queuedFrame,
                                  const VrrTimingDecision& decision,
                                  const VrrPresentFeedback& feedback,
@@ -1259,6 +1308,7 @@ void VrrPacingWorker::recordFrameCompletion(const QueuedFrame& queuedFrame,
     row.receiveUs = frame.receiveUs();
     row.reassembledUs = frame.reassembledUs();
     row.decodeSubmitUs = frame.decodeSubmitUs();
+    row.decodeHoldUs = frame.decodeHoldUs();
     row.input = queuedFrame.trace;
     row.decision = decision;
     // submit() and window notifications may emit terminal rows from threads
@@ -1756,6 +1806,7 @@ void VrrPacingWorker::writeTraceRow(const TraceRow& row)
     addBool(feedback.flipProtectionPending);
     addUnsigned(feedback.flipProtectionReferenceUs);
     addBool(feedback.flipProtectionLatched);
+    addUnsigned(row.decodeHoldUs);
     line.append('\n');
 
     if (m_TraceFormat == TraceFormat::ChunkedCompressed) {

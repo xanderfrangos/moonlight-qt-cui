@@ -12651,6 +12651,8 @@ int main(int argc, char* argv[])
             optionalUnsignedField(fields, traceHeader.indexOf("frame_receive_us")),
             optionalUnsignedField(fields, traceHeader.indexOf("frame_reassembled_us")),
             optionalUnsignedField(fields, traceHeader.indexOf("decode_submit_us")));
+        frame.setDecodeHoldUs(
+            optionalUnsignedField(fields, traceHeader.indexOf("decode_hold_us")));
         const bool hasPreparationTelemetry =
             unsignedField(fields, columns.preparationStartUs) != 0 ||
             unsignedField(fields, columns.preparationEndUs) != 0 ||

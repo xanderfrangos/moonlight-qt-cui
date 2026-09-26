@@ -21,6 +21,7 @@
 
 #include <cwchar>
 #include <limits>
+#include <thread>
 
 using Microsoft::WRL::ComPtr;
 
@@ -3289,35 +3290,81 @@ VrrPresentFeedback D3D11VARenderer::presentAdaptive(
     // window ago, latch. The flip queue then shows this frame at the first
     // untorn refresh, and a panel already idle in its VRR blank flips a
     // latched present at once, so an unneeded latch costs almost nothing.
+    //
+    // DXGI's refresh time for a tearing predecessor is often credited to a
+    // refresh that began before its flip, so that check alone let a flip land
+    // inside the previous scanout. Where the scanout state can be read, wait
+    // for it instead: with nothing queued ahead and the panel in its
+    // (VRR-extended) vertical blank, a tearing flip cannot tear. The wait ends
+    // where a latched present would have flipped anyway, without depending on
+    // how a given driver implements sync-interval presents. Latch only if the
+    // blank does not arrive within two display periods.
     bool latchedPresentation = request.latchedPresentation;
     if (!latchedPresentation && request.flipProtectionWindowUs != 0 &&
             m_VrrPriorPresentCountValid) {
-        DXGI_FRAME_STATISTICS guardStats = {};
         feedback.flipProtectionChecked = true;
         feedback.flipProtectionQueryStartUs = LiGetMicroseconds();
-        const HRESULT guardResult =
-            m_SwapChain->GetFrameStatistics(&guardStats);
-        feedback.flipProtectionQueryEndUs = LiGetMicroseconds();
-        feedback.flipProtectionQueryResult =
-            static_cast<int64_t>(guardResult);
-        uint64_t refreshUs = 0;
-        uint64_t qpcFrequency = 0;
-        // A failed query (for example FRAME_STATISTICS_DISJOINT after a mode
-        // change) proves nothing and keeps the planned mode.
-        if (guardResult == S_OK) {
-            if (guardStats.PresentCount < m_VrrPriorPresentCount) {
-                feedback.flipProtectionPending = true;
-                latchedPresentation = true;
-            }
-            else if (translateVrrSyncQpcTime(guardStats.SyncQPCTime,
-                                             refreshUs, qpcFrequency)) {
-                feedback.flipProtectionReferenceUs = refreshUs;
-                latchedPresentation =
-                    feedback.flipProtectionQueryEndUs - refreshUs <
-                        request.flipProtectionWindowUs ||
-                    feedback.flipProtectionQueryEndUs < refreshUs;
+        const auto predecessorPending = [&](HRESULT& result,
+                                            DXGI_FRAME_STATISTICS& stats) {
+            stats = {};
+            result = m_SwapChain->GetFrameStatistics(&stats);
+            feedback.flipProtectionQueryResult = static_cast<int64_t>(result);
+            // A failed query (for example FRAME_STATISTICS_DISJOINT after a
+            // mode change) proves nothing and keeps the planned mode.
+            const bool pending = result == S_OK &&
+                stats.PresentCount < m_VrrPriorPresentCount;
+            feedback.flipProtectionPending |= pending;
+            return pending;
+        };
+        HRESULT guardResult = S_OK;
+        DXGI_FRAME_STATISTICS guardStats = {};
+        bool rasterDecided = false;
+        if (m_VrrRasterSourceValid && !m_VrrRasterGuardDisabled) {
+            const uint64_t limitUs = feedback.flipProtectionQueryStartUs +
+                2 * request.flipProtectionWindowUs;
+            for (;;) {
+                const bool pending = predecessorPending(guardResult, guardStats);
+                const VrrNativeRasterSample raster = queryVrrRaster();
+                if (!raster.queryResultValid || raster.queryResult != 0) {
+                    break;
+                }
+                rasterDecided = true;
+                if (!pending && raster.inVerticalBlank) {
+                    m_VrrRasterGuardTimeouts = 0;
+                    break;
+                }
+                if (LiGetMicroseconds() >= limitUs) {
+                    latchedPresentation = true;
+                    // A scanout never lasts two periods. A driver whose raster
+                    // does not report the VRR blank would make every frame
+                    // wait; fall back to the frame-statistics check instead.
+                    if (++m_VrrRasterGuardTimeouts >= 3) {
+                        m_VrrRasterGuardDisabled = true;
+                        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                                    "VRR flip protection: the display raster never reported a vertical blank; using frame statistics instead");
+                    }
+                    break;
+                }
+                std::this_thread::yield();
             }
         }
+        if (!rasterDecided) {
+            uint64_t refreshUs = 0;
+            uint64_t qpcFrequency = 0;
+            if (predecessorPending(guardResult, guardStats)) {
+                latchedPresentation = true;
+            }
+            else if (guardResult == S_OK &&
+                     translateVrrSyncQpcTime(guardStats.SyncQPCTime,
+                                             refreshUs, qpcFrequency)) {
+                feedback.flipProtectionReferenceUs = refreshUs;
+                const uint64_t nowUs = LiGetMicroseconds();
+                latchedPresentation =
+                    nowUs - refreshUs < request.flipProtectionWindowUs ||
+                    nowUs < refreshUs;
+            }
+        }
+        feedback.flipProtectionQueryEndUs = LiGetMicroseconds();
         feedback.flipProtectionLatched = latchedPresentation;
     }
 
@@ -3662,7 +3709,10 @@ void D3D11VARenderer::refreshVrrDisplayTiming()
         return;
     }
 
-    if (m_VrrRasterSamplingRequested) {
+    // Always open the raster source: flip protection reads the live scanout
+    // state before every tearing present. Only diagnostic sampling of it into
+    // the trace stays behind MOONLIGHT_VRR_ALIGN.
+    {
         D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME openAdapter = {};
         wcsncpy_s(openAdapter.DeviceName, monitorInfo.szDevice, _TRUNCATE);
         const NTSTATUS openResult =
@@ -3835,9 +3885,16 @@ void D3D11VARenderer::closeVrrRasterSource()
 
 VrrNativeRasterSample D3D11VARenderer::sampleVrrRaster() const
 {
+    if (!m_VrrRasterSamplingRequested) {
+        return {};
+    }
+    return queryVrrRaster();
+}
+
+VrrNativeRasterSample D3D11VARenderer::queryVrrRaster() const
+{
     VrrNativeRasterSample sample;
-    if (!m_VrrRasterSamplingRequested ||
-            !m_VrrRasterSourceValid) {
+    if (!m_VrrRasterSourceValid) {
         return sample;
     }
 

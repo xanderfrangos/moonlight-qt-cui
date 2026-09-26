@@ -67,5 +67,29 @@
         </EventCollectorId>
       </Collectors>
     </Profile>
+    <!-- Same events in circular memory buffers: the session keeps only the
+         most recent scheduler detail (about a minute at 4K) and writes it once
+         at stop, so a long capture neither grows on disk nor wears the SSD.
+         PresentMon records the whole session live alongside it. -->
+    <Profile Id="MoonlightVrrFull.Verbose.Memory"
+      Name="MoonlightVrrFull"
+      Description="Moonlight VRR scheduler and graphics correlation (ring buffer)"
+      LoggingMode="Memory"
+      DetailLevel="Verbose">
+      <Collectors>
+        <SystemCollectorId Value="MoonlightVrrSystemCollector">
+          <SystemProviderId Value="MoonlightVrrSystemProvider" />
+        </SystemCollectorId>
+        <EventCollectorId Value="MoonlightVrrEventCollector">
+          <EventProviders>
+            <EventProviderId Value="DxgKrnlProvider" />
+            <EventProviderId Value="Win32kProvider" />
+            <EventProviderId Value="DxgiProvider" />
+            <EventProviderId Value="DwmCoreProvider" />
+            <EventProviderId Value="DesktopCompositionProvider" />
+          </EventProviders>
+        </EventCollectorId>
+      </Collectors>
+    </Profile>
   </Profiles>
 </WindowsPerformanceRecorder>

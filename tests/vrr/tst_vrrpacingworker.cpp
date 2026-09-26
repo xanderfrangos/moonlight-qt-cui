@@ -2590,8 +2590,75 @@ void testReadinessWindow()
            "old failures must expire and reversed producer lock order must preserve both outcomes");
 }
 
+void testReceiveDeadlineMath()
+{
+    namespace D = VrrReceiveDeadline;
+    const uint64_t nowUs = 5000000000ULL; // beyond 32 bits of microseconds
+    const uint64_t anchor = D::pack(0xFFFFFF00u, nowUs + 3000);
+    expect(D::deadlineUs(anchor, 0xFFFFFF00u, nowUs) == nowUs + 3000,
+           "the anchor frame's deadline must survive 32-bit packing");
+    // 900 ticks later wraps the RTP counter: 900 / 90 kHz = 10 ms.
+    expect(D::deadlineUs(anchor, 0xFFFFFF00u + 900u, nowUs) == nowUs + 13000,
+           "a later frame must extrapolate at the RTP rate across wrap");
+    expect(D::deadlineUs(anchor, 0xFFFFFF00u - 90u, nowUs) == nowUs + 2000,
+           "an earlier frame must extrapolate backwards");
+    expect(D::deadlineUs(anchor, 0xFFFFFF00u + 900000u, nowUs) == 0,
+           "a frame from another source epoch must not use the anchor");
+    expect(D::deadlineUs(0, 0xFFFFFF00u, nowUs) == 0,
+           "no published anchor means no deadline");
+    const uint64_t pastAnchor = D::pack(10, nowUs - 4000);
+    expect(D::deadlineUs(pastAnchor, 10, nowUs) == nowUs - 4000,
+           "a deadline already in the past must stay in the past");
+    expect(D::pack(0, 0) != 0, "a published anchor must never read as unpublished");
+
+    D::RecentDuration cost;
+    expect(!cost.ready(), "reassembly cost must not be used before enough samples");
+    for (uint64_t i = 0; i < D::RecentDuration::kWindow; i++) {
+        cost.observe(1000, 1000 + 1000 + i * 10);
+    }
+    cost.observe(0, 5000);
+    cost.observe(6000, 5000);
+    expect(cost.ready(), "reassembly cost must become ready");
+    const uint64_t p95 = cost.percentileUs();
+    expect(p95 >= 2190 && p95 <= 2220,
+           "reassembly cost must track a high percentile and ignore invalid samples");
+
+    // Decode hold around the next Present: wait for the Present call, never
+    // past the frame's own deadline or the safety bound.
+    D::publishPresentWindow(nowUs - 500, nowUs + 1500);
+    const uint64_t window = D::g_PresentWindow.load();
+    const uint64_t roomy = D::pack(10, nowUs + 8000);
+    const uint64_t tight = D::pack(10, nowUs + 1000);
+    const auto held = D::decodeHold(window, roomy, 10, nowUs);
+    expect(held.window == window && held.limitUs == nowUs + D::kMaximumDecodeHoldUs,
+           "a decode inside the Present window must wait for the Present call");
+    expect(!D::decodeHoldReleased(held, nowUs + 1000),
+           "the hold must continue while the Present window is open");
+    D::clearPresentWindow();
+    expect(D::decodeHoldReleased(held, nowUs + 1000),
+           "the Present call returning must release the hold at once");
+    D::publishPresentWindow(nowUs + 7000, nowUs + 9500);
+    expect(D::decodeHoldReleased(held, nowUs + 1000),
+           "the next frame's window must not extend an earlier hold");
+    D::publishPresentWindow(nowUs - 500, nowUs + 1500);
+    expect(D::decodeHoldReleased(D::decodeHold(D::g_PresentWindow.load(), D::pack(10, nowUs + 3000), 10, nowUs),
+                                 nowUs + 3000),
+           "a hold must end at the frame's own deadline");
+    D::clearPresentWindow();
+    expect(D::decodeHold(window, tight, 10, nowUs).window == 0,
+           "a hold must never be taken when the expected close misses the frame's deadline");
+    expect(D::decodeHold(window, 0, 10, nowUs).window == 0,
+           "without a known slot the decode must not be held");
+    expect(D::decodeHold(window, roomy, 10, nowUs + 1600).window == 0 &&
+               D::decodeHold(window, roomy, 10, nowUs - 600).window == 0,
+           "a decode outside the window must go at once");
+    expect(D::decodeHold(0, roomy, 10, nowUs).window == 0,
+           "no published window means no hold");
+}
+
 int main()
 {
+    testReceiveDeadlineMath();
     Vrr13::ReadinessWindow averageWindow;
     averageWindow.record(1000000, 500, false);
     averageWindow.record(1001000, 1500, false);

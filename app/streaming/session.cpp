@@ -19,6 +19,7 @@
 
 #ifdef HAVE_FFMPEG
 #include "video/ffmpeg.h"
+#include "video/ffmpeg-renderers/pacer/vrr/receivedeadline.h"
 #endif
 
 #ifdef HAVE_SLVIDEO
@@ -1324,8 +1325,11 @@ bool Session::validateLaunch(SDL_Window* testWindow)
             emitLaunchWarning(tr("This PC's GPU driver can't decode PyroWave. Using H.264 instead."));
             m_SupportedVideoFormats.removeByMask(VIDEO_FORMAT_MASK_PYROWAVE);
         }
-        else if (NetworkBuffers::receiveBufferTooSmall()) {
-            emitLaunchWarning(tr("Linux limits this PC's network receive buffer, so PyroWave frames may lose packets. Fix it in Settings, below the video codec."));
+        else {
+            const QString bufferWarning = NetworkBuffers::launchWarning();
+            if (!bufferWarning.isEmpty()) {
+                emitLaunchWarning(bufferWarning);
+            }
         }
     }
 
@@ -2299,6 +2303,15 @@ bool Session::startConnectionAsync()
     }
 
     setIntraRefreshEnabled(m_Preferences->useIntraRefresh);
+
+    // PyroWave partial frames: let the receive thread release a frame that
+    // lost optional detail by its VRR slot instead of after a fixed silence.
+    // Nothing is published unless the VRR pacer runs timestamp playout.
+    VrrReceiveDeadline::clear();
+    LiSetVideoReassemblyDeadlineCallback([](uint32_t rtpTimestamp) {
+        return VrrReceiveDeadline::deadlineUs(rtpTimestamp, LiGetMicroseconds());
+    });
+
     int err = LiStartConnection(&hostInfo, &m_StreamConfig, &k_ConnCallbacks,
                                 &m_VideoCallbacks, &m_AudioCallbacks,
                                 NULL, 0, NULL, 0);

@@ -97,6 +97,7 @@ private:
     void refreshVrrDisplayTiming();
     void closeVrrRasterSource();
     VrrNativeRasterSample sampleVrrRaster() const;
+    VrrNativeRasterSample queryVrrRaster() const;
     void populateVrrGpuReadyFeedback(VrrPresentFeedback& feedback) const;
     VrrFallbackReason evaluateVrrEligibility(
         bool prioritizeOutputCompatibility);
@@ -217,6 +218,10 @@ private:
     HWND m_VrrWindowHandle;
     VrrDisplayTimingSnapshot m_VrrDisplayTiming;
     bool m_VrrRasterSamplingRequested;
+    // Flip protection's raster wait; disabled for the session if the raster
+    // never reports a vertical blank (see presentAdaptive).
+    bool m_VrrRasterGuardDisabled = false;
+    unsigned m_VrrRasterGuardTimeouts = 0;
     bool m_VrrRasterOpenResultValid;
     int64_t m_VrrRasterOpenResult;
     bool m_VrrRasterSourceValid;

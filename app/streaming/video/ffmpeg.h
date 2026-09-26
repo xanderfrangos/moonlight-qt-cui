@@ -188,6 +188,8 @@ private:
     QQueue<DECODE_UNIT> m_FrameInfoQueue;
     // Parallel to m_FrameInfoQueue: when each packet was handed to the decoder.
     QQueue<uint64_t> m_FrameSubmitTimeQueue;
+    // Parallel to m_FrameSubmitTimeQueue: deliberate hold before submission.
+    QQueue<uint64_t> m_FrameDecodeHoldQueue;
 
 #ifdef HAVE_PYROWAVE
     std::unique_ptr<PyroWaveDecoder> m_PyroWave;
@@ -201,6 +203,9 @@ private:
     uint32_t m_PyroWaveRejectedFrames = 0;
     uint32_t m_PyroWavePartialFrames = 0;
     uint64_t m_PyroWaveLastErrorLogUs = 0;
+    uint32_t m_PyroWaveHeldDecodes = 0;
+    uint64_t m_PyroWaveHeldUs = 0;
+    uint64_t holdPyroWaveDecodeForPresent(uint32_t rtpTimestamp);
 
     static const uint8_t k_H264TestFrame[];
     static const uint8_t k_HEVCMainTestFrame[];
