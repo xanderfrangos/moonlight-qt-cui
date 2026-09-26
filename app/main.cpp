@@ -853,6 +853,16 @@ int main(int argc, char *argv[])
     // use this functionality and it can cause hangs when querying broken devices.
     SDL_SetHint("SDL_WINDOWS_DETECT_DEVICE_HOTPLUG", "0");
 
+#ifdef Q_OS_LINUX
+    // SDL3 only polls udev for joystick arrivals from SDL_PumpEvents(), but
+    // the GUI's SdlGamepadKeyNavigation deliberately uses SDL_JoystickUpdate()
+    // instead. With udev, gamepads that reconnect while in the GUI are never
+    // seen again. The inotify fallback (always used in Flatpak) is polled from
+    // SDL_JoystickUpdate(), so use it everywhere. The environment variable
+    // still overrides this.
+    SDL_SetHint("SDL_JOYSTICK_DISABLE_UDEV", "1");
+#endif
+
     // SDL3 supports offloading scaling to the Wayland compositor, which we take
     // advantage of in the GL_IS_SLOW case to help fillrate-limited GPUs. To stay
     // consistent with our own scaling logic, we need aspect ratio scaling which
