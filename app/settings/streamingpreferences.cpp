@@ -43,6 +43,7 @@
 #define SER_DISABLEDCONTROLLERS "disabledcontrollers"
 #define SER_AUDIOCFG "audiocfg"
 #define SER_AUDIOBUFFER "audiobuffer"
+#define SER_AUDIODRIVER "audiodriver"
 #define SER_VIDEOCFG "videocfg"
 #define SER_HDR "hdr"
 #define SER_YUV444 "yuv444"
@@ -296,6 +297,7 @@ void StreamingPreferences::reload()
     audioConfig = static_cast<AudioConfig>(settings.value(SER_AUDIOCFG,
                                                   static_cast<int>(AudioConfig::AC_STEREO)).toInt());
     audioBufferMs = qBound(0, settings.value(SER_AUDIOBUFFER, 0).toInt(), 200);
+    audioDriver = settings.value(SER_AUDIODRIVER, QString()).toString();
     videoCodecConfig = static_cast<VideoCodecConfig>(settings.value(SER_VIDEOCFG,
                                                   static_cast<int>(VideoCodecConfig::VCC_AUTO)).toInt());
     videoDecoderSelection = static_cast<VideoDecoderSelection>(settings.value(SER_VIDEODEC,
@@ -590,6 +592,7 @@ void StreamingPreferences::save()
     settings.setValue(SER_PERFGRAPHPOSITION, performanceGraphPosition);
     settings.setValue(SER_AUDIOCFG, static_cast<int>(audioConfig));
     settings.setValue(SER_AUDIOBUFFER, audioBufferMs);
+    settings.setValue(SER_AUDIODRIVER, audioDriver);
     settings.setValue(SER_HDR, enableHdr);
     settings.setValue(SER_YUV444, enableYUV444);
     settings.setValue(SER_DITHERINGMODE, ditheringMode);

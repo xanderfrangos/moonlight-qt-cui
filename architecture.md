@@ -2799,6 +2799,12 @@ to the target, cross-fading each drop over 2 ms. Gaps over 500 ms (muting,
 reconnects) are not counted as underruns. Counts are logged about once a second
 when they change, and as totals when the renderer closes. There is no clock
 drift resampling; drift appears as occasional concealment or cross-faded drops.
+The `audiodriver` preference picks SDL's audio backend. `createAudioRenderer`
+applies it as the `SDL_AUDIODRIVER` hint, so a user's environment variable still
+wins, and falls back to SDL's default backend if the chosen one fails to open.
+The settings list comes from `SystemProperties::getAudioDrivers()`, which opens
+each backend compiled into SDL once. It skips `disk` and `dummy`, lists the
+default first, and returns nothing when the environment already sets a backend.
 Video timestamps are not used. Audio startup intentionally discards an initial backlog of about
 500 ms; renderer reinitialization similarly prevents downtime becoming permanent
 queued audio latency. Muting can suppress audio processing without retiming VRR.

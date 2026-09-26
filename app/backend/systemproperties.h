@@ -54,6 +54,12 @@ public:
     // map with "width", "height" and "refreshRate" (0 if unknown)
     Q_INVOKABLE QVariantMap getStreamDisplayMode();
 
+    // Audio backends that SDL can open on this system, as maps with "value"
+    // (the SDL driver name, or empty for SDL's default) and "text". The
+    // default backend comes first. Empty if an environment variable already
+    // forces the backend. Probed on first use.
+    Q_INVOKABLE QVariantList getAudioDrivers();
+
     Q_INVOKABLE void startAsyncLoad();
     Q_INVOKABLE void waitForAsyncLoad();
     Q_INVOKABLE void refreshDisplays();
@@ -115,5 +121,8 @@ private:
     QList<QRect> monitorNativeResolutions;
     QList<QRect> monitorSafeAreaResolutions;
     QList<int> monitorRefreshRates;
+
+    QVariantList audioDrivers;
+    bool audioDriversProbed = false;
 };
 

@@ -2033,6 +2033,58 @@ Flickable {
                     ToolTip.text: qsTr("Audio held in reserve to absorb network hiccups. Raise it if you hear crackling; lower it to reduce audio delay. Automatic grows the buffer when audio runs short and shrinks it again once the connection is stable.")
                 }
 
+                Label {
+                    width: parent.width
+                    id: audioDriverTitle
+                    text: qsTr("Audio output backend")
+                    topPadding: 8
+                    font.pointSize: 14
+                    wrapMode: Text.Wrap
+                    visible: audioDriverComboBox.visible
+                }
+
+                AutoResizingComboBox {
+                    // Filled from the backends that can open on this system
+                    Component.onCompleted: {
+                        var drivers = SystemProperties.getAudioDrivers()
+                        for (var i = 0; i < drivers.length; i++) {
+                            audioDriverListModel.append({ "text": drivers[i].text, "val": drivers[i].value })
+                        }
+
+                        // Nothing to choose between, or the environment already picks one
+                        visible = audioDriverListModel.count > 1
+                        if (!visible) {
+                            return
+                        }
+
+                        var saved_driver = StreamingPreferences.audioDriver
+                        currentIndex = 0
+                        for (var j = 0; j < audioDriverListModel.count; j++) {
+                            if (saved_driver === audioDriverListModel.get(j).val) {
+                                currentIndex = j
+                                break
+                            }
+                        }
+                        activated(currentIndex)
+                    }
+
+                    id: audioDriverComboBox
+                    textRole: "text"
+                    visible: false
+                    model: ListModel {
+                        id: audioDriverListModel
+                    }
+                    // ::onActivated must be used, as it only listens for when the index is changed by a human
+                    onActivated : {
+                        StreamingPreferences.audioDriver = audioDriverListModel.get(currentIndex).val
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("The system audio interface Moonlight plays sound through. Try another one if audio crackles even when the connection is stable. Takes effect when the next stream starts.")
+                }
+
 
                 CheckBox {
                     id: audioPcCheck

@@ -22,6 +22,11 @@
 
 IAudioRenderer* Session::createAudioRenderer(const POPUS_MULTISTREAM_CONFIGURATION opusConfig)
 {
+    // Choose the SDL audio backend from preferences. An environment variable
+    // still takes precedence over this hint.
+    QByteArray audioDriver = m_Preferences->audioDriver.toUtf8();
+    SDL_SetHint(SDL_HINT_AUDIODRIVER, audioDriver.constData());
+
     // Handle explicit ML_AUDIO setting and fail if the requested backend fails
     QString mlAudio = qgetenv("ML_AUDIO").toLower();
     if (mlAudio == "sdl") {
@@ -50,6 +55,15 @@ IAudioRenderer* Session::createAudioRenderer(const POPUS_MULTISTREAM_CONFIGURATI
 
     // Default to SDL
     TRY_INIT_RENDERER(SdlAudioRenderer, opusConfig)
+
+    // Don't leave the stream silent if the chosen backend is unavailable
+    if (!audioDriver.isEmpty()) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Audio backend '%s' failed; falling back to the default backend",
+                    audioDriver.constData());
+        SDL_SetHint(SDL_HINT_AUDIODRIVER, "");
+        TRY_INIT_RENDERER(SdlAudioRenderer, opusConfig)
+    }
 
     return nullptr;
 }

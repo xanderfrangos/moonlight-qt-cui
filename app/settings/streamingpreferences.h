@@ -303,6 +303,7 @@ public:
     Q_PROPERTY(int performanceGraphPosition MEMBER performanceGraphPosition NOTIFY performanceGraphPositionChanged)
     Q_PROPERTY(AudioConfig audioConfig MEMBER audioConfig NOTIFY audioConfigChanged)
     Q_PROPERTY(int audioBufferMs MEMBER audioBufferMs NOTIFY audioBufferMsChanged)
+    Q_PROPERTY(QString audioDriver MEMBER audioDriver NOTIFY audioDriverChanged)
     Q_PROPERTY(VideoCodecConfig videoCodecConfig MEMBER videoCodecConfig NOTIFY videoCodecConfigChanged)
     Q_PROPERTY(bool enableHdr MEMBER enableHdr NOTIFY enableHdrChanged)
     Q_PROPERTY(bool enableYUV444 MEMBER enableYUV444 NOTIFY enableYUV444Changed)
@@ -406,6 +407,8 @@ public:
     AudioConfig audioConfig;
     // Audio jitter buffer size in milliseconds, or 0 to size it automatically
     int audioBufferMs;
+    // SDL audio backend name, or empty to let SDL choose
+    QString audioDriver;
     VideoCodecConfig videoCodecConfig;
     bool enableHdr;
     bool enableYUV444;
@@ -461,6 +464,7 @@ signals:
     void absoluteTouchModeChanged();
     void audioConfigChanged();
     void audioBufferMsChanged();
+    void audioDriverChanged();
     void videoCodecConfigChanged();
     void enableHdrChanged();
     void enableYUV444Changed();

@@ -6,6 +6,7 @@
 #include <QLibraryInfo>
 #include <QDir>
 #include <QProcess>
+#include <QHash>
 
 #include "settings/streamingpreferences.h"
 
@@ -421,4 +422,92 @@ void SystemProperties::refreshDisplays()
     }
 
     SDL_QuitSubSystem(SDL_INIT_VIDEO);
+}
+
+static QString friendlyAudioDriverName(const QString& driver)
+{
+    static const QHash<QString, QString> names = {
+        { "wasapi", "WASAPI" },
+        { "directsound", "DirectSound" },
+        { "winmm", "WinMM" },
+        { "pipewire", "PipeWire" },
+        { "pulseaudio", "PulseAudio" },
+        { "alsa", "ALSA" },
+        { "jack", "JACK" },
+        { "sndio", "sndio" },
+        { "oss", "OSS" },
+        { "coreaudio", "Core Audio" },
+    };
+
+    return names.value(driver, driver);
+}
+
+QVariantList SystemProperties::getAudioDrivers()
+{
+    if (audioDriversProbed) {
+        return audioDrivers;
+    }
+
+    // An environment variable overrides our hint, so the setting would do nothing
+    if (qEnvironmentVariableIsSet("SDL_AUDIODRIVER") || qEnvironmentVariableIsSet("SDL_AUDIO_DRIVER")) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Audio backend is set by the environment; hiding the audio backend setting");
+        audioDriversProbed = true;
+        return audioDrivers;
+    }
+
+    // Probing opens and closes SDL's audio subsystem, which must not happen
+    // while a stream's audio renderer owns it
+    if (SDL_WasInit(SDL_INIT_AUDIO)) {
+        return audioDrivers;
+    }
+
+    QString defaultDriver;
+    QStringList availableDrivers;
+
+    // Find the backend SDL picks by itself, then each one that can open here
+    SDL_SetHint(SDL_HINT_AUDIODRIVER, "");
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
+        defaultDriver = SDL_GetCurrentAudioDriver();
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+    }
+
+    for (int i = 0; i < SDL_GetNumAudioDrivers(); i++) {
+        QString driver = SDL_GetAudioDriver(i);
+
+        // These don't play audio
+        if (driver == "disk" || driver == "dummy" || driver == defaultDriver) {
+            continue;
+        }
+
+        SDL_SetHint(SDL_HINT_AUDIODRIVER, driver.toUtf8().constData());
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
+            if (driver == SDL_GetCurrentAudioDriver()) {
+                availableDrivers.append(driver);
+            }
+            SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        }
+    }
+    SDL_SetHint(SDL_HINT_AUDIODRIVER, "");
+
+    if (!defaultDriver.isEmpty()) {
+        QVariantMap entry;
+        entry["value"] = QString();
+        entry["text"] = tr("%1 (Default)").arg(friendlyAudioDriverName(defaultDriver));
+        audioDrivers.append(entry);
+    }
+    for (const QString& driver : availableDrivers) {
+        QVariantMap entry;
+        entry["value"] = driver;
+        entry["text"] = friendlyAudioDriverName(driver);
+        audioDrivers.append(entry);
+    }
+
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Audio backends: default %s, also available: %s",
+                qPrintable(defaultDriver.isEmpty() ? QString("none") : defaultDriver),
+                qPrintable(availableDrivers.isEmpty() ? QString("none") : availableDrivers.join(", ")));
+
+    audioDriversProbed = true;
+    return audioDrivers;
 }
