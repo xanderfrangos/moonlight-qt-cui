@@ -1396,9 +1396,11 @@ Flickable {
                     width: parent.width
                     text: qsTr("LS1 upscaling")
                     font.pointSize: 12
-                    visible: SystemProperties.supportsLs1Upscaling
-                    checked: StreamingPreferences.ls1Upscaling
+                    enabled: SystemProperties.supportsLs1Upscaling
+                    checked: enabled && StreamingPreferences.ls1Upscaling
                     onCheckedChanged: {
+                        // Keep the saved preference while LS1 is unavailable
+                        if (!enabled) return
                         StreamingPreferences.ls1Upscaling = checked
                         if (checked) StreamingPreferences.fsr1Upscaling = false
                     }
@@ -1406,7 +1408,12 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 10000
                     ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                    ToolTip.text: qsTr("Upscales a stream that is smaller than the window using LS1 from your Steam-installed Lossless Scaling. Uses the D3D11 renderer on Windows and the Vulkan renderer on Linux, where it also requires a compatible libvkd3d-shader. Works with SDR streams. Reconnect after changing this setting.")
+                    ToolTip.text: enabled ?
+                                      qsTr("Upscales a stream that is smaller than the window using LS1 from your Steam-installed Lossless Scaling. Uses the D3D11 renderer on Windows and the Vulkan renderer on Linux, where it also requires a compatible libvkd3d-shader. Works with SDR streams. Reconnect after changing this setting.")
+                                    : SystemProperties.supportsFsr1Upscaling ?
+                                      qsTr("LS1 upscaling requires Lossless Scaling to be installed through Steam.")
+                                    :
+                                      qsTr("LS1 upscaling is not supported on this platform.")
                 }
 
                 Column {
