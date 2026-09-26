@@ -5,6 +5,10 @@
 
 // An image-local upload fence. Only the overlay worker waits on it; video
 // continues using the previous completed texture. No presentation prediction.
+//
+// Recording the fence records libplacebo commands, so signal() must run under
+// the renderer's command lock. wait() is a plain Vulkan wait and must not, or
+// it would hold swapchain submits hostage to the overlay upload.
 class OverlayCompletion {
 public:
     explicit OverlayCompletion(pl_vulkan vk) : m_Vulkan(vk) {
@@ -31,8 +35,11 @@ public:
             m_Destroy(m_Vulkan->device, m_Semaphore, nullptr);
         }
     }
-    bool wait(pl_tex texture) {
-        if (!m_Semaphore) return false;
+    // Records and flushes a fence behind all pending work on texture. Returns
+    // the value to pass to wait(), or zero if no fence could be recorded.
+    // The caller must hold the renderer's command lock.
+    uint64_t signal(pl_tex texture) {
+        if (!m_Semaphore) return 0;
         const uint64_t value = ++m_Value;
         VkImageLayout layout;
         pl_vulkan_hold_params hold{};
@@ -40,7 +47,7 @@ public:
         hold.out_layout = &layout;
         hold.qf = VK_QUEUE_FAMILY_IGNORED;
         hold.semaphore = {m_Semaphore, value};
-        if (!pl_vulkan_hold_ex(m_Vulkan->gpu, &hold)) return false;
+        if (!pl_vulkan_hold_ex(m_Vulkan->gpu, &hold)) return 0;
         pl_vulkan_release_params release{};
         release.tex = texture;
         release.layout = layout;
@@ -48,6 +55,11 @@ public:
         release.semaphore = hold.semaphore;
         pl_vulkan_release_ex(m_Vulkan->gpu, &release);
         pl_gpu_flush(m_Vulkan->gpu);
+        return value;
+    }
+    // Waits up to 100 ms for a value from signal(). Must not hold the command lock.
+    bool wait(uint64_t value) {
+        if (!m_Semaphore || value == 0) return false;
         VkSemaphoreWaitInfo wait{};
         wait.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
         wait.semaphoreCount = 1;

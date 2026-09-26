@@ -3249,6 +3249,22 @@ Each graph auto-scales to the window's maximum, rounded up to the next
 amplify noise. These are the same measurements the text overlay reports as
 running averages; the graphs add time resolution, not new instrumentation.
 
+Overlay delivery keeps GPU work and waiting off the frame preparation and
+presentation threads (2026-09-26), because the graphs republish an overlay ten
+times a second. In the libplacebo renderer, the overlay worker creates or
+reuses a staging texture, records the upload and a timeline-semaphore fence
+under `m_CommandLock`, waits for the fence outside that lock, and then
+publishes the texture. `renderMappedImage()` only swaps a published texture
+in; it takes the overlay spinlock with a try-lock and keeps the previous
+overlay when the worker holds it. An earlier fork change had moved uploads
+onto the rendering threads to avoid libplacebo's `vk_cmd_submit()` timeline
+assertion. `m_CommandLock` (upstream 68bdaea1) now fixes that race directly.
+The D3D11 renderer already created overlay resources on the worker. Its
+`renderOverlay()` now also uses a try-lock and draws the resources it drew on
+the previous frame when the lock is busy. In both renderers an overlay can
+appear a frame late, but a frame is never delayed by an overlay. Neither
+change has been measured on a live stream.
+
 ## 15. Tests, deployment boundaries, and maintenance
 
 The deterministic suites are

@@ -113,7 +113,7 @@ public:
 private:
     static void lockQueue(AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index);
     static void unlockQueue(AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index);
-    void uploadPendingOverlays();
+    void takeCompletedOverlays();
     static void gpuRenderInfo(void* opaque, const pl_render_info* info);
     bool renderMappedImage(pl_renderer renderer, const pl_frame& source,
                            pl_frame target, const pl_render_params& params);
@@ -144,8 +144,10 @@ private:
 #endif
 
     bool createSwapchain(int depth);
-    // Never call these from the overlay worker thread.
-    bool createOverlay(pl_overlay* overlay, SDL_Surface* surface);
+    // Creates or refills overlay->tex. Takes m_CommandLock for the upload, so
+    // the caller must not hold it. Never call this from a rendering thread.
+    bool createOverlay(pl_overlay* overlay, SDL_Surface* surface,
+                       uint64_t* completionValue = nullptr);
     bool mapAvFrameToPlacebo(const AVFrame *frame, pl_frame* mappedFrame,
                             pl_tex* textures = nullptr);
     void unmapAvFrameFromPlacebo(const AVFrame *frame, pl_frame* mappedFrame);
@@ -192,11 +194,9 @@ private:
     pl_color_space m_LastColorspace = {};
     // pl_swapchain_submit_frame() takes libplacebo's pending graphics command
     // outside the lock that guards command recording. Work recorded on other
-    // threads (offscreen preparation, including any overlay uploads it does,
-    // and PyroWave surface holds) must not begin a command inside that window,
-    // so it and every swapchain submit hold this lock. Texture creation records
-    // nothing and stays out. Overlay uploads on the presenting thread cannot
-    // overlap its own submit and do not take it.
+    // threads (offscreen preparation, overlay uploads, PyroWave surface holds)
+    // must not begin a command inside that window, so it and every swapchain
+    // submit hold this lock. Texture creation records nothing and stays out.
     std::mutex m_CommandLock;
 #if defined(HAVE_PYROWAVE) && defined(Q_OS_LINUX)
     std::unique_ptr<PyroWavePlaceboPool> m_PyroWavePool;
@@ -309,14 +309,16 @@ private:
 
     // Overlay state
     //
-    // libplacebo's pl_gpu is explicitly not thread-safe, and notifyOverlayUpdated()
-    // runs on the overlay worker thread while the render thread is submitting
-    // frames. Uploading overlay textures there raced the renderer's command pool
-    // and tripped libplacebo's vk_cmd_submit() timeline assertion. So the update
-    // thread now only hands over pixels, exactly as EGLRenderer does, and every
-    // pl_gpu call for overlays happens in uploadPendingOverlays(), called from
-    // renderMappedImage(). That runs on the presenting thread and, on Linux,
-    // the offscreen preparation thread.
+    // The overlay worker uploads into a staging texture, waits for the GPU to
+    // finish the copy, and only then publishes it. The rendering threads just
+    // swap the finished texture in, so no texture creation, upload or wait
+    // ever happens on the VRR presenting or preparation threads. The worker's
+    // command recording takes m_CommandLock, which keeps it out of the
+    // swapchain submit window that once tripped libplacebo's vk_cmd_submit()
+    // timeline assertion.
+    std::unique_ptr<OverlayCompletion> m_OverlayCompletion;
+    // Overlay worker thread only
+    bool m_OverlayCompletionWarned = false;
     SDL_SpinLock m_OverlayLock = 0;
     struct {
         // Only touched in renderMappedImage(), which m_ImageRenderLock
@@ -324,10 +326,15 @@ private:
         bool hasOverlay;
         pl_overlay overlay;
 
-        // Handoff from the overlay update thread, guarded by m_OverlayLock.
-        // A pending update with a null surface means "drop this overlay".
-        bool hasPendingUpdate;
-        SDL_Surface* pendingSurface;
+        // Owned by the overlay worker whenever hasStagingOverlay is false,
+        // and swapped with overlay by the renderer when it is true.
+        pl_overlay stagingOverlay;
+
+        // Guarded by m_OverlayLock. hasStagingOverlay publishes a finished
+        // upload; dropOverlay asks the renderer to stop drawing a disabled
+        // overlay, which it can do without any GPU work.
+        bool hasStagingOverlay;
+        bool dropOverlay;
     } m_Overlays[Overlay::OverlayMax] = {};
 
     // Device context used for hwaccel decoders

@@ -332,6 +332,14 @@ D3D11VARenderer::~D3D11VARenderer()
 
     m_VideoTexture.Reset();
 
+    for (auto& buffer : m_DrawnOverlayVertexBuffers) {
+        buffer.Reset();
+    }
+
+    for (auto& srv : m_DrawnOverlayTextureResourceViews) {
+        srv.Reset();
+    }
+
     for (auto& buffer : m_OverlayVertexBuffers) {
         buffer.Reset();
     }
@@ -1101,34 +1109,48 @@ void D3D11VARenderer::renderFrame(AVFrame* frame)
 void D3D11VARenderer::renderOverlay(Overlay::OverlayType type)
 {
     if (!Session::get()->getOverlayManager().isOverlayEnabled(type)) {
+        // Don't hold on to a disabled overlay, or bring it back stale later
+        m_DrawnOverlayVertexBuffers[type].Reset();
+        m_DrawnOverlayTextureResourceViews[type].Reset();
         return;
     }
 
-    // Reference these objects so they don't immediately go away if the
-    // overlay update thread tries to release them. The update thread only holds
-    // this lock to swap pointers, so waiting is cheaper than skipping a frame.
-    SDL_AtomicLock(&m_OverlayLock);
-    ComPtr<ID3D11Texture2D> overlayTexture = m_OverlayTextures[type];
-    ComPtr<ID3D11Buffer> overlayVertexBuffer = m_OverlayVertexBuffers[type];
-    ComPtr<ID3D11ShaderResourceView> overlayTextureResourceView = m_OverlayTextureResourceViews[type];
-    SDL_AtomicUnlock(&m_OverlayLock);
+    // Never wait for the overlay update thread. It holds this lock only to
+    // swap pointers, but it can be preempted while holding it, and a spin here
+    // would land in frame preparation. If it has the lock, draw what we drew
+    // last frame and pick up the new overlay on the next one.
+    if (SDL_AtomicTryLock(&m_OverlayLock)) {
+        // Reference these objects so they don't immediately go away if the
+        // overlay update thread tries to release them. The SRV holds its
+        // texture. Our previous references are released after unlocking.
+        ComPtr<ID3D11Buffer> overlayVertexBuffer = m_OverlayVertexBuffers[type];
+        ComPtr<ID3D11ShaderResourceView> overlayTextureResourceView;
+        if (m_OverlayTextures[type]) {
+            overlayTextureResourceView = m_OverlayTextureResourceViews[type];
+        }
+        SDL_AtomicUnlock(&m_OverlayLock);
 
-    if (!overlayTexture) {
+        m_DrawnOverlayVertexBuffers[type].Swap(overlayVertexBuffer);
+        m_DrawnOverlayTextureResourceViews[type].Swap(overlayTextureResourceView);
+    }
+
+    ID3D11Buffer* overlayVertexBuffer = m_DrawnOverlayVertexBuffers[type].Get();
+    ID3D11ShaderResourceView* overlayTextureResourceView = m_DrawnOverlayTextureResourceViews[type].Get();
+    if (!overlayTextureResourceView) {
         return;
     }
 
-    // If there was a texture, there must also be a vertex buffer and SRV
+    // If there was a texture, there must also be a vertex buffer
     SDL_assert(overlayVertexBuffer);
-    SDL_assert(overlayTextureResourceView);
 
     // Bind vertex buffer
     UINT stride = sizeof(VERTEX);
     UINT offset = 0;
-    m_RenderDeviceContext->IASetVertexBuffers(0, 1, overlayVertexBuffer.GetAddressOf(), &stride, &offset);
+    m_RenderDeviceContext->IASetVertexBuffers(0, 1, &overlayVertexBuffer, &stride, &offset);
 
     // Bind pixel shader and resources
     m_RenderDeviceContext->PSSetShader(m_OverlayPixelShader.Get(), nullptr, 0);
-    m_RenderDeviceContext->PSSetShaderResources(0, 1, overlayTextureResourceView.GetAddressOf());
+    m_RenderDeviceContext->PSSetShaderResources(0, 1, &overlayTextureResourceView);
 
     // Draw the overlay with alpha blending
     m_RenderDeviceContext->OMSetBlendState(m_OverlayBlendState.Get(), nullptr, 0xffffffff);
