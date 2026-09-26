@@ -1215,6 +1215,8 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
     counters.networkLatencyValid = LiGetEstimatedRttInfo(&rtt, &rttVariance);
     counters.networkLatencyMs = counters.networkLatencyValid ? rtt : 0;
     counters.networkJitterMs = counters.networkLatencyValid ? rttVariance : 0;
+
+    Session::get()->getAudioStats().sample(counters);
 }
 
 void FFmpegVideoDecoder::syncPacerTelemetry()

@@ -3526,6 +3526,32 @@ Flickable {
                                     }
                                 }
                             }
+
+                            Label {
+                                width: parent.width
+                                topPadding: 10
+                                text: qsTr("Audio")
+                                font.pointSize: 10
+                                font.bold: true
+                                opacity: 0.7
+                            }
+
+                            Repeater {
+                                model: StreamingPreferences.getPerformanceGraphs(StreamingPreferences.PGT_AUDIO)
+
+                                delegate: CheckBox {
+                                    width: parent.width
+                                    text: modelData.text
+                                    font.pointSize: 12
+                                    // The preference records changes from each
+                                    // graph's default, so a click just flips its bit
+                                    checked: ((StreamingPreferences.performanceGraphsDefault ^
+                                               StreamingPreferences.performanceGraphsToggled) & (1 << modelData.bit)) !== 0
+                                    onToggled: {
+                                        StreamingPreferences.performanceGraphsToggled ^= (1 << modelData.bit)
+                                    }
+                                }
+                            }
                         }
 
                         Column {

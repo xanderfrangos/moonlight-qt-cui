@@ -503,6 +503,9 @@ const QVector<StreamingPreferences::PerformanceGraphInfo>& StreamingPreferences:
         { PG_RENDERING_TIME, QT_TR_NOOP("Rendering time"), PGT_CLIENT, true },
         { PG_JITTER_DROPS, QT_TR_NOOP("Dropped by client pacer"), PGT_CLIENT, true },
         { PG_VRR_SMOOTHNESS, QT_TR_NOOP("VRR cadence smoothness"), PGT_CLIENT, false },
+        { PG_AUDIO_BUFFER, QT_TR_NOOP("Audio buffer"), PGT_AUDIO, false },
+        { PG_AUDIO_TROUBLE, QT_TR_NOOP("Audio underruns/gaps"), PGT_AUDIO, false },
+        { PG_AUDIO_DEVICE_INTERVAL, QT_TR_NOOP("Audio device timing"), PGT_AUDIO, false },
     };
     return k_Graphs;
 }

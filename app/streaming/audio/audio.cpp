@@ -14,7 +14,7 @@
     IAudioRenderer* __renderer = new renderer();       \
     __renderer->setDecodeCallback(arDecodeForRenderer, \
                                   this,                \
-                                  m_Preferences->audioBufferMs); \
+                                  m_Preferences->audioBufferMs);     __renderer->setStatistics(&m_AudioStats);          \
     if (__renderer->prepareForPlayback(opusConfig))    \
         return __renderer;                             \
     delete __renderer;                                 \

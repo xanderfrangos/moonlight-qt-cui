@@ -112,6 +112,17 @@ struct StatsGraphCounters {
     StatsGraphAccumulator decodingTime;
     StatsGraphAccumulator renderingTime;
 
+    // Audio, from the session's AudioStats. The accumulators hold one value
+    // per audio device request, in milliseconds: the audio left buffered
+    // after it, the time since the previous request, and how much it asked
+    // for. The totals only ever grow.
+    StatsGraphAccumulator audioBuffered;
+    StatsGraphAccumulator audioDeviceInterval;
+    StatsGraphAccumulator audioDeviceRequest;
+    float audioTargetMs = 0;
+    uint64_t audioUnderruns = 0;
+    uint64_t audioConcealments = 0;
+
     StatsGraphStreamInfo streamInfo;
 };
 
@@ -168,6 +179,17 @@ struct StatsGraphPoint {
     float queueDepth = 0;
     float incomingSmoothness = 0;
     float vrrSmoothness = 0;
+    float audioBufferedMs = 0;
+    float audioBufferedMinMs = 0;
+    float audioBufferedMaxMs = 0;
+    float audioTargetMs = 0;
+    // Underruns and filled gaps together, with underruns alone drawn over them
+    float audioTroubleEvents = 0;
+    float audioUnderruns = 0;
+    float audioDeviceIntervalMs = 0;
+    float audioDeviceIntervalMinMs = 0;
+    float audioDeviceIntervalMaxMs = 0;
+    float audioDeviceRequestMs = 0;
 };
 
 // Samples stream statistics on a fixed interval and publishes a painted plot of

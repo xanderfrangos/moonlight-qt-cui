@@ -211,13 +211,17 @@ public:
         PG_RENDERING_TIME = 12,
         PG_INCOMING_SMOOTHNESS = 13,
         PG_VRR_SMOOTHNESS = 14,
+        PG_AUDIO_BUFFER = 15,
+        PG_AUDIO_TROUBLE = 16,
+        PG_AUDIO_DEVICE_INTERVAL = 17,
     };
     Q_ENUM(PerformanceGraph)
 
     enum PerformanceGraphType
     {
         PGT_NETWORK,
-        PGT_CLIENT
+        PGT_CLIENT,
+        PGT_AUDIO
     };
     Q_ENUM(PerformanceGraphType)
 

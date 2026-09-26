@@ -2805,6 +2805,12 @@ wins, and falls back to SDL's default backend if the chosen one fails to open.
 The settings list comes from `SystemProperties::getAudioDrivers()`, which opens
 each backend compiled into SDL once. It skips `disk` and `dummy`, lists the
 default first, and returns nothing when the environment already sets a backend.
+The renderer also records into the session-owned `AudioStats`
+(`audio/audiostats.h`) on each device request: the time since the last request,
+the amount requested, what stayed buffered, underruns, concealment episodes and
+the target. The stats-graph sampler takes it every 100 ms for the opt-in Audio
+graphs (buffer against target, underruns and filled gaps, device request
+interval against request size).
 Video timestamps are not used. Audio startup intentionally discards an initial backlog of about
 500 ms; renderer reinitialization similarly prevents downtime becoming permanent
 queued audio latency. Muting can suppress audio processing without retiming VRR.

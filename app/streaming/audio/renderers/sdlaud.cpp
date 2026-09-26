@@ -1,4 +1,5 @@
 #include "sdl.h"
+#include "streaming/audio/audiostats.h"
 
 #include <Limelight.h>
 
@@ -56,7 +57,9 @@ SdlAudioRenderer::SdlAudioRenderer()
       m_LoggedUnderruns(0),
       m_LoggedConcealments(0),
       m_LoggedDroppedPackets(0),
-      m_SubmittedPackets(0)
+      m_SubmittedPackets(0),
+      m_Stats(nullptr),
+      m_LastCallbackTime(0)
 {
     SDL_AtomicSet(&m_TargetMs, AUTO_INITIAL_MS);
     SDL_AtomicSet(&m_Underruns, 0);
@@ -81,6 +84,11 @@ void SdlAudioRenderer::setDecodeCallback(AudioDecodeCallback callback, void* con
     SDL_AtomicSet(&m_TargetMs, m_AutomaticBuffer ? AUTO_INITIAL_MS : bufferMs);
 }
 
+void SdlAudioRenderer::setStatistics(AudioStats* stats)
+{
+    m_Stats = stats;
+}
+
 bool SdlAudioRenderer::decodesAudio()
 {
     return true;
@@ -96,6 +104,9 @@ bool SdlAudioRenderer::prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION* 
     m_FadeFrames = SDL_min(m_SampleRate * FADE_MS / 1000, m_SamplesPerFrame);
     m_TargetFrames = SDL_AtomicGet(&m_TargetMs) * m_SampleRate / 1000;
     m_LoggedTargetMs = SDL_AtomicGet(&m_TargetMs);
+    if (m_Stats != nullptr) {
+        m_Stats->setTargetMs((float)m_LoggedTargetMs);
+    }
 
     SDL_zero(want);
     want.freq = opusConfig->sampleRate;
@@ -224,12 +235,26 @@ void SDLCALL SdlAudioRenderer::audioCallback(void* userdata, Uint8* stream, int 
     SdlAudioRenderer* me = static_cast<SdlAudioRenderer*>(userdata);
     float* out = reinterpret_cast<float*>(stream);
     int frames = len / (int)(sizeof(float) * me->m_Channels);
+    int requestedFrames = frames;
 
     while (frames > 0) {
         int chunk = SDL_min(frames, me->m_PeriodFrames);
         me->renderChunk(out, chunk);
         out += chunk * me->m_Channels;
         frames -= chunk;
+    }
+
+    if (me->m_Stats != nullptr) {
+        Uint64 now = SDL_GetPerformanceCounter();
+        float intervalMs = me->m_LastCallbackTime != 0
+                ? (float)((now - me->m_LastCallbackTime) * 1000.0 / SDL_GetPerformanceFrequency())
+                : 0;
+        me->m_LastCallbackTime = now;
+
+        float framesPerMs = me->m_SampleRate / 1000.0f;
+        me->m_Stats->recordDeviceRequest(intervalMs,
+                                         requestedFrames / framesPerMs,
+                                         (me->queuedFrames() + me->m_PcmFrames) / framesPerMs);
     }
 }
 
@@ -286,6 +311,9 @@ void SdlAudioRenderer::renderChunk(float* out, int frames)
 
         if (m_Starved && m_StarvedFrames < m_SampleRate * STREAM_PAUSE_MS / 1000) {
             SDL_AtomicIncRef(&m_Underruns);
+            if (m_Stats != nullptr) {
+                m_Stats->recordUnderrun();
+            }
             adjustAutomaticTarget(AUTO_UNDERRUN_STEP_MS);
         }
 
@@ -312,6 +340,9 @@ void SdlAudioRenderer::renderChunk(float* out, int frames)
             // A late packet arrived after we concealed its absence
             if (length > 0 && m_ConcealedFrames > 0) {
                 SDL_AtomicIncRef(&m_Concealments);
+                if (m_Stats != nullptr) {
+                    m_Stats->recordConcealment();
+                }
                 adjustAutomaticTarget(AUTO_CONCEALMENT_STEP_MS);
                 m_ConcealedFrames = 0;
             }
@@ -428,6 +459,9 @@ void SdlAudioRenderer::adjustAutomaticTarget(int deltaMs)
     int targetMs = SDL_max(AUTO_MIN_MS, SDL_min(SDL_AtomicGet(&m_TargetMs) + deltaMs, AUTO_MAX_MS));
     m_TargetFrames = targetMs * m_SampleRate / 1000;
     SDL_AtomicSet(&m_TargetMs, targetMs);
+    if (m_Stats != nullptr) {
+        m_Stats->setTargetMs((float)targetMs);
+    }
 }
 
 void SdlAudioRenderer::logStatistics(bool final)

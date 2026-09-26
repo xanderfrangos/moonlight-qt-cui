@@ -9,6 +9,7 @@
 #include "input/input.h"
 #include "video/decoder.h"
 #include "audio/renderers/renderer.h"
+#include "audio/audiostats.h"
 #include "video/overlaymanager.h"
 #include "diagnostics/diagnosticcapture.h"
 #include "video/overlaypainter.h"
@@ -125,6 +126,11 @@ public:
     Overlay::OverlayManager& getOverlayManager()
     {
         return m_OverlayManager;
+    }
+
+    AudioStats& getAudioStats()
+    {
+        return m_AudioStats;
     }
 
     // Shows or hides the configured arrangement of stats overlays.
@@ -380,6 +386,7 @@ private:
     OPUS_MULTISTREAM_CONFIGURATION m_OriginalAudioConfig;
     int m_AudioSampleCount;
     Uint32 m_DropAudioEndTime;
+    AudioStats m_AudioStats;
 
     Overlay::OverlayManager m_OverlayManager;
 

@@ -766,6 +766,23 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
         { StreamingPreferences::PG_VRR_SMOOTHNESS, &StatsGraphPoint::vrrSmoothness,
           nullptr, nullptr,
           QColor(0xA5, 0xD6, 0xA7), "%", 2, 100 },
+
+        // Opt-in audio. The buffer's low edge is how close playback came to
+        // running dry, drawn against the target it is trying to hold.
+        { StreamingPreferences::PG_AUDIO_BUFFER, &StatsGraphPoint::audioBufferedMs,
+          &StatsGraphPoint::audioBufferedMinMs, &StatsGraphPoint::audioBufferedMaxMs,
+          QColor(0x29, 0xB6, 0xF6), " ms", 0, 20, false,
+          &StatsGraphPoint::audioTargetMs, "target", QColor(0xB3, 0xE5, 0xFC) },
+        { StreamingPreferences::PG_AUDIO_TROUBLE, &StatsGraphPoint::audioTroubleEvents,
+          nullptr, nullptr,
+          QColor(0xFF, 0x70, 0x43), "", 0, 4, false,
+          &StatsGraphPoint::audioUnderruns, "underruns", QColor(0xFF, 0xCC, 0xBC) },
+        // A steady backend holds a flat line at its request size. Requests
+        // arriving late or in bursts point at the backend, not the network.
+        { StreamingPreferences::PG_AUDIO_DEVICE_INTERVAL, &StatsGraphPoint::audioDeviceIntervalMs,
+          &StatsGraphPoint::audioDeviceIntervalMinMs, &StatsGraphPoint::audioDeviceIntervalMaxMs,
+          QColor(0xBA, 0x68, 0xC8), " ms", 1, 20, false,
+          &StatsGraphPoint::audioDeviceRequestMs, "request", QColor(0xE1, 0xBE, 0xE7) },
     };
 
     // Dealing one graph to each column in turn keeps the columns within one

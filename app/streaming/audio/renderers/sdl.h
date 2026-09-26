@@ -5,6 +5,8 @@
 
 #include <vector>
 
+class AudioStats;
+
 class SdlAudioRenderer : public IAudioRenderer
 {
 public:
@@ -13,6 +15,8 @@ public:
     virtual ~SdlAudioRenderer();
 
     virtual void setDecodeCallback(AudioDecodeCallback callback, void* context, int bufferMs);
+
+    virtual void setStatistics(AudioStats* stats);
 
     virtual bool decodesAudio();
 
@@ -92,4 +96,8 @@ private:
     int m_LoggedConcealments;
     int m_LoggedDroppedPackets;
     int m_SubmittedPackets;
+
+    // Performance graph measurements, recorded on the audio device thread
+    AudioStats* m_Stats;
+    Uint64 m_LastCallbackTime;
 };

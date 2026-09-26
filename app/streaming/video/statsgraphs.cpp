@@ -249,6 +249,20 @@ void StatsGraphs::appendSample(const StatsGraphCounters& counters, double interv
     }
 
     point.queueDepth = (float)counters.queueDepth;
+
+    // With no device requests in an interval, the audio buffer holds its last
+    // value, while the request interval is at least as long as the interval
+    applyPerFrame(counters.audioBuffered, previous.audioBufferedMs, 0,
+                  point.audioBufferedMs, point.audioBufferedMinMs, point.audioBufferedMaxMs);
+    applyPerFrame(counters.audioDeviceInterval, previous.audioDeviceIntervalMs, intervalMs,
+                  point.audioDeviceIntervalMs, point.audioDeviceIntervalMinMs,
+                  point.audioDeviceIntervalMaxMs);
+    point.audioDeviceRequestMs = counters.audioDeviceRequest.count != 0
+            ? counters.audioDeviceRequest.average() : previous.audioDeviceRequestMs;
+    point.audioTargetMs = counters.audioTargetMs;
+    point.audioUnderruns = (float)delta(counters.audioUnderruns, m_LastCounters.audioUnderruns);
+    point.audioTroubleEvents = point.audioUnderruns +
+            (float)delta(counters.audioConcealments, m_LastCounters.audioConcealments);
     point.incomingSmoothness = counters.incomingSmoothnessValid ? counters.incomingSmoothness
                                                                 : previous.incomingSmoothness;
     point.vrrSmoothness = counters.vrrSmoothnessValid ? counters.vrrSmoothness

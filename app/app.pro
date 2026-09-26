@@ -268,7 +268,7 @@ HEADERS += \
     streaming/video/pyrowave/pyrowavecalibrator.h \
     streaming/video/pyrowave/pyrowavebitrate.h \
     streaming/gamescopecomposition.h \
-    streaming/audio/renderers/renderer.h \
+    streaming/audio/audiostats.h     streaming/audio/renderers/renderer.h \
     streaming/audio/renderers/sdl.h \
     gui/computermodel.h \
     gui/appmodel.h \

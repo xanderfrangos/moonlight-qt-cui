@@ -3,6 +3,8 @@
 #include <Limelight.h>
 #include <QtGlobal>
 
+class AudioStats;
+
 class IAudioRenderer
 {
 public:
@@ -19,6 +21,10 @@ public:
     // consumes them. bufferMs is the jitter buffer size, or 0 to size it
     // automatically. Called before prepareForPlayback().
     virtual void setDecodeCallback(AudioDecodeCallback, void*, int) {}
+
+    // Where the renderer records measurements for the performance graphs.
+    // Called before prepareForPlayback(). The stats outlive the renderer.
+    virtual void setStatistics(AudioStats*) {}
 
     virtual bool decodesAudio() {
         return false;
