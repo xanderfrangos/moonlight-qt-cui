@@ -40,7 +40,6 @@
 #define SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS 105
 
 #include <openssl/rand.h>
-
 #include <QtEndian>
 #include <QCoreApplication>
 #include <QThreadPool>
@@ -50,6 +49,8 @@
 #include <QGuiApplication>
 #include <QCursor>
 #include <QScreen>
+
+extern "C" void setIntraRefreshEnabled(int enabled);
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QQuickOpenGLUtils>
@@ -544,6 +545,61 @@ void Session::getDecoderInfo(SDL_Window* window,
 
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                  "Failed to find ANY working H.264 or HEVC decoder!");
+}
+
+bool Session::supportsIntraRefresh(SDL_Window* window,
+                                   StreamingPreferences::VideoDecoderSelection decoderSelection,
+                                   StreamingPreferences::VideoCodecConfig codecConfig)
+{
+    struct CodecCandidate {
+        int videoFormat;
+        int requiredCapability;
+    };
+    static const CodecCandidate candidates[] = {
+        {VIDEO_FORMAT_H265, CAPABILITY_REFERENCE_FRAME_INVALIDATION_HEVC},
+        {VIDEO_FORMAT_AV1_MAIN8, CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1},
+        {VIDEO_FORMAT_H264, CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC},
+    };
+
+    int firstCandidate = 0;
+    int candidateCount = sizeof(candidates) / sizeof(candidates[0]);
+    switch (codecConfig) {
+    case StreamingPreferences::VCC_FORCE_H264:
+        firstCandidate = 2;
+        candidateCount = 1;
+        break;
+    case StreamingPreferences::VCC_FORCE_HEVC:
+    case StreamingPreferences::VCC_FORCE_HEVC_HDR_DEPRECATED:
+        firstCandidate = 0;
+        candidateCount = 1;
+        break;
+    case StreamingPreferences::VCC_FORCE_AV1:
+        firstCandidate = 1;
+        candidateCount = 1;
+        break;
+    case StreamingPreferences::VCC_FORCE_PYROWAVE:
+        return false;
+    case StreamingPreferences::VCC_AUTO:
+        break;
+    }
+
+    for (int i = firstCandidate; i < firstCandidate + candidateCount; i++) {
+        IVideoDecoder* decoder;
+        if (!chooseDecoder(decoderSelection,
+                           StreamingPreferences::RS_PROBE_ONLY,
+                           window, candidates[i].videoFormat, 1920, 1080, 60,
+                           false, false, true, decoder)) {
+            continue;
+        }
+
+        const bool supported = (decoder->getDecoderCapabilities() & candidates[i].requiredCapability) != 0;
+        delete decoder;
+        if (supported) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 Session::DecoderAvailability
@@ -2242,6 +2298,7 @@ bool Session::startConnectionAsync()
                                                                          false);
     }
 
+    setIntraRefreshEnabled(m_Preferences->useIntraRefresh);
     int err = LiStartConnection(&hostInfo, &m_StreamConfig, &k_ConnCallbacks,
                                 &m_VideoCallbacks, &m_AudioCallbacks,
                                 NULL, 0, NULL, 0);

@@ -8,6 +8,12 @@
 
 #include <limits.h>
 
+static int s_IntraRefreshEnabled = 1;
+
+void setIntraRefreshEnabled(int enabled) {
+    s_IntraRefreshEnabled = enabled != 0;
+}
+
 char* getSdpPayloadForStreamConfig(int rtspClientVersion, int* length) {
     static const char attribute[] = "a=x-ss-video[0].intraRefresh:1\r\n";
     const size_t attributeLength = sizeof(attribute) - 1;
@@ -19,7 +25,7 @@ char* getSdpPayloadForStreamConfig(int rtspClientVersion, int* length) {
     // Match VideoDepacketizer's frame-type marker support and use the actual
     // negotiated codec, including fallback from the client's preferred codec.
     // This requests host support; it does not prove that its encoder enables it.
-    if (payload == NULL || !IS_SUNSHINE() || !APP_VERSION_AT_LEAST(7, 1, 350) ||
+    if (payload == NULL || !s_IntraRefreshEnabled || !IS_SUNSHINE() || !APP_VERSION_AT_LEAST(7, 1, 350) ||
             !isReferenceFrameInvalidationSupportedByDecoder()) {
         return payload;
     }

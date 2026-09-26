@@ -25,7 +25,10 @@ class SystemPropertyQueryThread : public QThread
 {
 public:
     SystemPropertyQueryThread(SystemProperties* properties)
-        : QThread(properties), m_Properties(properties)
+        : QThread(properties),
+          m_Properties(properties),
+          m_DecoderSelection(StreamingPreferences::get()->videoDecoderSelection),
+          m_VideoCodecConfig(StreamingPreferences::get()->videoCodecConfig)
     {
         setObjectName("System Properties Async Query Thread");
     }
@@ -36,9 +39,11 @@ private:
         bool hasHardwareAcceleration;
         bool rendererAlwaysFullScreen;
         bool supportsHdr;
+        bool supportsIntraRefresh;
         QSize maximumResolution;
 
         Session::getDecoderInfo(m_Properties->testWindow, hasHardwareAcceleration, rendererAlwaysFullScreen, supportsHdr, maximumResolution);
+        supportsIntraRefresh = Session::supportsIntraRefresh(m_Properties->testWindow, m_DecoderSelection, m_VideoCodecConfig);
 
         // Propagate the decoder properties to the SystemProperties singleton and emit any change signals on the main thread
         QMetaObject::invokeMethod(m_Properties, "updateDecoderProperties",
@@ -46,11 +51,45 @@ private:
                                   Q_ARG(bool, hasHardwareAcceleration),
                                   Q_ARG(bool, rendererAlwaysFullScreen),
                                   Q_ARG(QSize, maximumResolution),
-                                  Q_ARG(bool, supportsHdr));
+                                  Q_ARG(bool, supportsHdr),
+                                  Q_ARG(bool, supportsIntraRefresh));
     }
 
 private:
     SystemProperties* m_Properties;
+    StreamingPreferences::VideoDecoderSelection m_DecoderSelection;
+    StreamingPreferences::VideoCodecConfig m_VideoCodecConfig;
+};
+
+class IntraRefreshQueryThread : public QThread
+{
+public:
+    IntraRefreshQueryThread(SystemProperties* properties,
+                            SDL_Window* testWindow,
+                            StreamingPreferences::VideoDecoderSelection decoderSelection,
+                            StreamingPreferences::VideoCodecConfig videoCodecConfig)
+        : QThread(properties),
+          m_Properties(properties),
+          m_TestWindow(testWindow),
+          m_DecoderSelection(decoderSelection),
+          m_VideoCodecConfig(videoCodecConfig)
+    {
+        setObjectName("Intra Refresh Capability Query Thread");
+    }
+
+private:
+    void run() override
+    {
+        const bool supportsIntraRefresh = Session::supportsIntraRefresh(m_TestWindow, m_DecoderSelection, m_VideoCodecConfig);
+        QMetaObject::invokeMethod(m_Properties, "updateIntraRefreshAvailability",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(bool, supportsIntraRefresh));
+    }
+
+    SystemProperties* m_Properties;
+    SDL_Window* m_TestWindow;
+    StreamingPreferences::VideoDecoderSelection m_DecoderSelection;
+    StreamingPreferences::VideoCodecConfig m_VideoCodecConfig;
 };
 
 static bool s_TvMode = false;
@@ -188,15 +227,25 @@ SystemProperties::SystemProperties()
     hasHardwareAcceleration = true;
     rendererAlwaysFullScreen = false;
     supportsHdr = true;
+    supportsIntraRefresh = false;
+    intraRefreshProbeComplete = false;
     maximumResolution = QSize(0, 0);
 }
 
 SystemProperties::~SystemProperties()
 {
     waitForAsyncLoad();
+    if (intraRefreshQueryThread) {
+        intraRefreshQueryThread->wait();
+    }
+    if (testWindow) {
+        SDL_DestroyWindow(testWindow);
+        testWindow = nullptr;
+        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    }
 }
 
-void SystemProperties::updateDecoderProperties(bool hasHardwareAcceleration, bool rendererAlwaysFullScreen, QSize maximumResolution, bool supportsHdr)
+void SystemProperties::updateDecoderProperties(bool hasHardwareAcceleration, bool rendererAlwaysFullScreen, QSize maximumResolution, bool supportsHdr, bool supportsIntraRefresh)
 {
     SDL_assert(testWindow);
 
@@ -220,9 +269,123 @@ void SystemProperties::updateDecoderProperties(bool hasHardwareAcceleration, boo
         emit supportsHdrChanged();
     }
 
+    if (supportsIntraRefresh != this->supportsIntraRefresh) {
+        this->supportsIntraRefresh = supportsIntraRefresh;
+        emit supportsIntraRefreshChanged();
+    }
+    if (!intraRefreshQueryPending && !intraRefreshProbeComplete) {
+        intraRefreshProbeComplete = true;
+        emit intraRefreshProbeCompleteChanged();
+    }
+
     SDL_DestroyWindow(testWindow);
     testWindow = nullptr;
     SDL_QuitSubSystem(SDL_INIT_VIDEO);
+
+    if (intraRefreshQueryPending) {
+        if (systemPropertyQueryThread) {
+            systemPropertyQueryThread->wait();
+        }
+        startPendingIntraRefreshQuery();
+    }
+}
+
+void SystemProperties::refreshIntraRefreshAvailability()
+{
+    const StreamingPreferences* preferences = StreamingPreferences::get();
+    pendingIntraRefreshDecoderSelection = preferences->videoDecoderSelection;
+    pendingIntraRefreshCodecConfig = preferences->videoCodecConfig;
+    intraRefreshQueryPending = true;
+
+    if (intraRefreshProbeComplete) {
+        intraRefreshProbeComplete = false;
+        emit intraRefreshProbeCompleteChanged();
+    }
+
+    startPendingIntraRefreshQuery();
+}
+
+void SystemProperties::startPendingIntraRefreshQuery()
+{
+    if (!intraRefreshQueryPending || testWindow ||
+            (systemPropertyQueryThread && systemPropertyQueryThread->isRunning()) ||
+            (intraRefreshQueryThread && intraRefreshQueryThread->isRunning())) {
+        return;
+    }
+
+    if (intraRefreshQueryThread) {
+        intraRefreshQueryThread->wait();
+        delete intraRefreshQueryThread;
+        intraRefreshQueryThread = nullptr;
+    }
+
+    if (intraRefreshProbeComplete) {
+        intraRefreshProbeComplete = false;
+        emit intraRefreshProbeCompleteChanged();
+    }
+
+    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "SDL_InitSubSystem(SDL_INIT_VIDEO) failed while checking Intra Refresh support: %s",
+                     SDL_GetError());
+        intraRefreshQueryPending = false;
+        if (supportsIntraRefresh) {
+            supportsIntraRefresh = false;
+            emit supportsIntraRefreshChanged();
+        }
+        intraRefreshProbeComplete = true;
+        emit intraRefreshProbeCompleteChanged();
+        return;
+    }
+
+    testWindow = StreamUtils::createTestWindow();
+    if (!testWindow) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Failed to create window while checking Intra Refresh support: %s",
+                     SDL_GetError());
+        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        intraRefreshQueryPending = false;
+        if (supportsIntraRefresh) {
+            supportsIntraRefresh = false;
+            emit supportsIntraRefreshChanged();
+        }
+        intraRefreshProbeComplete = true;
+        emit intraRefreshProbeCompleteChanged();
+        return;
+    }
+
+    intraRefreshQueryPending = false;
+    intraRefreshQueryThread = new IntraRefreshQueryThread(
+                this, testWindow,
+                static_cast<StreamingPreferences::VideoDecoderSelection>(pendingIntraRefreshDecoderSelection),
+                static_cast<StreamingPreferences::VideoCodecConfig>(pendingIntraRefreshCodecConfig));
+    intraRefreshQueryThread->start();
+}
+
+void SystemProperties::updateIntraRefreshAvailability(bool supportsIntraRefresh)
+{
+    if (intraRefreshQueryThread) {
+        intraRefreshQueryThread->wait();
+        delete intraRefreshQueryThread;
+        intraRefreshQueryThread = nullptr;
+    }
+
+    if (supportsIntraRefresh != this->supportsIntraRefresh) {
+        this->supportsIntraRefresh = supportsIntraRefresh;
+        emit supportsIntraRefreshChanged();
+    }
+    if (!intraRefreshQueryPending && !intraRefreshProbeComplete) {
+        intraRefreshProbeComplete = true;
+        emit intraRefreshProbeCompleteChanged();
+    }
+
+    SDL_DestroyWindow(testWindow);
+    testWindow = nullptr;
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+
+    if (intraRefreshQueryPending) {
+        startPendingIntraRefreshQuery();
+    }
 }
 
 QRect SystemProperties::getNativeResolution(int displayIndex)

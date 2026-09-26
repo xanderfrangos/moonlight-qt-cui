@@ -44,6 +44,8 @@ public:
     Q_PROPERTY(QString unmappedGamepads MEMBER unmappedGamepads NOTIFY unmappedGamepadsChanged)
     Q_PROPERTY(QSize maximumResolution MEMBER maximumResolution NOTIFY maximumResolutionChanged)
     Q_PROPERTY(bool supportsHdr MEMBER supportsHdr NOTIFY supportsHdrChanged)
+    Q_PROPERTY(bool supportsIntraRefresh MEMBER supportsIntraRefresh NOTIFY supportsIntraRefreshChanged)
+    Q_PROPERTY(bool intraRefreshProbeComplete MEMBER intraRefreshProbeComplete NOTIFY intraRefreshProbeCompleteChanged)
 
     // Either startAsyncLoad()+waitForAsyncLoad() or refreshDisplays() must be invoked first
     Q_INVOKABLE QRect getNativeResolution(int displayIndex);
@@ -62,6 +64,7 @@ public:
 
     Q_INVOKABLE void startAsyncLoad();
     Q_INVOKABLE void waitForAsyncLoad();
+    Q_INVOKABLE void refreshIntraRefreshAvailability();
     Q_INVOKABLE void refreshDisplays();
 
     // Saves preferences, launches a new instance of Moonlight, and quits this one
@@ -80,12 +83,21 @@ signals:
     void rendererAlwaysFullScreenChanged();
     void maximumResolutionChanged();
     void supportsHdrChanged();
+    void supportsIntraRefreshChanged();
+    void intraRefreshProbeCompleteChanged();
 
 private slots:
-    void updateDecoderProperties(bool hasHardwareAcceleration, bool rendererAlwaysFullScreen, QSize maximumResolution, bool supportsHdr);
+    void updateDecoderProperties(bool hasHardwareAcceleration, bool rendererAlwaysFullScreen, QSize maximumResolution, bool supportsHdr, bool supportsIntraRefresh);
+    void updateIntraRefreshAvailability(bool supportsIntraRefresh);
 
 private:
+    void startPendingIntraRefreshQuery();
+
     QThread* systemPropertyQueryThread = nullptr;
+    QThread* intraRefreshQueryThread = nullptr;
+    bool intraRefreshQueryPending = false;
+    int pendingIntraRefreshDecoderSelection = 0;
+    int pendingIntraRefreshCodecConfig = 0;
     SDL_Window* testWindow = nullptr;
 
     // Properties set by the constructor
@@ -115,6 +127,8 @@ private:
     bool rendererAlwaysFullScreen;
     QSize maximumResolution;
     bool supportsHdr;
+    bool supportsIntraRefresh;
+    bool intraRefreshProbeComplete;
     QString unmappedGamepads;
 
     // Properties set by refreshDisplays()

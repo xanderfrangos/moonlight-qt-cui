@@ -45,6 +45,7 @@
 #define SER_AUDIOBUFFER "audiobuffer"
 #define SER_AUDIODRIVER "audiodriver"
 #define SER_VIDEOCFG "videocfg"
+#define SER_USEINTRAREFRESH "useintrarefresh"
 #define SER_HDR "hdr"
 #define SER_YUV444 "yuv444"
 #define SER_DITHERING "dithering"   // Retired bool, migrated to SER_DITHERINGMODE
@@ -300,6 +301,8 @@ void StreamingPreferences::reload()
     audioDriver = settings.value(SER_AUDIODRIVER, QString()).toString();
     videoCodecConfig = static_cast<VideoCodecConfig>(settings.value(SER_VIDEOCFG,
                                                   static_cast<int>(VideoCodecConfig::VCC_AUTO)).toInt());
+    // Keep the existing capability-based request enabled for existing users.
+    useIntraRefresh = settings.value(SER_USEINTRAREFRESH, true).toBool();
     videoDecoderSelection = static_cast<VideoDecoderSelection>(settings.value(SER_VIDEODEC,
                                                   static_cast<int>(VideoDecoderSelection::VDS_AUTO)).toInt());
     rendererSelection = static_cast<RendererSelection>(settings.value(SER_RENDERER,
@@ -607,6 +610,7 @@ void StreamingPreferences::save()
     settings.setValue(SER_LS1SHARPNESS, ls1Sharpness);
     settings.remove(SER_DITHERING); // Superseded by the kernel selection
     settings.setValue(SER_VIDEOCFG, static_cast<int>(videoCodecConfig));
+    settings.setValue(SER_USEINTRAREFRESH, useIntraRefresh);
     settings.setValue(SER_VIDEODEC, static_cast<int>(videoDecoderSelection));
     settings.setValue(SER_RENDERER, static_cast<int>(rendererSelection));
     settings.setValue(SER_WINDOWMODE, static_cast<int>(windowMode));

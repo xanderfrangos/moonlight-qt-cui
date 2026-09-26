@@ -2915,7 +2915,11 @@ Flickable {
                     // ::onActivated must be used, as it only listens for when the index is changed by a human
                     onActivated: {
                         if (enabled) {
-                            StreamingPreferences.videoDecoderSelection = decoderListModel.get(currentIndex).val
+                            var selectedDecoder = decoderListModel.get(currentIndex).val
+                            if (StreamingPreferences.videoDecoderSelection !== selectedDecoder) {
+                                StreamingPreferences.videoDecoderSelection = selectedDecoder
+                                SystemProperties.refreshIntraRefreshAvailability()
+                            }
                         }
                     }
                 }
@@ -2981,7 +2985,11 @@ Flickable {
                     onActivated : {
                         if (enabled) {
                             var wasPyroWave = slider.pyroWave
-                            StreamingPreferences.videoCodecConfig = codecListModel.get(currentIndex).val
+                            var selectedCodec = codecListModel.get(currentIndex).val
+                            if (StreamingPreferences.videoCodecConfig !== selectedCodec) {
+                                StreamingPreferences.videoCodecConfig = selectedCodec
+                                SystemProperties.refreshIntraRefreshAvailability()
+                            }
 
                             // PyroWave's useful bitrates are an order of magnitude above
                             // the other codecs', so switching in or out resets a default.
@@ -3000,6 +3008,27 @@ Flickable {
                     ToolTip.timeout: 8000
                     ToolTip.visible: hovered && slider.pyroWave
                     ToolTip.text: qsTr("PyroWave is an intra-only GPU wavelet codec. It needs a wired connection with hundreds of Mbps to spare and a host with PyroWave support; other hosts fall back to H.264. On Linux, GPU readback and upload may limit frame rate.")
+                }
+
+                CheckBox {
+                    id: useIntraRefresh
+                    width: parent.width
+                    text: qsTr("Use Intra Refresh")
+                    font.pointSize: 12
+                    enabled: SystemProperties.intraRefreshProbeComplete && SystemProperties.supportsIntraRefresh
+                    checked: StreamingPreferences.useIntraRefresh
+                    onCheckedChanged: StreamingPreferences.useIntraRefresh = checked
+
+                    Component.onCompleted: {
+                        if (!SystemProperties.intraRefreshProbeComplete) {
+                            SystemProperties.refreshIntraRefreshAvailability()
+                        }
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 8000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Requests Intra Refresh from supported hosts when the selected decoder can recover reference frames.")
                 }
 
                 Label {

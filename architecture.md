@@ -1527,14 +1527,18 @@ Intra Refresh negotiation (2026-09-23, based on `eefde52f`) is owned by the
 parent repository's `moonlight-common-c/SdpGeneratorExtensions.c`. The qmake
 target compiles this wrapper instead of the submodule's `SdpGenerator.c`;
 the wrapper includes that unchanged source with only its entry point renamed.
-It adds `x-ss-video[0].intraRefresh:1` to the generated attribute block for
-Sunshine protocol versions at least 7.1.350 when the decoder advertises
-reference-frame recovery for the actual negotiated codec. Other cases return
-the original payload unchanged. The existing RTSP path handles the updated
-length and encryption. There are no submodule edits or public callback changes.
-This is a capability request, not confirmation that the host encoder enabled
-Intra Refresh. The wrapper relies on common-c's internal generator contract;
-its SDP regression test must pass when updating the submodule.
+The Advanced Settings `Use Intra Refresh` preference defaults on to preserve
+the existing behavior. When enabled, the wrapper adds
+`x-ss-video[0].intraRefresh:1` to the generated attribute block for Sunshine
+protocol versions at least 7.1.350 when the decoder advertises reference-frame
+recovery for the actual negotiated codec. The setting is disabled in the UI
+when the selected decoder/codec combination does not advertise that capability.
+Other cases return the original payload unchanged. The existing RTSP path
+handles the updated length and encryption. There are no submodule edits or
+public callback changes. This is a capability request, not confirmation that
+the host encoder enabled Intra Refresh. The wrapper relies on common-c's
+internal generator contract; its SDP regression test must pass when updating
+the submodule.
 
 Packet size is aligned down to a 16-byte multiple for FEC. Connection setup
 also applies route-dependent packet-size limits. These are transport decisions,

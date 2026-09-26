@@ -309,6 +309,7 @@ public:
     Q_PROPERTY(int audioBufferMs MEMBER audioBufferMs NOTIFY audioBufferMsChanged)
     Q_PROPERTY(QString audioDriver MEMBER audioDriver NOTIFY audioDriverChanged)
     Q_PROPERTY(VideoCodecConfig videoCodecConfig MEMBER videoCodecConfig NOTIFY videoCodecConfigChanged)
+    Q_PROPERTY(bool useIntraRefresh MEMBER useIntraRefresh NOTIFY useIntraRefreshChanged)
     Q_PROPERTY(bool enableHdr MEMBER enableHdr NOTIFY enableHdrChanged)
     Q_PROPERTY(bool enableYUV444 MEMBER enableYUV444 NOTIFY enableYUV444Changed)
     Q_PROPERTY(int ditheringMode MEMBER ditheringMode NOTIFY ditheringModeChanged)
@@ -414,6 +415,7 @@ public:
     // SDL audio backend name, or empty to let SDL choose
     QString audioDriver;
     VideoCodecConfig videoCodecConfig;
+    bool useIntraRefresh;
     bool enableHdr;
     bool enableYUV444;
     // Dithering kernel used to reduce 10-bit video to the output bit depth in
@@ -470,6 +472,7 @@ signals:
     void audioBufferMsChanged();
     void audioDriverChanged();
     void videoCodecConfigChanged();
+    void useIntraRefreshChanged();
     void enableHdrChanged();
     void enableYUV444Changed();
     void ditheringModeChanged();

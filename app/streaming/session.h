@@ -117,6 +117,9 @@ public:
     void getDecoderInfo(SDL_Window* window,
                         bool& isHardwareAccelerated, bool& isFullScreenOnly,
                         bool& isHdrSupported, QSize& maxResolution);
+    static bool supportsIntraRefresh(SDL_Window* window,
+                                     StreamingPreferences::VideoDecoderSelection decoderSelection,
+                                     StreamingPreferences::VideoCodecConfig codecConfig);
 
     static Session* get()
     {
