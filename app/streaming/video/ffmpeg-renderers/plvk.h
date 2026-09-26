@@ -114,7 +114,6 @@ private:
     static void lockQueue(AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index);
     static void unlockQueue(AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index);
     void uploadPendingOverlays();
-    static void overlayUploadComplete(void* opaque);
     static void gpuRenderInfo(void* opaque, const pl_render_info* info);
     bool renderMappedImage(pl_renderer renderer, const pl_frame& source,
                            pl_frame target, const pl_render_params& params);
@@ -145,7 +144,7 @@ private:
 #endif
 
     bool createSwapchain(int depth);
-    // Both must run on the render thread. pl_gpu is not thread-safe.
+    // Never call these from the overlay worker thread.
     bool createOverlay(pl_overlay* overlay, SDL_Surface* surface);
     bool mapAvFrameToPlacebo(const AVFrame *frame, pl_frame* mappedFrame,
                             pl_tex* textures = nullptr);
@@ -193,9 +192,11 @@ private:
     pl_color_space m_LastColorspace = {};
     // pl_swapchain_submit_frame() takes libplacebo's pending graphics command
     // outside the lock that guards command recording. Work recorded on other
-    // threads (overlay uploads, offscreen preparation, PyroWave surface holds)
-    // must not begin a command inside that window, so it and every swapchain
-    // submit hold this lock. Texture creation records nothing and stays out.
+    // threads (offscreen preparation, including any overlay uploads it does,
+    // and PyroWave surface holds) must not begin a command inside that window,
+    // so it and every swapchain submit hold this lock. Texture creation records
+    // nothing and stays out. Overlay uploads on the presenting thread cannot
+    // overlap its own submit and do not take it.
     std::mutex m_CommandLock;
 #if defined(HAVE_PYROWAVE) && defined(Q_OS_LINUX)
     std::unique_ptr<PyroWavePlaceboPool> m_PyroWavePool;
@@ -313,11 +314,13 @@ private:
     // frames. Uploading overlay textures there raced the renderer's command pool
     // and tripped libplacebo's vk_cmd_submit() timeline assertion. So the update
     // thread now only hands over pixels, exactly as EGLRenderer does, and every
-    // pl_gpu call for overlays happens on the render thread in
-    // uploadPendingOverlays().
+    // pl_gpu call for overlays happens in uploadPendingOverlays(), called from
+    // renderMappedImage(). That runs on the presenting thread and, on Linux,
+    // the offscreen preparation thread.
     SDL_SpinLock m_OverlayLock = 0;
     struct {
-        // Owned exclusively by the render thread. No lock required.
+        // Only touched in renderMappedImage(), which m_ImageRenderLock
+        // serializes on Linux. No other lock required.
         bool hasOverlay;
         pl_overlay overlay;
 

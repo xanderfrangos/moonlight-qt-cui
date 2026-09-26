@@ -2682,11 +2682,12 @@ bool PlVkRenderer::renderMappedImage(pl_renderer renderer, const pl_frame& sourc
 
 
     // Take ownership of anything the overlay worker handed us and upload it
-    // here, where we own pl_gpu exclusively.
+    // here, never on the overlay worker thread.
     uploadPendingOverlays();
 
-    // m_Overlays[].overlay and hasOverlay belong to this thread alone, so
-    // collecting them needs no lock.
+    // m_Overlays[].overlay and hasOverlay are only touched here. This runs on
+    // the presenting thread and, on Linux, the preparation thread, so the two
+    // are serialized by m_ImageRenderLock above.
     for (int i = 0; i < Overlay::OverlayMax; i++) {
         if (m_Overlays[i].hasOverlay &&
             Session::get()->getOverlayManager().isOverlayEnabled((Overlay::OverlayType)i)) {
@@ -2915,7 +2916,8 @@ bool PlVkRenderer::testRenderFrame(AVFrame *frame)
     return true;
 }
 
-// Runs on the render thread only. Does not take ownership of surface.
+// Called from initialize() and uploadPendingOverlays(), never from the overlay
+// worker thread. Does not take ownership of surface.
 bool PlVkRenderer::createOverlay(pl_overlay* overlay, SDL_Surface* surface)
 {
     // Find a compatible texture format
@@ -2953,7 +2955,9 @@ bool PlVkRenderer::createOverlay(pl_overlay* overlay, SDL_Surface* surface)
     xferParams.tex = overlay->tex;
     xferParams.row_pitch = (size_t)surface->pitch;
     xferParams.ptr = surface->pixels;
-    std::lock_guard<std::mutex> commandLock(m_CommandLock);
+    // No m_CommandLock here. The presenting thread cannot overlap its own
+    // swapchain submit, prepareImage() already holds the lock when it gets
+    // here, and taking it again would deadlock.
     if (!pl_tex_upload(m_Vulkan->gpu, &xferParams)) {
         pl_tex_destroy(m_Vulkan->gpu, &overlay->tex);
         SDL_zerop(overlay);
@@ -2997,7 +3001,7 @@ void PlVkRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
     SDL_FreeSurface(superseded);
 }
 
-// Render thread only.
+// Only called from renderMappedImage(), under m_ImageRenderLock on Linux.
 void PlVkRenderer::uploadPendingOverlays()
 {
     for (int i = 0; i < Overlay::OverlayMax; i++) {
