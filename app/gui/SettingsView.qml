@@ -3193,6 +3193,10 @@ Flickable {
                                     width: parent.width
                                     text: modelData.text
                                     font.pointSize: 12
+                                    // Like the other VRR settings, hide the VRR
+                                    // graph unless both V-Sync and VRR are on
+                                    visible: modelData.bit !== StreamingPreferences.PG_VRR_SMOOTHNESS ||
+                                             (StreamingPreferences.enableVsync && StreamingPreferences.enableVrr)
                                     // The preference records changes from each
                                     // graph's default, so a click just flips its bit
                                     checked: ((StreamingPreferences.performanceGraphsDefault ^

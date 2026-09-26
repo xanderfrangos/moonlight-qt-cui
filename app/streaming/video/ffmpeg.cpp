@@ -927,8 +927,13 @@ bool FFmpegVideoDecoder::finishRenderInitialization(PDECODER_PARAMETERS params)
         Session::getWindowPixelSize(params->window, width, height);
         m_StatsGraphs.setViewportSize(width, height);
     }
+    Overlay::StatsGraphConfig statsGraphConfig = Session::get()->getStatsGraphConfig();
+    if (m_StatsGraphSyncMode != Overlay::StatsGraphSyncMode::Vrr) {
+        // The VRR cadence graph has nothing to plot without active VRR
+        statsGraphConfig.visibleGraphs &= ~(1u << StreamingPreferences::PG_VRR_SMOOTHNESS);
+    }
     m_StatsGraphs.start(&Session::get()->getOverlayManager(),
-                        Session::get()->getStatsGraphConfig(),
+                        statsGraphConfig,
                         [this](Overlay::StatsGraphCounters& counters) {
                             sampleStatsGraphCounters(counters);
                         });
