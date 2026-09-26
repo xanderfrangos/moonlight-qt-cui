@@ -75,18 +75,76 @@ SDL_Surface* canvasToSurface(const QImage& canvas)
     return surface;
 }
 
-// A soft shadow that lifts the card off the video without needing a blur pass
-void drawCardShadow(QPainter& painter, const QRectF& cardRect, qreal radius, qreal spread,
-                    qreal strength = 1.0)
+// A soft shadow that lifts the card off the video, shaped like a blurred copy
+// of the card offset downward: a solid body under the card whose edges fade
+// out along a Gaussian curve. It's drawn in pieces rather than blurred. The
+// corners are radial gradients around each corner's arc and the sides are
+// linear gradients, so it's a dozen fills at any size, and opacity is exactly
+// the darkness at the card's edge.
+void drawCardShadow(QPainter& painter, const QRectF& cardRect, qreal radius,
+                    qreal blur, qreal offsetY, qreal opacity)
 {
-    painter.setPen(Qt::NoPen);
+    // Drawn in device pixels, whatever scale the painter has, and snapped to
+    // whole pixels so the pieces meet without seams or overlaps
+    const QTransform transform = painter.transform();
+    const qreal scale = transform.m11();
+    const QRectF shadowRect = transform.mapRect(cardRect.translated(0, offsetY));
+    const int left = qRound(shadowRect.left());
+    const int top = qRound(shadowRect.top());
+    const int right = qRound(shadowRect.right());
+    const int bottom = qRound(shadowRect.bottom());
+    const int r = qMin(qRound(radius * scale), qMin(right - left, bottom - top) / 2);
+    const int b = qMax(1, qRound(blur * scale));
+    const int innerWidth = right - left - (2 * r);
+    const int innerHeight = bottom - top - (2 * r);
 
-    for (qreal i = spread; i >= 1; i--) {
-        const qreal falloff = 1.0 - (i / spread);
-        painter.setBrush(QColor(0, 0, 0, qRound(60.0 * falloff * falloff * strength)));
-        painter.drawRoundedRect(cardRect.adjusted(-i, -i * 0.6, i, i * 1.4),
-                                radius + i, radius + i);
-    }
+    // exp(-4.5t²) runs from the edge (t = 0) to about 1% at the end of the
+    // blur (t = 1), rescaled so that end is exactly transparent
+    const qreal tail = std::exp(-4.5);
+    auto addFalloff = [&](QGradient& gradient, qreal start) {
+        const int steps = 8;
+        for (int i = 0; i <= steps; i++) {
+            const qreal t = (qreal)i / steps;
+            const qreal strength = (std::exp(-4.5 * t * t) - tail) / (1.0 - tail);
+            gradient.setColorAt(start + ((1.0 - start) * t),
+                                QColor(0, 0, 0, qRound(255 * opacity * strength)));
+        }
+    };
+
+    auto fillCorner = [&](int centerX, int centerY, int x, int y) {
+        QRadialGradient gradient(centerX, centerY, r + b);
+        addFalloff(gradient, (qreal)r / (r + b));
+        painter.fillRect(QRect(x, y, r + b, r + b), gradient);
+    };
+
+    auto fillEdge = [&](const QPointF& from, const QPointF& to, const QRect& area) {
+        QLinearGradient gradient(from, to);
+        addFalloff(gradient, 0);
+        painter.fillRect(area, gradient);
+    };
+
+    painter.save();
+    painter.resetTransform();
+    painter.setRenderHint(QPainter::Antialiasing, false);
+
+    fillCorner(left + r, top + r, left - b, top - b);
+    fillCorner(right - r, top + r, right - r, top - b);
+    fillCorner(left + r, bottom - r, left - b, bottom - r);
+    fillCorner(right - r, bottom - r, right - r, bottom - r);
+
+    fillEdge(QPointF(0, top), QPointF(0, top - b), QRect(left + r, top - b, innerWidth, b));
+    fillEdge(QPointF(0, bottom), QPointF(0, bottom + b), QRect(left + r, bottom, innerWidth, b));
+    fillEdge(QPointF(left, 0), QPointF(left - b, 0), QRect(left - b, top + r, b, innerHeight));
+    fillEdge(QPointF(right, 0), QPointF(right + b, 0), QRect(right, top + r, b, innerHeight));
+
+    // The body, most of which the card covers, but the offset exposes a strip
+    // of it below the card
+    const QColor body(0, 0, 0, qRound(255 * opacity));
+    painter.fillRect(QRect(left + r, top, innerWidth, bottom - top), body);
+    painter.fillRect(QRect(left, top + r, r, innerHeight), body);
+    painter.fillRect(QRect(right - r, top + r, r, innerHeight), body);
+
+    painter.restore();
 }
 
 // The menu's colors and corners. TV mode's match TvTheme.qml and its dialog
@@ -190,7 +248,11 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
     const qreal hintGap = 22 * scale;
     const qreal hintSpacing = 28 * scale;
     const qreal glyphGap = 10 * scale;
-    const qreal shadowSpread = 24 * scale;
+    const qreal shadowBlur = 20 * scale;
+    const qreal shadowOffset = 4 * scale;
+    // Room for the shadow on every side. It reaches furthest below the card,
+    // but the card stays centered in the image so it stays centered on screen.
+    const qreal shadowMargin = shadowBlur + shadowOffset;
 
     QFont titleFont = menuFont(15 * scale, QFont::DemiBold);
     titleFont.setCapitalization(QFont::AllUppercase);
@@ -243,8 +305,8 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
         cardHeight += hintGap + hintRowHeight;
     }
 
-    QImage image(qRound(cardWidth + (shadowSpread * 2)),
-                 qRound(cardHeight + (shadowSpread * 2)),
+    QImage image(qRound(cardWidth + (shadowMargin * 2)),
+                 qRound(cardHeight + (shadowMargin * 2)),
                  QImage::Format_ARGB32_Premultiplied);
     if (image.isNull()) {
         return nullptr;
@@ -255,9 +317,9 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setRenderHint(QPainter::TextAntialiasing);
 
-    const QRectF cardRect(shadowSpread, shadowSpread, cardWidth, cardHeight);
+    const QRectF cardRect(shadowMargin, shadowMargin, cardWidth, cardHeight);
 
-    drawCardShadow(painter, cardRect, cardRadius, shadowSpread);
+    drawCardShadow(painter, cardRect, cardRadius, shadowBlur, shadowOffset, 0.6);
 
     painter.setPen(Qt::NoPen);
     painter.setBrush(palette.surface);
@@ -772,7 +834,10 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
     const qreal labelGap = 3;
     const qreal plotHeight = qMax(config.plotHeight, 16);
     const qreal graphGap = 10;
-    const qreal shadowSpread = 14;
+    const qreal shadowBlur = 12;
+    const qreal shadowOffset = 2;
+    // Room for the shadow on every side, as in paintGamepadMenu()
+    const qreal shadowMargin = shadowBlur + shadowOffset;
     const qreal chipPaddingX = 8;
     const qreal chipHeight = 23;
     const qreal chipGap = 6;
@@ -823,8 +888,8 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
 
     // Shrink to fit the space available rather than running off the screen,
     // down to a size that is still legible.
-    const qreal naturalWidth = cardWidth + (shadowSpread * 2);
-    const qreal naturalHeight = cardHeight + (shadowSpread * 2);
+    const qreal naturalWidth = cardWidth + (shadowMargin * 2);
+    const qreal naturalHeight = cardHeight + (shadowMargin * 2);
     if (maxSize.width() > 0) {
         scale = qMin(scale, maxSize.width() / naturalWidth);
     }
@@ -855,9 +920,10 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
     painter.setRenderHint(QPainter::TextAntialiasing);
     painter.scale(scale, scale);
 
-    const QRectF cardRect(shadowSpread, shadowSpread, cardWidth, cardHeight);
+    const QRectF cardRect(shadowMargin, shadowMargin, cardWidth, cardHeight);
 
-    drawCardShadow(painter, cardRect, cardRadius, shadowSpread, qMin(1.0, opacityFactor));
+    drawCardShadow(painter, cardRect, cardRadius, shadowBlur, shadowOffset,
+                   0.45 * qMin(1.0, opacityFactor));
 
     QColor surfaceColor = palette.surface;
     surfaceColor.setAlphaF(opacity);
