@@ -1175,6 +1175,7 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
     counters.streamInfo.backendRenderer =
             m_BackendRenderer->getRendererType() != m_FrontendRenderer->getRendererType()
             ? m_BackendRenderer->getRendererName() : nullptr;
+    counters.streamInfo.upscaler = m_FrontendRenderer->getActiveUpscalerName();
 
     uint32_t rtt, rttVariance;
     counters.networkLatencyValid = LiGetEstimatedRttInfo(&rtt, &rttVariance);

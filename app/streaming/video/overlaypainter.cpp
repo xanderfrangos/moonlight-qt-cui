@@ -628,6 +628,9 @@ QStringList streamInfoChips(const StatsGraphStreamInfo& info)
                                                              QString::fromUtf8(info.backendRenderer))
                              : QString::fromUtf8(info.renderer));
     }
+    if (info.upscaler != nullptr) {
+        chips.append(QString::fromUtf8(info.upscaler));
+    }
 
     return chips;
 }

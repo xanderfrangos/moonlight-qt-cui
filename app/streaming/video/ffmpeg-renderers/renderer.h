@@ -229,6 +229,12 @@ public:
         return 0;
     }
 
+    // Short name of the upscaler in use, or null when none was activated or
+    // the window is too small for the stream to need upscaling
+    virtual const char* getActiveUpscalerName() const {
+        return nullptr;
+    }
+
     virtual int getDecoderColorspace() {
         // Rec 601 is default
         return COLORSPACE_REC_601;

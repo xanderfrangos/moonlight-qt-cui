@@ -66,6 +66,8 @@ struct StatsGraphStreamInfo {
     // null unless it differs from the frontend.
     const char* renderer = nullptr;
     const char* backendRenderer = nullptr;
+    // Static short name of the upscaler in use, or null
+    const char* upscaler = nullptr;
     // What the pacer actually runs, which is fixed V-sync when VRR was
     // requested but isn't available
     StatsGraphSyncMode syncMode = StatsGraphSyncMode::Off;

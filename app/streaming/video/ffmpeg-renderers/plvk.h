@@ -100,6 +100,9 @@ public:
     virtual int getOutputBitsPerComponent() const override {
         return m_OutputBitsPerComponent.load(std::memory_order_relaxed);
     }
+    virtual const char* getActiveUpscalerName() const override {
+        return m_UpscalingNeeded.load(std::memory_order_relaxed) ? m_UpscalerName : nullptr;
+    }
 
 private:
     static void lockQueue(AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index);
@@ -110,6 +113,7 @@ private:
     bool renderMappedImage(pl_renderer renderer, const pl_frame& source,
                            pl_frame target, const pl_render_params& params);
     pl_render_params renderParamsForFrame(const AVFrame* frame) const;
+    void updateUpscalingNeeded();
     std::unique_ptr<GpuTrace> m_GpuTrace;
     int64_t m_GpuTracePts = -1;
     uint64_t m_GpuTraceOutputUs = 0;
@@ -195,6 +199,12 @@ private:
     std::unique_ptr<Ls1VulkanHook> m_Ls1Hook;
     const pl_hook* m_Ls1HookPtr = nullptr;
 #endif
+    // Set once at initialization if an upscaler hook loaded
+    const char* m_UpscalerName = nullptr;
+    int m_StreamWidth = 0;
+    int m_StreamHeight = 0;
+    // Rechecked when the window is resized
+    std::atomic<bool> m_UpscalingNeeded{false};
 
 #ifdef Q_OS_LINUX
     struct PreparedImage;

@@ -627,6 +627,8 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
 {
     m_Window = params->window;
     m_MaxVideoFps = params->frameRate;
+    m_StreamWidth = params->width;
+    m_StreamHeight = params->height;
 
     // Attach libplacebo's own dithering when the user asked for it and the
     // stream carries more bits per component than a common display accepts.
@@ -968,6 +970,7 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
                 m_Vulkan, dllPath, qBound(0, params->ls1Sharpness, 100) / 25);
             if (m_Ls1Hook->ready()) {
                 m_Ls1HookPtr = m_Ls1Hook->hook();
+                m_UpscalerName = "LS1";
                 SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                             "LS1 upscaling enabled with user-installed Lossless.dll");
             } else {
@@ -1012,6 +1015,7 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
             if (m_Fsr1Hook) pl_mpv_user_shader_destroy(&m_Fsr1Hook);
         }
         else {
+            m_UpscalerName = "FSR";
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "FSR1 upscaling enabled for the Vulkan renderer (RCAS sharpness %.1f/100)",
                         sharpness);
@@ -1019,7 +1023,20 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
     }
 #endif
 
+    updateUpscalingNeeded();
     return true;
+}
+
+void PlVkRenderer::updateUpscalingNeeded()
+{
+    // Scaling preserves the aspect ratio, so the stream is only enlarged when
+    // the window is bigger in both dimensions
+    int drawableW = 0;
+    int drawableH = 0;
+    SDL_Vulkan_GetDrawableSize(m_Window, &drawableW, &drawableH);
+    m_UpscalingNeeded.store(m_UpscalerName != nullptr &&
+                                drawableW > m_StreamWidth && drawableH > m_StreamHeight,
+                            std::memory_order_relaxed);
 }
 
 
@@ -2959,6 +2976,10 @@ bool PlVkRenderer::notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info)
         // libplacebo here; the worker observes this flag before final submit
         // and balances any acquired frame before resizing on its next prepare.
         m_VrrWindowChangePending.store(true);
+    }
+
+    if (info->stateChangeFlags & WINDOW_STATE_CHANGE_SIZE) {
+        updateUpscalingNeeded();
     }
 
     // We can transparently handle size and display changes
