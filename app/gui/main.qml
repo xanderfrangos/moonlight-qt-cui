@@ -400,9 +400,8 @@ ApplicationWindow {
 
         // TV mode: how far the top bar is condensed to fit beside the page
         // title when the window is narrow. 0 shows everything. 1 shows only
-        // the icons in the buttons, except for the focused one. 2 also
-        // summarizes the controllers in one chip. 3 also hides the clock. 4
-        // also hides the controllers.
+        // the icons in the buttons, except for the focused one. 2 also hides
+        // the clock. 3 also hides the controllers.
         readonly property int tvBarLevel: {
             if (!SystemProperties.tvMode) {
                 return 0
@@ -414,12 +413,12 @@ ApplicationWindow {
                 available -= TvTheme.pillHeight + barRow.spacing
             }
 
-            for (var level = 0; level < 4; level++) {
+            for (var level = 0; level < 3; level++) {
                 if (tvBarWidth(level) <= available) {
                     return level
                 }
             }
-            return 4
+            return 3
         }
 
         // The width of everything right of the title at a condensing level.
@@ -461,12 +460,12 @@ ApplicationWindow {
                 items++
             }
 
-            if (level < 4 && controllerStatus.count > 0) {
-                width += barDivider.Layout.preferredWidth + barDivider.Layout.leftMargin + barDivider.Layout.rightMargin + (level <= 1 ? controllerStatus.fullWidth : controllerStatus.condensedWidth)
+            if (level < 3 && controllerStatus.count > 0) {
+                width += barDivider.Layout.preferredWidth + barDivider.Layout.leftMargin + barDivider.Layout.rightMargin + controllerStatus.chipWidth
                 items += 2
             }
 
-            if (level < 3) {
+            if (level < 2) {
                 width += clockMetrics.width + clockLabel.Layout.leftMargin
                 items++
             }
@@ -791,8 +790,8 @@ ApplicationWindow {
                 ToolTip.text: qsTr("Settings") + (settingsShortcut.nativeText ? (" ("+settingsShortcut.nativeText+")") : "")
             }
 
-            // TV mode: the connected controllers, with their player numbers
-            // and batteries
+            // TV mode: how many controllers are connected, and the lowest
+            // battery among them
             Rectangle {
                 id: barDivider
                 visible: controllerStatus.visible
@@ -805,14 +804,13 @@ ApplicationWindow {
 
             TvControllerStatus {
                 id: controllerStatus
-                visible: SystemProperties.tvMode && count > 0 && toolBar.tvBarLevel < 4
-                condensed: toolBar.tvBarLevel >= 2
+                visible: SystemProperties.tvMode && count > 0 && toolBar.tvBarLevel < 3
             }
 
             // TV mode: a clock, since the app usually runs fullscreen
             Label {
                 id: clockLabel
-                visible: SystemProperties.tvMode && toolBar.tvBarLevel < 3
+                visible: SystemProperties.tvMode && toolBar.tvBarLevel < 2
                 Layout.leftMargin: 8
                 font.pixelSize: TvTheme.fontBody
                 font.weight: Font.DemiBold
