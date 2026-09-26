@@ -1394,15 +1394,16 @@ Flickable {
             }
         }
 
-        GroupBox {
-            width: parent.width - (parent.leftPadding + parent.rightPadding)
+        SettingsGroupBox {
+            id: vrrDiagnosticsGroupBox
+            width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
             title: "<font color=\"skyblue\">" + qsTr("VRR diagnostics") + "</font>"
             font.pointSize: 12
 
             Column {
                 anchors.fill: parent
-                spacing: 8
+                spacing: 5
 
                 CheckBox {
                     id: traceVrrFramesCheckBox
@@ -1774,103 +1775,120 @@ Flickable {
                     }
                 }
 
-                Label {
+                Row {
                     width: parent.width
-                    id: uiDisplayModeTitle
-                    text: qsTr("GUI display mode")
-                    font.pointSize: 12
-                    wrapMode: Text.Wrap
-                    visible: SystemProperties.hasDesktopEnvironment
-                }
+                    spacing: 10
 
-                AutoResizingComboBox {
-                    // ignore setting the index at first, and actually set it when the component is loaded
-                    Component.onCompleted: {
-                        if (!visible) {
-                            // Do nothing if the control won't even be visible
-                            return
+                    Column {
+                        width: (parent.width - parent.spacing) / 2
+                        spacing: 5
+                        visible: SystemProperties.hasDesktopEnvironment
+
+                        Label {
+                            width: parent.width
+                            id: uiDisplayModeTitle
+                            text: qsTr("GUI display mode")
+                            font.pointSize: 12
+                            wrapMode: Text.Wrap
+                            visible: SystemProperties.hasDesktopEnvironment
                         }
 
-                        var saved_uidisplaymode = StreamingPreferences.uiDisplayMode
-                        currentIndex = 0
-                        for (var i = 0; i < uiDisplayModeListModel.count; i++) {
-                            var el_uidisplaymode = uiDisplayModeListModel.get(i).val;
-                            if (saved_uidisplaymode === el_uidisplaymode) {
-                                currentIndex = i
-                                break
+                        AutoResizingComboBox {
+                            // ignore setting the index at first, and actually set it when the component is loaded
+                            Component.onCompleted: {
+                                if (!visible) {
+                                    // Do nothing if the control won't even be visible
+                                    return
+                                }
+
+                                var saved_uidisplaymode = StreamingPreferences.uiDisplayMode
+                                currentIndex = 0
+                                for (var i = 0; i < uiDisplayModeListModel.count; i++) {
+                                    var el_uidisplaymode = uiDisplayModeListModel.get(i).val;
+                                    if (saved_uidisplaymode === el_uidisplaymode) {
+                                        currentIndex = i
+                                        break
+                                    }
+                                }
+
+                                activated(currentIndex)
+                            }
+
+                            id: uiDisplayModeComboBox
+                            visible: SystemProperties.hasDesktopEnvironment
+                            textRole: "text"
+                            model: ListModel {
+                                id: uiDisplayModeListModel
+                                ListElement {
+                                    text: qsTr("Windowed")
+                                    val: StreamingPreferences.UI_WINDOWED
+                                }
+                                ListElement {
+                                    text: qsTr("Maximized")
+                                    val: StreamingPreferences.UI_MAXIMIZED
+                                }   
+                                ListElement {
+                                    text: qsTr("Fullscreen")
+                                    val: StreamingPreferences.UI_FULLSCREEN
+                                }
+                            }
+                            // ::onActivated must be used, as it only listens for when the index is changed by a human
+                            onActivated : {
+                                StreamingPreferences.uiDisplayMode = uiDisplayModeListModel.get(currentIndex).val
                             }
                         }
-
-                        activated(currentIndex)
                     }
 
-                    id: uiDisplayModeComboBox
-                    visible: SystemProperties.hasDesktopEnvironment
-                    textRole: "text"
-                    model: ListModel {
-                        id: uiDisplayModeListModel
-                        ListElement {
-                            text: qsTr("Windowed")
-                            val: StreamingPreferences.UI_WINDOWED
+                    Column {
+                        width: (parent.width - parent.spacing) / 2
+                        spacing: 5
+                        visible: SystemProperties.supportsUiScale
+
+                        Label {
+                            width: parent.width
+                            id: uiScaleTitle
+                            text: qsTr("GUI scale")
+                            font.pointSize: 12
+                            wrapMode: Text.Wrap
+                            visible: SystemProperties.supportsUiScale
                         }
-                        ListElement {
-                            text: qsTr("Maximized")
-                            val: StreamingPreferences.UI_MAXIMIZED
-                        }   
-                        ListElement {
-                            text: qsTr("Fullscreen")
-                            val: StreamingPreferences.UI_FULLSCREEN
-                        }
-                    }
-                    // ::onActivated must be used, as it only listens for when the index is changed by a human
-                    onActivated : {
-                        StreamingPreferences.uiDisplayMode = uiDisplayModeListModel.get(currentIndex).val
-                    }
-                }
 
-                Label {
-                    width: parent.width
-                    id: uiScaleTitle
-                    text: qsTr("GUI scale")
-                    font.pointSize: 12
-                    wrapMode: Text.Wrap
-                    visible: SystemProperties.supportsUiScale
-                }
-
-                AutoResizingComboBox {
-                    id: uiScaleComboBox
-                    visible: SystemProperties.supportsUiScale
-                    textRole: "text"
-                    model: ListModel {
-                        id: uiScaleListModel
-                    }
-
-                    Component.onCompleted: {
-                        var scales = [100, 125, 150, 175, 200, 250, 300, 350, 400]
-                        currentIndex = 0
-                        for (var i = 0; i < scales.length; i++) {
-                            uiScaleListModel.append({ "text": qsTr("%1%").arg(scales[i]), "val": scales[i] })
-                            if (scales[i] === StreamingPreferences.uiScale) {
-                                currentIndex = i
+                        AutoResizingComboBox {
+                            id: uiScaleComboBox
+                            visible: SystemProperties.supportsUiScale
+                            textRole: "text"
+                            model: ListModel {
+                                id: uiScaleListModel
                             }
+
+                            Component.onCompleted: {
+                                var scales = [100, 125, 150, 175, 200, 250, 300, 350, 400]
+                                currentIndex = 0
+                                for (var i = 0; i < scales.length; i++) {
+                                    uiScaleListModel.append({ "text": qsTr("%1%").arg(scales[i]), "val": scales[i] })
+                                    if (scales[i] === StreamingPreferences.uiScale) {
+                                        currentIndex = i
+                                    }
+                                }
+
+                                activated(currentIndex)
+                            }
+
+                            // ::onActivated must be used, as it only listens for when the index is changed by a human
+                            onActivated: {
+                                var scale = uiScaleListModel.get(currentIndex).val
+                                if (StreamingPreferences.uiScale !== scale) {
+                                    StreamingPreferences.uiScale = scale
+                                    promptRestartIfNeeded()
+                                }
+                            }
+
+                            ToolTip.delay: 1000
+                            ToolTip.timeout: 5000
+                            ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                            ToolTip.text: qsTr("Increases the size of text and controls in Moonlight, such as when using a TV. Requires restarting Moonlight.")
                         }
-
-                        activated(currentIndex)
                     }
-
-                    // ::onActivated must be used, as it only listens for when the index is changed by a human
-                    onActivated: {
-                        var scale = uiScaleListModel.get(currentIndex).val
-                        if (StreamingPreferences.uiScale !== scale) {
-                            StreamingPreferences.uiScale = scale
-                            promptRestartIfNeeded()
-                        }
-                    }
-
-                    ToolTip.delay: 1000
-                    ToolTip.timeout: 5000
-                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                    ToolTip.text: qsTr("Increases the size of text and controls in Moonlight, such as when using a TV. Requires restarting Moonlight.")
                 }
 
                 CheckBox {
@@ -1897,7 +1915,7 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                    ToolTip.text: qsTr("A GUI suited to gamepads and TVs. Runs fullscreen with larger controls and no mouse hover effects. Requires restarting Moonlight.")
+                    ToolTip.text: qsTr("A GUI suited to gamepads and TVs. Runs fullscreen with larger controls and no mouse hover effects. Requires restarting Moonlight. Can also be turned on for one launch with the --tv-mode command line option.")
                 }
 
                 Label {
