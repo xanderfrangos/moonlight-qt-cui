@@ -250,7 +250,8 @@ Flickable {
                     width: parent.width
                     id: resFPStitle
                     text: qsTr("Resolution and FPS")
-                    font.pointSize: 12
+                    topPadding: 8
+                    font.pointSize: 14
                     wrapMode: Text.Wrap
                 }
 
@@ -787,7 +788,8 @@ Flickable {
                     width: parent.width
                     id: bitrateTitle
                     text: qsTr("Video bitrate:")
-                    font.pointSize: 12
+                    topPadding: 8
+                    font.pointSize: 14
                     wrapMode: Text.Wrap
                 }
 
@@ -1106,7 +1108,8 @@ Flickable {
                     width: parent.width
                     id: windowModeTitle
                     text: qsTr("Display mode")
-                    font.pointSize: 12
+                    topPadding: 8
+                    font.pointSize: 14
                     wrapMode: Text.Wrap
                     visible: SystemProperties.hasDesktopEnvironment
                 }
@@ -1167,6 +1170,9 @@ Flickable {
                                  break
                              }
                         }
+
+                        // Size to the widest option even when VRR skips activated()
+                        recalculateWidth()
 
                         if (!vrrForced) {
                             activated(currentIndex)
@@ -1257,13 +1263,13 @@ Flickable {
                 Column {
                     width: parent.width
                     spacing: 5
-                    visible: StreamingPreferences.enableVrr
-                    enabled: StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
+                    visible: StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
 
                     Label {
                         width: parent.width
                         text: qsTr("VRR timing")
-                        font.pointSize: 12
+                        topPadding: 8
+                        font.pointSize: 14
                         wrapMode: Text.Wrap
                     }
 
@@ -1333,8 +1339,7 @@ Flickable {
                     hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     text: qsTr("Reduce judder")
                     font.pointSize: 12
-                    visible: StreamingPreferences.enableVrr
-                    enabled: StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
+                    visible: StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
                     checked: StreamingPreferences.smoothVrrFrameTiming
                     onCheckedChanged: StreamingPreferences.smoothVrrFrameTiming = checked
 
@@ -1424,7 +1429,8 @@ Flickable {
                     Label {
                         width: parent.width
                         text: qsTr("LS1 sharpness: %1").arg(StreamingPreferences.ls1Sharpness)
-                        font.pointSize: 12
+                        topPadding: 8
+                        font.pointSize: 14
                     }
 
                     NavigableSlider {
@@ -1446,7 +1452,8 @@ Flickable {
                     Label {
                         width: parent.width
                         text: qsTr("RCAS sharpness: %1").arg(StreamingPreferences.fsr1RcasSharpness.toFixed(0))
-                        font.pointSize: 12
+                        topPadding: 8
+                        font.pointSize: 14
                         wrapMode: Text.Wrap
                     }
 
@@ -1474,7 +1481,8 @@ Flickable {
                     Label {
                         width: parent.width
                         text: qsTr("Dither 10-bit video")
-                        font.pointSize: 12
+                        topPadding: 8
+                        font.pointSize: 14
                         wrapMode: Text.Wrap
                     }
 
@@ -1569,7 +1577,8 @@ Flickable {
                     Label {
                         width: parent.width
                         text: qsTr("Reduce banding")
-                        font.pointSize: 12
+                        topPadding: 8
+                        font.pointSize: 14
                         wrapMode: Text.Wrap
                     }
 
@@ -1713,7 +1722,8 @@ Flickable {
                     width: parent.width
                     id: resAudioTitle
                     text: qsTr("Audio configuration")
-                    font.pointSize: 12
+                    topPadding: 8
+                    font.pointSize: 14
                     wrapMode: Text.Wrap
                 }
 
@@ -1846,7 +1856,8 @@ Flickable {
                     width: parent.width
                     id: languageTitle
                     text: qsTr("Language")
-                    font.pointSize: 12
+                    topPadding: 8
+                    font.pointSize: 14
                     wrapMode: Text.Wrap
                 }
 
@@ -2032,7 +2043,8 @@ Flickable {
                         Label {
                             id: uiDisplayModeTitle
                             text: qsTr("GUI display mode")
-                            font.pointSize: 12
+                            topPadding: 8
+                            font.pointSize: 14
                             wrapMode: Text.Wrap
                             visible: SystemProperties.hasDesktopEnvironment
                         }
@@ -2092,7 +2104,8 @@ Flickable {
                         Label {
                             id: uiScaleTitle
                             text: qsTr("GUI scale")
-                            font.pointSize: 12
+                            topPadding: 8
+                            font.pointSize: 14
                             wrapMode: Text.Wrap
                             visible: SystemProperties.supportsUiScale
                         }
@@ -2420,7 +2433,8 @@ Flickable {
                     width: parent.width
                     id: gamepadMenuTriggerTitle
                     text: qsTr("Open the Moonlight menu while streaming with")
-                    font.pointSize: 12
+                    topPadding: 8
+                    font.pointSize: 14
                     wrapMode: Text.Wrap
                 }
 
@@ -2541,7 +2555,8 @@ Flickable {
                     width: parent.width
                     id: resVDSTitle
                     text: qsTr("Video decoder")
-                    font.pointSize: 12
+                    topPadding: 8
+                    font.pointSize: 14
                     wrapMode: Text.Wrap
                 }
 
@@ -2589,7 +2604,8 @@ Flickable {
                     width: parent.width
                     id: resVCCTitle
                     text: qsTr("Video codec")
-                    font.pointSize: 12
+                    topPadding: 8
+                    font.pointSize: 14
                     wrapMode: Text.Wrap
                 }
 
@@ -2670,7 +2686,8 @@ Flickable {
                     width: parent.width
                     id: rendererTitle
                     text: qsTr("Renderer")
-                    font.pointSize: 12
+                    topPadding: 8
+                    font.pointSize: 14
                     wrapMode: Text.Wrap
                     visible: SystemProperties.isDarwin
                 }
@@ -2838,7 +2855,8 @@ Flickable {
                     Label {
                         width: parent.width
                         text: qsTr("Performance stats arrangement")
-                        font.pointSize: 12
+                        topPadding: 8
+                        font.pointSize: 14
                         wrapMode: Text.Wrap
                     }
 
@@ -2885,7 +2903,8 @@ Flickable {
                     Label {
                         width: parent.width
                         text: qsTr("Graph size")
-                        font.pointSize: 12
+                        topPadding: 8
+                        font.pointSize: 14
                         wrapMode: Text.Wrap
                     }
 
@@ -2951,7 +2970,8 @@ Flickable {
 
                             Label {
                                 text: qsTr("Graph position")
-                                font.pointSize: 12
+                                topPadding: 8
+                                font.pointSize: 14
                                 wrapMode: Text.Wrap
                             }
 
@@ -2994,7 +3014,8 @@ Flickable {
 
                             Label {
                                 text: qsTr("Graph height")
-                                font.pointSize: 12
+                                topPadding: 8
+                                font.pointSize: 14
                                 wrapMode: Text.Wrap
                             }
 
@@ -3046,7 +3067,8 @@ Flickable {
 
                             Label {
                                 text: qsTr("Graph history")
-                                font.pointSize: 12
+                                topPadding: 8
+                                font.pointSize: 14
                                 wrapMode: Text.Wrap
                             }
 
@@ -3092,7 +3114,8 @@ Flickable {
 
                             Label {
                                 text: qsTr("Graph background opacity")
-                                font.pointSize: 12
+                                topPadding: 8
+                                font.pointSize: 14
                                 wrapMode: Text.Wrap
                             }
 
@@ -3141,7 +3164,8 @@ Flickable {
                     Label {
                         width: parent.width
                         text: qsTr("Graphs to show")
-                        font.pointSize: 12
+                        topPadding: 8
+                        font.pointSize: 14
                         wrapMode: Text.Wrap
                     }
 
