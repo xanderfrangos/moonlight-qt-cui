@@ -410,7 +410,7 @@ public:
     // Unlike dithering this can fix banding that arrived in the stream, at
     // the cost of some fine detail.
     int debandMode;
-    // Linux Vulkan FSR1 upscaling. Takes effect on the next stream.
+    // FSR1 upscaling (D3D11 on Windows, Vulkan on Linux). Takes effect on the next stream.
     bool fsr1Upscaling;
     // RCAS sharpness slider (0-100) in steps of 10, defaulting to 20 (1.6 stops).
     double fsr1RcasSharpness;

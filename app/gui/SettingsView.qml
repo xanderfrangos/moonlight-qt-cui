@@ -1125,7 +1125,7 @@ Flickable {
 
                 CheckBox {
                     width: parent.width
-                    text: qsTr("FSR1 upscaling (Vulkan)")
+                    text: qsTr("FSR1 upscaling")
                     font.pointSize: 12
                     visible: SystemProperties.supportsFsr1Upscaling
                     checked: StreamingPreferences.fsr1Upscaling
@@ -1137,14 +1137,14 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 10000
                     ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                    ToolTip.text: qsTr("Sharpens and upscales a lower-resolution stream on Linux using the Vulkan renderer. It may add GPU work and latency. Reconnect the stream after changing this setting.")
+                    ToolTip.text: qsTr("Sharpens and upscales a stream that is smaller than the window. Uses the D3D11 renderer on Windows and the Vulkan renderer on Linux. It may add GPU work and latency. Reconnect the stream after changing this setting.")
                 }
 
                 CheckBox {
                     width: parent.width
                     text: qsTr("LS1 upscaling (Vulkan)")
                     font.pointSize: 12
-                    visible: SystemProperties.supportsFsr1Upscaling
+                    visible: SystemProperties.supportsLs1Upscaling
                     checked: StreamingPreferences.ls1Upscaling
                     onCheckedChanged: {
                         StreamingPreferences.ls1Upscaling = checked
@@ -1160,7 +1160,7 @@ Flickable {
                 Column {
                     width: parent.width
                     spacing: 5
-                    visible: SystemProperties.supportsFsr1Upscaling && StreamingPreferences.ls1Upscaling
+                    visible: SystemProperties.supportsLs1Upscaling && StreamingPreferences.ls1Upscaling
 
                     Label {
                         width: parent.width

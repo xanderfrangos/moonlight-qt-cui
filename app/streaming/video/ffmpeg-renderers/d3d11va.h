@@ -2,6 +2,7 @@
 
 #include "dxgipresent.h"
 #include "d3d11composition.h"
+#include "d3d11fsr1.h"
 #include "d3d11pyrowave.h"
 #include "ivrrframepresenter.h"
 #include "renderer.h"
@@ -53,6 +54,9 @@ public:
     virtual int getOutputBitsPerComponent() const override {
         return m_OutputBitsPerComponent.load(std::memory_order_relaxed);
     }
+    virtual const char* getActiveUpscalerName() const override {
+        return m_Fsr1 && m_Fsr1->active() ? "FSR" : nullptr;
+    }
     virtual InitFailureReason getInitFailureReason() override;
     virtual IPyroWaveSurfacePool* getPyroWaveSurfacePool() override;
 
@@ -101,10 +105,11 @@ private:
     void queueRenderDeviceReset();
     void renderOverlay(Overlay::OverlayType type);
     bool createOverlayVertexBuffer(Overlay::OverlayType type, int width, int height, Microsoft::WRL::ComPtr<ID3D11Buffer>& newVertexBuffer);
-    void bindColorConversion(bool frameChanged, AVFrame* frame);
+    void bindColorConversion(bool frameChanged, AVFrame* frame, bool allowCscDither);
     int queryDisplayBitsPerComponent();
     void refreshDitherState();
     void bindVideoVertexBuffer(bool frameChanged, AVFrame* frame);
+    void drawVideoPlanes(AVFrame* frame, ID3D11ShaderResourceView* const* planes, UINT planeCount);
     bool renderVideo(AVFrame* frame, uint64_t decodeBoundary = 0);
     bool renderPyroWaveVideo(AVFrame* frame, PyroWaveFrameRef* ref);
     uint64_t waitForPyroWaveDecode(const PyroWaveFrameRef* ref);
@@ -271,6 +276,11 @@ private:
     float m_DitherPhase;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_DitherFrameBuffer;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_VideoVertexBuffer;
+    // Covers the whole window. FSR1 narrows the viewport and restores this.
+    D3D11_VIEWPORT m_FullViewport = {};
+
+    // Null unless FSR1 upscaling was requested and its shaders loaded
+    std::unique_ptr<D3D11Fsr1Upscaler> m_Fsr1;
 
     // Only valid if !m_BindDecoderOutputTextures
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_VideoTexture;

@@ -7,6 +7,13 @@ policy remains active after that choice. The common library includes upstream's
 frame-loss fixes alongside the fork's PyroWave frame handling; speculative
 loss reports require reference-frame invalidation and exclude PyroWave frames.
 These source changes still need a build and live validation on supported GPUs.
+The merge also made full range the default requested color range (upstream
+c1623ff4). FFmpeg reports full-range 8-bit HEVC as `yuvj420p`. The FFmpeg 8
+build in the older `setup-deps` packages leaves that unmapped in its D3D11VA
+frame parameters (`sw_format` NONE), so every 8-bit D3D11VA stream fails with
+"Failed initialize hwframes context: -22". Upstream fixed this with a
+dependency update (2e13ed99). After merging, rerun `setup-deps.ps1` (currently
+tag v17, FFmpeg 9.0.2) instead of reusing an older `libs\windows`.
 
 Linux Vulkan LS1 integration (2026-09-24, based on MAKO's GPL-3.0-or-later
 implementation): the opt-in `ls1upscaling` setting selects the Vulkan frontend
@@ -49,6 +56,25 @@ The RCAS sharpness slider saves a 0-100 setting and substitutes the matching
 0-2 RCAS stop value into both shaders when the stream starts. Its 62.5 default
 retains the PR's 0.75-stop setting; the minimum is still a mild RCAS pass.
 Changes take effect after reconnecting.
+
+Windows D3D11 FSR1 integration (2026-09-25): the same `fsr1upscaling` and
+RCAS sharpness settings now also drive `D3D11Fsr1Upscaler` in
+`d3d11fsr1.cpp`, so FSR1 no longer needs the Vulkan frontend on Windows. It
+uses AMD's unmodified FidelityFX FSR 1.0.2 headers, compiled with FXC into five
+committed pixel shaders (`d3d11_fsr1_*.fxc`, see `build_hlsl.bat`). When the
+aspect-fitted output area exceeds the stream area, `drawVideoPlanes()` runs the
+color-conversion shader into a stream-sized RGB intermediate, then EASU into a
+destination-sized texture, then RCAS into the back buffer inside the letterbox
+rectangle. It then restores the full viewport, so overlays draw as before. Unlike the Linux
+luma hook, both passes filter RGB. PQ frames use variants that convert to
+approximate gamma 2.0 around each pass, as `FSR1_HDR.glsl` does. SDR ordered
+dithering moves from the color-conversion shader to the RCAS pass, so the
+upscaler never smears the pattern. The decision is recomputed whenever the
+video vertex buffer is rebuilt, which happens on a frame-format change or a
+resize. A shader or resource failure logs and keeps bilinear scaling. The work
+runs inside `prepareFrameForPresent()`, so it adds to both the legacy and the
+VRR preparation time. This has only been compiled, not measured on a live
+stream.
 
 On successful `LiStartConnection()`, the session records the connection start
 time. `Session::exec()` owns the SDL event loop while streaming, so it raises

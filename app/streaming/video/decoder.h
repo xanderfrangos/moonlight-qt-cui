@@ -112,7 +112,7 @@ typedef struct _DECODER_PARAMETERS {
     bool temporalDithering = false;
     // StreamingPreferences::DebandMode. Only libplacebo implements this.
     int debandMode = 0;
-    // Linux Vulkan FSR1 shader; ignored by other renderers.
+    // FSR1 shaders in the D3D11 and Linux Vulkan renderers; ignored by others.
     bool fsr1Upscaling = false;
     double fsr1RcasSharpness = 20.0;
     bool ls1Upscaling = false;

@@ -1161,6 +1161,18 @@ void D3D11VARenderer::bindVideoVertexBuffer(bool frameChanged, AVFrame* frame)
             vMax = (float)frame->height / framesContext->height;
         }
 
+        if (m_Fsr1) {
+            // SDL_Rect places the destination from the bottom of the window,
+            // while D3D11 viewports and pixel positions start at the top.
+            if (!m_Fsr1->configure(m_RenderDevice.Get(), m_RenderDeviceContext.Get(),
+                                   src.w, src.h,
+                                   dst.x, m_DisplayHeight - dst.y - dst.h, dst.w, dst.h,
+                                   uMax, vMax)) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "FSR1 resources could not be created; using standard D3D11 scaling");
+            }
+        }
+
         VERTEX verts[] =
         {
             {renderRect.x, renderRect.y, 0, vMax},
@@ -1193,6 +1205,42 @@ void D3D11VARenderer::bindVideoVertexBuffer(bool frameChanged, AVFrame* frame)
     UINT stride = sizeof(VERTEX);
     UINT offset = 0;
     m_RenderDeviceContext->IASetVertexBuffers(0, 1, m_VideoVertexBuffer.GetAddressOf(), &stride, &offset);
+}
+
+void D3D11VARenderer::drawVideoPlanes(AVFrame* frame, ID3D11ShaderResourceView* const* planes, UINT planeCount)
+{
+    SDL_assert(planeCount <= 3);
+
+    bool frameChanged = hasFrameFormatChanged(frame);
+
+    // Bind our vertex buffer. This also decides whether FSR1 runs at the
+    // current frame and window sizes.
+    bindVideoVertexBuffer(frameChanged, frame);
+
+    // FSR1 needs the whole frame in RGB at stream size before upscaling it
+    const bool fsr = m_Fsr1 && m_Fsr1->active();
+    if (fsr) {
+        m_Fsr1->beginSourcePass(m_RenderDeviceContext.Get());
+    }
+
+    // Bind our CSC shader (and constant buffer, if required). With FSR1 the
+    // dithering happens after upscaling, so the pattern isn't smeared.
+    bindColorConversion(frameChanged, frame, !fsr);
+
+    // Draw the video
+    m_RenderDeviceContext->PSSetShaderResources(0, planeCount, planes);
+    m_RenderDeviceContext->DrawIndexed(6, 0, 0);
+
+    // Unbind SRVs for this frame
+    ID3D11ShaderResourceView* nullSrvs[3] = {};
+    m_RenderDeviceContext->PSSetShaderResources(0, planeCount, nullSrvs);
+
+    if (fsr) {
+        // Same rule as bindColorConversion(): PQ output is left to the display
+        const bool pq = frame->color_trc == AVCOL_TRC_SMPTE2084;
+        m_Fsr1->upscale(m_RenderDeviceContext.Get(), m_RenderTargetView.Get(),
+                        pq, m_DitherActive && !pq, m_DitherLevels, m_FullViewport);
+    }
 }
 
 // Returns the bits per color component of the display we're presenting to, or
@@ -1295,14 +1343,15 @@ void D3D11VARenderer::refreshDitherState()
     }
 }
 
-void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame)
+void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame, bool allowCscDither)
 {
     bool yuv444 = (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_YUV444);
 
     // PQ output is quantized by the display's own HDR pipeline, so dither only
-    // the SDR case where we know what the final encoding is.
+    // the SDR case where we know what the final encoding is. When a later pass
+    // does the dithering, this still keeps its per-frame phase up to date.
     const bool dither = m_DitherActive && frame->color_trc != AVCOL_TRC_SMPTE2084;
-    const auto& videoShaders = dither ? m_VideoDitherPixelShaders : m_VideoPixelShaders;
+    const auto& videoShaders = dither && allowCscDither ? m_VideoDitherPixelShaders : m_VideoPixelShaders;
 
     if (dither && m_DitherFrameBuffer) {
         if (m_TemporalDither) {
@@ -1544,16 +1593,8 @@ bool D3D11VARenderer::renderPyroWaveVideo(AVFrame* frame, PyroWaveFrameRef* ref)
         return false;
     }
 
-    bool frameChanged = hasFrameFormatChanged(frame);
-    bindVideoVertexBuffer(frameChanged, frame);
-    bindColorConversion(frameChanged, frame);
-
     ID3D11ShaderResourceView* frameSrvs[] = { (*views)[0].Get(), (*views)[1].Get(), (*views)[2].Get() };
-    m_RenderDeviceContext->PSSetShaderResources(0, 3, frameSrvs);
-    m_RenderDeviceContext->DrawIndexed(6, 0, 0);
-
-    ID3D11ShaderResourceView* nullSrvs[3] = {};
-    m_RenderDeviceContext->PSSetShaderResources(0, 3, nullSrvs);
+    drawVideoPlanes(frame, frameSrvs, 3);
 
     // Hand the surface back once this read retires on the GPU
     if (!m_PyroWaveSurfaces->signalRelease(m_RenderDeviceContext.Get(), ref)) {
@@ -1718,24 +1759,8 @@ bool D3D11VARenderer::renderVideo(AVFrame* frame, uint64_t decodeBoundary)
         srvIndex = 0;
     }
 
-    bool frameChanged = hasFrameFormatChanged(frame);
-
-    // Bind our vertex buffer
-    bindVideoVertexBuffer(frameChanged, frame);
-
-    // Bind our CSC shader (and constant buffer, if required)
-    bindColorConversion(frameChanged, frame);
-
-    // Bind SRVs for this frame
     ID3D11ShaderResourceView* frameSrvs[] = { m_VideoTextureResourceViews[srvIndex][0].Get(), m_VideoTextureResourceViews[srvIndex][1].Get() };
-    m_RenderDeviceContext->PSSetShaderResources(0, 2, frameSrvs);
-
-    // Draw the video
-    m_RenderDeviceContext->DrawIndexed(6, 0, 0);
-
-    // Unbind SRVs for this frame
-    ID3D11ShaderResourceView* nullSrvs[2] = {};
-    m_RenderDeviceContext->PSSetShaderResources(0, 2, nullSrvs);
+    drawVideoPlanes(frame, frameSrvs, 2);
 
     // Insert a fence to force the decode context to wait for the render context to finish reading
     if (m_DecodeDevice != m_RenderDevice) {
@@ -3948,6 +3973,23 @@ bool D3D11VARenderer::setupRenderingResources()
     // dithering is disabled.
     refreshDitherState();
 
+    // FSR1 is a quality option, so a failure keeps ordinary scaling
+    if (m_DecoderParams.fsr1Upscaling) {
+        m_Fsr1 = std::make_unique<D3D11Fsr1Upscaler>();
+        if (m_Fsr1->initialize(m_RenderDevice.Get(),
+                               (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_10BIT) != 0,
+                               m_DecoderParams.fsr1RcasSharpness)) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "FSR1 upscaling enabled for the D3D11 renderer (RCAS sharpness %.1f/100)",
+                        m_DecoderParams.fsr1RcasSharpness);
+        }
+        else {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "FSR1 shader initialization failed; using standard D3D11 scaling");
+            m_Fsr1.reset();
+        }
+    }
+
     // We use a common sampler for all pixel shaders
     {
         D3D11_SAMPLER_DESC samplerDesc = {};
@@ -4088,6 +4130,7 @@ bool D3D11VARenderer::setupSwapchainDependentResources()
         viewport.MaxDepth = 1;
 
         m_RenderDeviceContext->RSSetViewports(1, &viewport);
+        m_FullViewport = viewport;
     }
 
     return true;
