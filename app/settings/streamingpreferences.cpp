@@ -490,9 +490,9 @@ const QVector<StreamingPreferences::PerformanceGraphInfo>& StreamingPreferences:
         { PG_DECODING_FRAMETIME, QT_TR_NOOP("Decoding frametime"), PGT_CLIENT, false },
         { PG_HOST_PROCESSING_LATENCY, QT_TR_NOOP("Host processing latency"), PGT_CLIENT, true },
         { PG_REASSEMBLY, QT_TR_NOOP("Reassembly time"), PGT_CLIENT, true },
-        { PG_DECODING_TIME, QT_TR_NOOP("Decoding time"), PGT_CLIENT, false },
+        { PG_DECODING_TIME, QT_TR_NOOP("Decoding time"), PGT_CLIENT, true },
         { PG_QUEUE_DEPTH, QT_TR_NOOP("Frame queue depth"), PGT_CLIENT, true },
-        { PG_RENDERING_TIME, QT_TR_NOOP("Rendering time"), PGT_CLIENT, false },
+        { PG_RENDERING_TIME, QT_TR_NOOP("Rendering time"), PGT_CLIENT, true },
         { PG_JITTER_DROPS, QT_TR_NOOP("Dropped by client pacer"), PGT_CLIENT, true },
     };
     return k_Graphs;
