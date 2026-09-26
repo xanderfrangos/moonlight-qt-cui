@@ -240,9 +240,9 @@ above makes a record boundary; before that the rest of the frame is given up.
 
 The coarsest level is intact when none of the announced critical packets was lost
 (without an announcement: when no loss came before the first finer record). The
-frame is then decoded if more than 90% of its records arrived
-(`pyrowave_decoder_decode_is_ready_with_sideband` with no pristine-band
-requirement); missing finer blocks decode as zero coefficients, which blurs their
+frame is then decoded however many finer records were lost
+(`pyrowave_decoder_decode_is_ready_with_sideband` with no pristine-band or
+received-ratio requirement); missing finer blocks decode as zero coefficients, which blurs their
 area for that frame. Losing the packets right after the critical ones blurs the
 most, since they hold the next-coarsest level. PyroWave's own pristine-band check
 is not used because it cannot tell a lost block from an all-zero block that was
@@ -274,9 +274,11 @@ fps), so a static screen recovers from a lost frame. Repeats do not count as cap
 and the default is low enough that a game rendering below the stream rate is never
 padded out with repeats at its enlarged per-frame budget.
 
-Guidance: about 1.6 bits per pixel is visually clean for 4:2:0 SDR (Themaister's
-reference point, 200 Mbps at 1080p60). 4:4:4 costs about 1.6x, and 10-bit about
-1.15x.
+Guidance: the client's default bitrate follows Themaister's objective regression
+(`eval-results/objective-bitrate-evaluation.md` in the PyroWave repository) at 35 dB
+PSNR-HVS-M-H and a viewing distance of twice the screen height, plus his 1.2x for
+HDR10. At 60 fps that is about 220 Mbps for 1080p and 290 Mbps for 1440p and 4K in
+4:2:0 SDR; 4:4:4 costs 8-21% more, and bitrate scales linearly with frame rate.
 
 ## Compatibility
 

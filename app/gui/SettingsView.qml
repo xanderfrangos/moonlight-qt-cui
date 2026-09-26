@@ -10,6 +10,8 @@ import SdlGamepadKeyNavigation 1.0
 import InputModeTracker 1.0
 import SystemProperties 1.0
 import TvTheme 1.0
+import PyroWaveCalibrator 1.0
+import NetworkBuffers 1.0
 
 Flickable {
     // The TV mode toolbar and hint bar are transparent, so settings must not
@@ -812,7 +814,8 @@ Flickable {
                                 return StreamingPreferences.getDefaultPyroWaveBitrate(StreamingPreferences.width,
                                                                                       StreamingPreferences.height,
                                                                                       StreamingPreferences.fps,
-                                                                                      StreamingPreferences.enableYUV444)
+                                                                                      StreamingPreferences.enableYUV444,
+                                                                                      StreamingPreferences.enableHdr)
                             }
                             return StreamingPreferences.getDefaultBitrate(StreamingPreferences.width,
                                                                           StreamingPreferences.height,
@@ -853,6 +856,248 @@ Flickable {
                             StreamingPreferences.bitrateKbps = defaultBitrate
                             StreamingPreferences.autoAdjustBitrate = true
                             slider.value = defaultBitrate
+                        }
+                    }
+                }
+
+                Column {
+                    width: parent.width
+                    spacing: 5
+                    visible: slider.pyroWave && Qt.platform.os === "linux"
+
+                    Component.onCompleted: NetworkBuffers.refresh()
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        visible: NetworkBuffers.needsFix
+                        color: "#ffb74d"
+                        text: qsTr("Linux limits this PC's network receive buffer to %1 KB. PyroWave needs about %2 MB, or frames arrive with missing packets.")
+                              .arg(NetworkBuffers.currentKb).arg(NetworkBuffers.recommendedMb)
+                    }
+
+                    Row {
+                        spacing: 8
+                        visible: NetworkBuffers.needsFix
+
+                        Button {
+                            text: qsTr("Fix it")
+                            visible: NetworkBuffers.canApply
+                            enabled: !NetworkBuffers.busy
+                            onClicked: NetworkBuffers.apply()
+
+                            ToolTip.delay: 1000
+                            ToolTip.timeout: 10000
+                            ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                            ToolTip.text: qsTr("Raises net.core.rmem_max now and saves it for future boots. Asks for your password.")
+                        }
+
+                        Button {
+                            text: qsTr("Copy command")
+                            onClicked: NetworkBuffers.copyCommand()
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        visible: NetworkBuffers.needsFix && !NetworkBuffers.canApply
+                        font.pointSize: 9
+                        text: qsTr("Run this in a terminal (Konsole on Steam Deck):") + "\n" + NetworkBuffers.manualCommand
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        visible: NetworkBuffers.message !== ""
+                        text: NetworkBuffers.message
+                    }
+
+                    Button {
+                        text: qsTr("Calibrate PyroWave")
+                        enabled: !PyroWaveCalibrator.running
+                        onClicked: {
+                            calibrationDialog.open()
+                            PyroWaveCalibrator.start(StreamingPreferences.fps)
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: qsTr("Compare resolutions, 4:4:4 and 4:2:0, and HDR/SDR at the selected FPS.")
+                    }
+                }
+
+                NavigableDialog {
+                    id: calibrationDialog
+                    title: qsTr("PyroWave calibration — %1 FPS").arg(StreamingPreferences.fps)
+                    width: Math.min(settingsPage.width - 24, 860)
+                    height: Math.min(settingsPage.height - 24, 560)
+                    standardButtons: Dialog.Close
+
+                    readonly property var rows: [
+                        { name: "4K", width: 3840, height: 2160 },
+                        { name: "1440p", width: 2560, height: 1440 },
+                        { name: "1080p", width: 1920, height: 1080 },
+                        { name: "800p", width: 1280, height: 800 },
+                        { name: "720p", width: 1280, height: 720 }
+                    ]
+                    readonly property var samples: PyroWaveCalibrator.results
+
+                    function sample(row, mode) {
+                        var offset = row * 4 + mode
+                        return offset < samples.length ? samples[offset] : null
+                    }
+
+                    function canApply(option) {
+                        return option && option.valid &&
+                               (!option.hdr || SystemProperties.supportsHdr)
+                    }
+
+                    function optionText(option, hdr) {
+                        var prefix = hdr ? qsTr("HDR") : qsTr("SDR")
+                        if (!option) return prefix + " · " + (PyroWaveCalibrator.running ? qsTr("testing…") : "—")
+                        if (!option.valid) return prefix + " · " + option.error
+                        var summary = qsTr("%1 · %2 ms decode · %3 Mbps").arg(prefix).arg(option.p95Ms.toFixed(1)).arg(option.bitrateKbps / 1000)
+                        if (hdr && !SystemProperties.supportsHdr) return summary + " · " + qsTr("no HDR")
+                        if (!option.linkFit) return summary + " · " + qsTr("link")
+                        if (!option.sustainable) return summary + " · " + qsTr("slow")
+                        if (!option.qualityFit) return summary + " · " + qsTr("below guide")
+                        return summary
+                    }
+
+                    function optionDetail(option) {
+                        if (!option || !option.valid) return ""
+                        return qsTr("Decode mean %1 ms; p95 %2 ms; peak local queue %3 ms. %4")
+                                .arg(option.meanMs.toFixed(1)).arg(option.p95Ms.toFixed(1))
+                                .arg(option.queueMaxMs.toFixed(1))
+                                .arg(option.sustainable ? qsTr("Decoder kept up in the short test.") : qsTr("Decoder fell behind in the short test; you can still try it."))
+                    }
+
+                    function applyChoice(option) {
+                        if (!canApply(option)) return
+                        StreamingPreferences.autoAdjustBitrate = false
+                        StreamingPreferences.width = option.width
+                        StreamingPreferences.height = option.height
+                        StreamingPreferences.enableYUV444 = option.chroma444
+                        StreamingPreferences.enableHdr = option.hdr
+                        StreamingPreferences.bitrateKbps = option.bitrateKbps
+                        slider.value = option.bitrateKbps
+
+                        var found = false
+                        for (var i = 0; i < resolutionListModel.count; i++) {
+                            var entry = resolutionListModel.get(i)
+                            if (parseInt(entry.video_width) === option.width &&
+                                    parseInt(entry.video_height) === option.height) {
+                                resolutionComboBox.currentIndex = i
+                                resolutionComboBox.lastIndexValue = i
+                                found = true
+                                break
+                            }
+                        }
+                        if (!found) {
+                            resolutionListModel.append({
+                                                           "text": option.height + "p",
+                                                           "video_width": "" + option.width,
+                                                           "video_height": "" + option.height,
+                                                           "is_custom": false
+                                                       })
+                            resolutionComboBox.currentIndex = resolutionListModel.count - 1
+                            resolutionComboBox.lastIndexValue = resolutionComboBox.currentIndex
+                        }
+                        StreamingPreferences.save()
+                        close()
+                    }
+
+                    contentItem: Flickable {
+                        clip: true
+                        contentWidth: width
+                        contentHeight: calibrationTable.height
+
+                        Column {
+                            id: calibrationTable
+                            width: parent.width
+                            spacing: 4
+
+                            Label {
+                                width: parent.width
+                                wrapMode: Text.Wrap
+                                text: PyroWaveCalibrator.message
+                            }
+
+                            Label {
+                                width: parent.width
+                                wrapMode: Text.Wrap
+                                font.pointSize: 9
+                                text: qsTr("Local GPU decode test · passes with a quarter of each frame left for rendering · 1 Gbps wired assumed · 900 Mbps cap. Bitrates follow the PyroWave author's good-quality curve (viewing distance twice the screen height), plus 20% for HDR. Live FPS is not measured.")
+                            }
+
+                            Row {
+                                spacing: 6
+                                Label { width: 72; text: qsTr("Resolution") }
+                                Label { width: (calibrationTable.width - 84) / 2; text: "4:4:4"; horizontalAlignment: Text.AlignHCenter }
+                                Label { width: (calibrationTable.width - 84) / 2; text: "4:2:0"; horizontalAlignment: Text.AlignHCenter }
+                            }
+
+                            Repeater {
+                                model: calibrationDialog.rows
+                                delegate: Row {
+                                    id: calibrationRow
+                                    width: calibrationTable.width
+                                    spacing: 6
+                                    readonly property int rowIndex: index
+                                    readonly property var rowData: modelData
+
+                                    Label {
+                                        width: 72
+                                        text: calibrationRow.rowData.name
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+
+                                    Column {
+                                        width: (calibrationTable.width - 84) / 2
+                                        spacing: 2
+                                        Repeater {
+                                            model: [0, 1]
+                                            delegate: Button {
+                                                width: parent.width
+                                                height: 34
+                                                font.pointSize: 10
+                                                readonly property var option: calibrationDialog.sample(calibrationRow.rowIndex, modelData)
+                                                text: calibrationDialog.optionText(option, modelData === 0)
+                                                enabled: calibrationDialog.canApply(option)
+                                                opacity: option && option.valid && (!option.sustainable || !option.linkFit) ? 0.55 : 1.0
+                                                ToolTip.delay: 400
+                                                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                                                ToolTip.text: calibrationDialog.optionDetail(option)
+                                                onClicked: calibrationDialog.applyChoice(option)
+                                            }
+                                        }
+                                    }
+
+                                    Column {
+                                        width: (calibrationTable.width - 84) / 2
+                                        spacing: 2
+                                        Repeater {
+                                            model: [2, 3]
+                                            delegate: Button {
+                                                width: parent.width
+                                                height: 34
+                                                font.pointSize: 10
+                                                readonly property var option: calibrationDialog.sample(calibrationRow.rowIndex, modelData)
+                                                text: calibrationDialog.optionText(option, modelData === 2)
+                                                enabled: calibrationDialog.canApply(option)
+                                                opacity: option && option.valid && (!option.sustainable || !option.linkFit) ? 0.55 : 1.0
+                                                ToolTip.delay: 400
+                                                ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                                                ToolTip.text: calibrationDialog.optionDetail(option)
+                                                onClicked: calibrationDialog.applyChoice(option)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1109,7 +1354,14 @@ Flickable {
                     enabled: SystemProperties.supportsHdr
                     checked: enabled && StreamingPreferences.enableHdr
                     onCheckedChanged: {
-                        StreamingPreferences.enableHdr = checked
+                        if (StreamingPreferences.enableHdr != checked) {
+                            StreamingPreferences.enableHdr = checked
+                            // PyroWave's default bitrate depends on HDR
+                            if (slider.pyroWave && StreamingPreferences.autoAdjustBitrate) {
+                                StreamingPreferences.bitrateKbps = slider.defaultBitrate();
+                                slider.value = StreamingPreferences.bitrateKbps
+                            }
+                        }
                     }
 
                     // Updating StreamingPreferences.videoCodecConfig is handled above
@@ -2404,7 +2656,7 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 8000
                     ToolTip.visible: hovered && slider.pyroWave
-                    ToolTip.text: qsTr("PyroWave is an intra-only GPU wavelet codec with sub-millisecond encode and decode latency. It needs a wired connection with hundreds of Mbps to spare and a host with PyroWave support; other hosts fall back to H.264.")
+                    ToolTip.text: qsTr("PyroWave is an intra-only GPU wavelet codec. It needs a wired connection with hundreds of Mbps to spare and a host with PyroWave support; other hosts fall back to H.264. On Linux, GPU readback and upload may limit frame rate.")
                 }
 
                 Label {

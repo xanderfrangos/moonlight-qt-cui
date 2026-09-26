@@ -56,6 +56,8 @@
 #include "backend/systemproperties.h"
 #include "streaming/session.h"
 #include "settings/streamingpreferences.h"
+#include "streaming/video/pyrowave/pyrowavecalibrator.h"
+#include "backend/networkbuffers.h"
 #include "gui/sdlgamepadkeynavigation.h"
 #include "gui/inputmodetracker.h"
 #include "gui/blurredimageprovider.h"
@@ -1079,6 +1081,16 @@ int main(int argc, char *argv[])
                                                        return StreamingPreferences::get(qmlEngine);
                                                    });
     qmlRegisterSingletonType(QUrl("qrc:/gui/TvTheme.qml"), "TvTheme", 1, 0, "TvTheme");
+    qmlRegisterSingletonType<PyroWaveCalibrator>("PyroWaveCalibrator", 1, 0,
+                                                  "PyroWaveCalibrator",
+                                                  [](QQmlEngine*, QJSEngine*) -> QObject* {
+                                                      return new PyroWaveCalibrator();
+                                                  });
+    qmlRegisterSingletonType<NetworkBuffers>("NetworkBuffers", 1, 0,
+                                             "NetworkBuffers",
+                                             [](QQmlEngine*, QJSEngine*) -> QObject* {
+                                                 return new NetworkBuffers();
+                                             });
 
     // Create the identity manager on the main thread
     IdentityManager::get();

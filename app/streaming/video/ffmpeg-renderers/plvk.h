@@ -20,11 +20,16 @@
 
 #include <atomic>
 #include <deque>
+#include <mutex>
 #include <QMutex>
 #include <QWaitCondition>
 
 #ifdef Q_OS_LINUX
 #include "vulkantiming.h"
+#endif
+
+#if defined(HAVE_PYROWAVE) && defined(Q_OS_LINUX)
+#include "streaming/video/pyrowave/pyrowaveplacebo.h"
 #endif
 
 #ifdef HAS_WAYLAND
@@ -101,6 +106,9 @@ public:
         return m_OutputBitsPerComponent.load(std::memory_order_relaxed);
     }
     virtual const char* getActiveUpscalerName() const override;
+#if defined(HAVE_PYROWAVE) && defined(Q_OS_LINUX)
+    IPyroWaveVulkanPool* getPyroWaveVulkanPool() override { return m_PyroWavePool.get(); }
+#endif
 
 private:
     static void lockQueue(AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index);
@@ -123,6 +131,7 @@ private:
     bool acquirePendingSwapchainFrame(const char* earlyRenderFailureMessage);
     bool acquireVrrSwapchainFrame();
     bool submitPendingSwapchainFrame();
+    bool submitSwapchainFrame();
     void finishVrrRenderTiming();
     bool cancelVrrFrame();
     bool waitForVrrGpuReady(VrrPresentFeedback& feedback);
@@ -182,6 +191,15 @@ private:
     pl_renderer m_Renderer = nullptr;
     pl_tex m_Textures[PL_MAX_PLANES] = {};
     pl_color_space m_LastColorspace = {};
+    // pl_swapchain_submit_frame() takes libplacebo's pending graphics command
+    // outside the lock that guards command recording. Work recorded on other
+    // threads (overlay uploads, offscreen preparation, PyroWave surface holds)
+    // must not begin a command inside that window, so it and every swapchain
+    // submit hold this lock. Texture creation records nothing and stays out.
+    std::mutex m_CommandLock;
+#if defined(HAVE_PYROWAVE) && defined(Q_OS_LINUX)
+    std::unique_ptr<PyroWavePlaceboPool> m_PyroWavePool;
+#endif
 
     // Render parameters for this session. This is pl_render_fast_params unless
     // output dithering is enabled, in which case m_DitherParams is attached.
