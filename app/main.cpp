@@ -456,17 +456,25 @@ static void setInjectedEnvironmentVariable(const char* name, const QByteArray& v
 
 // TV mode affects settings that must be applied before the QGuiApplication
 // (and therefore GlobalCommandLineParser) is created, so we look for its
-// options directly. Returns -1 if neither --tv-mode nor --no-tv-mode was
-// passed, otherwise 1 or 0 for the last one given.
+// options directly. --controller-ui is an alias for --tv-mode. Returns -1 if
+// none of them were passed, otherwise 1 or 0 for the last one given.
 static int getTvModeArgument(int argc, char *argv[])
 {
+    // Our command line parser also accepts long options with a single dash
+    auto isOption = [](const char *arg, const char *name) {
+        if (arg[0] != '-') {
+            return false;
+        }
+        const char *option = arg[1] == '-' ? arg + 2 : arg + 1;
+        return strcmp(option, name) == 0;
+    };
+
     int tvModeArgument = -1;
     for (int i = 1; i < argc; i++) {
-        // Our command line parser also accepts long options with a single dash
-        if (strcmp(argv[i], "--tv-mode") == 0 || strcmp(argv[i], "-tv-mode") == 0) {
+        if (isOption(argv[i], "tv-mode") || isOption(argv[i], "controller-ui")) {
             tvModeArgument = 1;
         }
-        else if (strcmp(argv[i], "--no-tv-mode") == 0 || strcmp(argv[i], "-no-tv-mode") == 0) {
+        else if (isOption(argv[i], "no-tv-mode") || isOption(argv[i], "no-controller-ui")) {
             tvModeArgument = 0;
         }
     }

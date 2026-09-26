@@ -2216,7 +2216,7 @@ Flickable {
                     id: tvModeCheck
                     width: parent.width
                     hoverEnabled: !SystemProperties.hoverEffectsDisabled
-                    text: qsTr("TV mode")
+                    text: qsTr("Use Controller UI")
                     font.pointSize: 12
                     checked: StreamingPreferences.tvMode
                     onToggled: {
@@ -2236,14 +2236,14 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                    ToolTip.text: qsTr("A GUI suited to gamepads and TVs. Runs fullscreen with larger controls and no mouse hover effects. Requires restarting Moonlight. Can also be turned on for one launch with the --tv-mode command line option.")
+                    ToolTip.text: qsTr("A GUI suited to gamepads and TVs. Runs fullscreen with larger controls and no mouse hover effects. Requires restarting Moonlight. Can also be turned on for one launch with the --controller-ui command line option.")
                 }
 
                 Label {
                     width: parent.width
                     text: SystemProperties.tvMode ?
-                              qsTr("TV mode is currently turned on by the --tv-mode command line option.") :
-                              qsTr("TV mode is currently turned off by the --no-tv-mode command line option.")
+                              qsTr("The controller UI is currently turned on by a command line option.") :
+                              qsTr("The controller UI is currently turned off by a command line option.")
                     font.pointSize: 9
                     wrapMode: Text.Wrap
                     visible: SystemProperties.tvModeOverridden

@@ -431,7 +431,7 @@ public:
     // GUI scale in percent. Takes effect on the next launch.
     int uiScale;
     // Controller and TV friendly GUI. Takes effect on the next launch and
-    // can be overridden with --tv-mode/--no-tv-mode.
+    // can be overridden with --controller-ui/--no-controller-ui (or --tv-mode).
     bool tvMode;
     Language language;
     CaptureSysKeysMode captureSysKeysMode;

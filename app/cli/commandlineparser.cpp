@@ -169,7 +169,9 @@ GlobalCommandLineParser::ParseResult GlobalCommandLineParser::parse(const QStrin
 
     // TV mode is applied in main() before this parser runs, but it must be
     // registered here so it isn't rejected as an unknown option.
-    parser.addToggleOption("tv-mode", "TV mode, a GUI suited to gamepads and TVs, for this launch");
+    // --tv-mode is the original name for --controller-ui.
+    parser.addToggleOption("controller-ui", "the controller UI, a GUI suited to gamepads and TVs, for this launch");
+    parser.addToggleOption("tv-mode", "the controller UI (same as --controller-ui)");
 
     parser.parse(args);
     auto posArgs = parser.positionalArguments();
