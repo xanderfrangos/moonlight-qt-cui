@@ -629,6 +629,7 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
     m_MaxVideoFps = params->frameRate;
     m_StreamWidth = params->width;
     m_StreamHeight = params->height;
+    m_Stream10Bit = (params->videoFormat & VIDEO_FORMAT_MASK_10BIT) != 0;
 
     // Attach libplacebo's own dithering when the user asked for it and the
     // stream carries more bits per component than a common display accepts.
@@ -971,6 +972,7 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
             if (m_Ls1Hook->ready()) {
                 m_Ls1HookPtr = m_Ls1Hook->hook();
                 m_UpscalerName = "LS1";
+                m_UpscalerSkipsHdr = true;
                 SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                             "LS1 upscaling enabled with user-installed Lossless.dll");
             } else {
@@ -1025,6 +1027,19 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
 
     updateUpscalingNeeded();
     return true;
+}
+
+const char* PlVkRenderer::getActiveUpscalerName() const
+{
+    if (!m_UpscalingNeeded.load(std::memory_order_relaxed)) {
+        return nullptr;
+    }
+    // LS1 passes HDR frames through unscaled. The host can switch HDR on and
+    // off mid-stream, so this is checked each time rather than at startup.
+    if (m_UpscalerSkipsHdr && m_Stream10Bit && LiGetCurrentHostDisplayHdrMode()) {
+        return nullptr;
+    }
+    return m_UpscalerName;
 }
 
 void PlVkRenderer::updateUpscalingNeeded()

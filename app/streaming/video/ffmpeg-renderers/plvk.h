@@ -100,9 +100,7 @@ public:
     virtual int getOutputBitsPerComponent() const override {
         return m_OutputBitsPerComponent.load(std::memory_order_relaxed);
     }
-    virtual const char* getActiveUpscalerName() const override {
-        return m_UpscalingNeeded.load(std::memory_order_relaxed) ? m_UpscalerName : nullptr;
-    }
+    virtual const char* getActiveUpscalerName() const override;
 
 private:
     static void lockQueue(AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index);
@@ -201,8 +199,11 @@ private:
 #endif
     // Set once at initialization if an upscaler hook loaded
     const char* m_UpscalerName = nullptr;
+    // LS1 leaves HDR frames unscaled
+    bool m_UpscalerSkipsHdr = false;
     int m_StreamWidth = 0;
     int m_StreamHeight = 0;
+    bool m_Stream10Bit = false;
     // Rechecked when the window is resized
     std::atomic<bool> m_UpscalingNeeded{false};
 
