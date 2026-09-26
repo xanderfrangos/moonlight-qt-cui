@@ -170,10 +170,10 @@ import AppModel 1.0; AppModel {}', parent, '')
             id: appIcon
             anchors.horizontalCenter: parent.horizontalCenter
             y: 10
-            source: roundedUrl(model.boxart)
+            source: SystemProperties.tvMode ? roundedUrl(model.boxart) : model.boxart
 
-            // The art keeps its own size so the placeholder checks below
-            // still work. Its corners are rounded by RoundedImageProvider.
+            // TV mode rounds the art's corners with RoundedImageProvider. The
+            // art keeps its own size so the placeholder checks below still work.
             function roundedUrl(url) {
                 if (url == "") {
                     return ""
