@@ -1970,6 +1970,69 @@ Flickable {
                     }
                 }
 
+                Label {
+                    width: parent.width
+                    id: audioBufferTitle
+                    text: qsTr("Audio buffer")
+                    topPadding: 8
+                    font.pointSize: 14
+                    wrapMode: Text.Wrap
+                }
+
+                AutoResizingComboBox {
+                    // ignore setting the index at first, and actually set it when the component is loaded
+                    Component.onCompleted: {
+                        var saved_buffer = StreamingPreferences.audioBufferMs
+                        currentIndex = 0
+                        for (var i = 0; i < audioBufferListModel.count; i++) {
+                            if (saved_buffer === audioBufferListModel.get(i).val) {
+                                currentIndex = i
+                                break
+                            }
+                        }
+                        activated(currentIndex)
+                    }
+
+                    id: audioBufferComboBox
+                    textRole: "text"
+                    model: ListModel {
+                        id: audioBufferListModel
+                        ListElement {
+                            text: qsTr("Automatic (Recommended)")
+                            val: 0
+                        }
+                        ListElement {
+                            text: qsTr("10 ms")
+                            val: 10
+                        }
+                        ListElement {
+                            text: qsTr("20 ms")
+                            val: 20
+                        }
+                        ListElement {
+                            text: qsTr("30 ms")
+                            val: 30
+                        }
+                        ListElement {
+                            text: qsTr("50 ms")
+                            val: 50
+                        }
+                        ListElement {
+                            text: qsTr("80 ms")
+                            val: 80
+                        }
+                    }
+                    // ::onActivated must be used, as it only listens for when the index is changed by a human
+                    onActivated : {
+                        StreamingPreferences.audioBufferMs = audioBufferListModel.get(currentIndex).val
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Audio held in reserve to absorb network hiccups. Raise it if you hear crackling; lower it to reduce audio delay. Automatic grows the buffer when audio runs short and shrinks it again once the connection is stable.")
+                }
+
 
                 CheckBox {
                     id: audioPcCheck

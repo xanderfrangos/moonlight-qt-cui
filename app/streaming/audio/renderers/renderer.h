@@ -8,6 +8,27 @@ class IAudioRenderer
 public:
     virtual ~IAudioRenderer() {}
 
+    // Decodes one Opus packet into interleaved native-endian float samples, or
+    // synthesizes packet loss concealment when data is null. Returns the number
+    // of sample frames written, or a negative value on error.
+    typedef int (*AudioDecodeCallback)(void* context, const unsigned char* data, int length,
+                                       float* pcm, int frameCount);
+
+    // Renderers that decode audio themselves queue compressed packets from
+    // submitPacket() and decode them with this callback as the audio device
+    // consumes them. bufferMs is the jitter buffer size, or 0 to size it
+    // automatically. Called before prepareForPlayback().
+    virtual void setDecodeCallback(AudioDecodeCallback, void*, int) {}
+
+    virtual bool decodesAudio() {
+        return false;
+    }
+
+    // Return false if an unrecoverable error has occurred and the renderer must be reinitialized
+    virtual bool submitPacket(const char*, int) {
+        return true;
+    }
+
     virtual bool prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION* opusConfig) = 0;
 
     virtual void* getAudioBuffer(int* size) = 0;

@@ -12,6 +12,9 @@
 #define TRY_INIT_RENDERER(renderer, opusConfig)        \
 {                                                      \
     IAudioRenderer* __renderer = new renderer();       \
+    __renderer->setDecodeCallback(arDecodeForRenderer, \
+                                  this,                \
+                                  m_Preferences->audioBufferMs); \
     if (__renderer->prepareForPlayback(opusConfig))    \
         return __renderer;                             \
     delete __renderer;                                 \
@@ -147,6 +150,25 @@ void Session::arCleanup()
     s_ActiveSession->m_OpusDecoder = nullptr;
 }
 
+int Session::arDecodeForRenderer(void* context, const unsigned char* data, int length,
+                                 float* pcm, int frameCount)
+{
+    Session* session = static_cast<Session*>(context);
+
+    // Only called on the audio device thread, which is stopped before
+    // the decoder is destroyed
+    if (session->m_OpusDecoder == nullptr) {
+        return -1;
+    }
+
+    return opus_multistream_decode_float(session->m_OpusDecoder,
+                                         data,
+                                         length,
+                                         pcm,
+                                         frameCount,
+                                         0);
+}
+
 void Session::arDecodeAndPlaySample(char* sampleData, int sampleLength)
 {
     int samplesDecoded;
@@ -187,7 +209,22 @@ void Session::arDecodeAndPlaySample(char* sampleData, int sampleLength)
         return;
     }
 
-    if (s_ActiveSession->m_AudioRenderer != nullptr) {
+    if (s_ActiveSession->m_AudioRenderer != nullptr &&
+            s_ActiveSession->m_AudioRenderer->decodesAudio()) {
+        // The renderer queues the packet and decodes it when the device needs it
+        if (!s_ActiveSession->m_AudioRenderer->submitPacket(sampleData, sampleLength)) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Reinitializing audio renderer after failure");
+
+            // Delete the renderer first so its device thread stops using the decoder
+            delete s_ActiveSession->m_AudioRenderer;
+            s_ActiveSession->m_AudioRenderer = nullptr;
+
+            opus_multistream_decoder_destroy(s_ActiveSession->m_OpusDecoder);
+            s_ActiveSession->m_OpusDecoder = nullptr;
+        }
+    }
+    else if (s_ActiveSession->m_AudioRenderer != nullptr) {
         int sampleSize = s_ActiveSession->m_AudioRenderer->getAudioBufferSampleSize();
         int frameSize = sampleSize * s_ActiveSession->m_ActiveAudioConfig.channelCount;
         int desiredBufferSize = frameSize * s_ActiveSession->m_ActiveAudioConfig.samplesPerFrame;
@@ -226,11 +263,11 @@ void Session::arDecodeAndPlaySample(char* sampleData, int sampleLength)
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "Reinitializing audio renderer after failure");
 
-            opus_multistream_decoder_destroy(s_ActiveSession->m_OpusDecoder);
-            s_ActiveSession->m_OpusDecoder = nullptr;
-
             delete s_ActiveSession->m_AudioRenderer;
             s_ActiveSession->m_AudioRenderer = nullptr;
+
+            opus_multistream_decoder_destroy(s_ActiveSession->m_OpusDecoder);
+            s_ActiveSession->m_OpusDecoder = nullptr;
         }
     }
 

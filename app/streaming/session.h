@@ -299,6 +299,10 @@ private:
     void arCleanup();
 
     static
+    int arDecodeForRenderer(void* context, const unsigned char* data, int length,
+                            float* pcm, int frameCount);
+
+    static
     void arDecodeAndPlaySample(char* sampleData, int sampleLength);
 
     static

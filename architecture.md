@@ -1396,7 +1396,7 @@ Pacer selection
           -> retire deferred source ownership only at a safe backend boundary
           -> asynchronous trace writer
 
-Audio UDP -> audio RTP queue -> Opus -> audio-device queue
+Audio UDP -> audio RTP queue -> renderer packet queue -> Opus on device pull
 SDL input events -> input queue / sender -> host
 ```
 
@@ -2782,10 +2782,24 @@ queue. See [AudioStream.c](moonlight-common-c/moonlight-common-c/src/AudioStream
 [sdlaud.cpp](app/streaming/audio/renderers/sdlaud.cpp).
 Audio packet duration controls its sample cadence, independent of video FPS.
 
-The SDL renderer requests at least 480 samples (10 ms) or three Opus frames,
-providing buffering for audio jitter. It uses pending-audio and device-queue
-limits (including 30 ms and 50 ms checks) rather than video timestamps to control
-backpressure. Audio startup intentionally discards an initial backlog of about
+The SDL renderer (updated 2026-09-26) is callback driven. `audio.cpp` hands it
+compressed Opus packets, including zero-length placeholders for packets lost on
+the network, and the SDL device callback decodes them through
+`Session::arDecodeForRenderer` as it consumes audio, so the decoder is used on
+one thread only. The device period is at least 480 samples (10 ms). The packet
+queue is a jitter buffer whose target comes from the `audiobuffer` preference
+(0 = automatic, starting at 20 ms, growing 5 ms per concealed late packet and
+10 ms per underrun up to 80 ms, and shrinking 5 ms after 60 s without trouble;
+fixed values are 10/20/30/50/80 ms in the UI). Playback waits until the queue
+holds the target plus one period. When the queue is empty the callback asks
+Opus for up to 30 ms of packet loss concealment. Beyond that it fades out over
+2 ms and waits for the target again before fading back in. When more than twice
+the target plus one packet is buffered, it decodes and drops packets back down
+to the target, cross-fading each drop over 2 ms. Gaps over 500 ms (muting,
+reconnects) are not counted as underruns. Counts are logged about once a second
+when they change, and as totals when the renderer closes. There is no clock
+drift resampling; drift appears as occasional concealment or cross-faded drops.
+Video timestamps are not used. Audio startup intentionally discards an initial backlog of about
 500 ms; renderer reinitialization similarly prevents downtime becoming permanent
 queued audio latency. Muting can suppress audio processing without retiming VRR.
 
