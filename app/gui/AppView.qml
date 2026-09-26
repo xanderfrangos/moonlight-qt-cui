@@ -119,7 +119,7 @@ import AppModel 1.0; AppModel {}', parent, '')
             y: appIcon.y + 8
             width: appIcon.width + 8
             height: appIcon.height + 6
-            radius: TvTheme.cardRadius + 4
+            radius: TvTheme.artRadius + 4
             color: "black"
             opacity: 0.2
         }
@@ -129,7 +129,7 @@ import AppModel 1.0; AppModel {}', parent, '')
             y: appIcon.y + 4
             width: appIcon.width
             height: appIcon.height
-            radius: TvTheme.cardRadius
+            radius: TvTheme.artRadius
             color: "black"
             opacity: 0.35
         }
@@ -144,7 +144,7 @@ import AppModel 1.0; AppModel {}', parent, '')
             Rectangle {
                 anchors.fill: parent
                 anchors.margins: -9
-                radius: 10
+                radius: TvTheme.artRadius + 9
                 color: "transparent"
                 border.width: 6
                 border.color: Material.accent
@@ -152,12 +152,12 @@ import AppModel 1.0; AppModel {}', parent, '')
             }
 
             // The border overlaps the art by a pixel, so no gap shows between
-            // them when the card is scaled. The small radius keeps the square
-            // corners of the art from poking out.
+            // them when the card is scaled. Its inner edge follows the art's
+            // rounded corners.
             Rectangle {
                 anchors.fill: parent
                 anchors.margins: -3
-                radius: 4
+                radius: TvTheme.artRadius + 3
                 color: "transparent"
                 border.width: 4
                 border.color: Material.accent
@@ -170,7 +170,21 @@ import AppModel 1.0; AppModel {}', parent, '')
             id: appIcon
             anchors.horizontalCenter: parent.horizontalCenter
             y: 10
-            source: model.boxart
+            source: roundedUrl(model.boxart)
+
+            // The art keeps its own size so the placeholder checks below
+            // still work. Its corners are rounded by RoundedImageProvider.
+            function roundedUrl(url) {
+                if (url == "") {
+                    return ""
+                }
+
+                // Base64url encode the URL so it can be embedded in the image URL
+                var art = Qt.btoa(url.toString()).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+
+                // Base64url never produces a dot, so the drawn size and radius follow one
+                return "image://rounded/" + art + "." + artWidth + "." + artHeight + "." + TvTheme.artRadius
+            }
 
             onSourceSizeChanged: {
                 // Nearly all of Nvidia's official box art does not match the dimensions of placeholder

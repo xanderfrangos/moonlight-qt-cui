@@ -72,6 +72,8 @@ QtObject {
 
     // Box art and small cards
     readonly property int cardRadius: 12
+    // Game box art, slightly rounded
+    readonly property int artRadius: 6
     // Larger tiles, like the computer cards
     readonly property int tileRadius: 24
     readonly property int dialogRadius: 29

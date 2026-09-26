@@ -62,6 +62,7 @@
 #include "gui/inputmodetracker.h"
 #include "gui/blurredimageprovider.h"
 #include "gui/gradientimageprovider.h"
+#include "gui/roundedimageprovider.h"
 #include "windowsvblankvirtualization.h"
 
 #if defined(Q_OS_WIN32)
@@ -1162,6 +1163,7 @@ int main(int argc, char *argv[])
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("blurred"), new BlurredImageProvider());
     engine.addImageProvider(QStringLiteral("tvgradient"), new GradientImageProvider());
+    engine.addImageProvider(QStringLiteral("rounded"), new RoundedImageProvider());
     QString initialView;
     bool hasGUI = true;
 

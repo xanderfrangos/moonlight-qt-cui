@@ -220,6 +220,7 @@ SOURCES += \
     gui/blurredimageprovider.cpp \
     gui/dither.cpp \
     gui/gradientimageprovider.cpp \
+    gui/roundedimageprovider.cpp \
     streaming/video/overlaymanager.cpp \
     streaming/video/overlaypainter.cpp \
     streaming/video/statsgraphs.cpp \
@@ -283,6 +284,7 @@ HEADERS += \
     gui/blurredimageprovider.h \
     gui/dither.h \
     gui/gradientimageprovider.h \
+    gui/roundedimageprovider.h \
     streaming/video/overlaymanager.h \
     streaming/video/overlaypainter.h \
     streaming/video/statsgraphs.h \
