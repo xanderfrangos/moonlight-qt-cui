@@ -50,6 +50,7 @@ struct Sample {
 struct Sweep {
     std::vector<Sample> samples;
     QString error;
+    bool cancelled = false;
 };
 
 // The codec author's good-quality bitrate, rounded up to 5 Mbps steps
@@ -422,7 +423,7 @@ Sample runSample(pyrowave_device device, Renderer& renderer, int width, int heig
     return sample;
 }
 
-Sweep runSweep(int fps)
+Sweep runSweep(int fps, const std::atomic<bool>& cancelled)
 {
     Sweep result;
     pyrowave_device device = nullptr;
@@ -444,6 +445,11 @@ Sweep runSweep(int fps)
     for (const auto& resolution : resolutions) {
         for (bool chroma444 : {true, false}) {
             for (bool hdr : {true, false}) {
+                if (cancelled) {
+                    result.cancelled = true;
+                    pyrowave_device_destroy(device);
+                    return result;
+                }
                 Sample sample = runSample(device, renderer, resolution[0], resolution[1], fps,
                                           chroma444, hdr,
                                           targetBitrateKbps(resolution[0], resolution[1], fps,
@@ -488,6 +494,7 @@ PyroWaveCalibrator::PyroWaveCalibrator(QObject* parent) : QObject(parent) {}
 
 PyroWaveCalibrator::~PyroWaveCalibrator()
 {
+    m_Cancelled = true;
     if (m_Worker) {
         m_Worker->wait();
         delete m_Worker;
@@ -515,14 +522,20 @@ void PyroWaveCalibrator::start(int fps)
     emit changed();
 #else
     m_Running = true;
+    m_Cancelled = false;
     m_Results.clear();
     m_Message = tr("Testing resolutions and PyroWave formats on this device…");
     emit changed();
 
     m_Worker = QThread::create([this, fps] {
-        const Sweep sweep = runSweep(fps);
+        const Sweep sweep = runSweep(fps, m_Cancelled);
         QMetaObject::invokeMethod(this, [this, sweep] {
             m_Running = false;
+            if (sweep.cancelled) {
+                m_Message = tr("Local decode test cancelled.");
+                emit changed();
+                return;
+            }
             for (const auto& sample : sweep.samples) m_Results.append(toMap(sample));
             if (!sweep.error.isEmpty()) {
                 m_Message = sweep.error;
@@ -540,4 +553,11 @@ void PyroWaveCalibrator::start(int fps)
     });
     m_Worker->start();
 #endif
+}
+
+void PyroWaveCalibrator::cancel()
+{
+    if (m_Running) {
+        m_Cancelled = true;
+    }
 }

@@ -6,6 +6,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <atomic>
+
 // Runs a short synthetic decode sweep without changing the stream settings.
 // The estimate covers local decode capacity; it cannot measure a host or LAN.
 class PyroWaveCalibrator : public QObject
@@ -25,6 +27,9 @@ public:
 
     Q_INVOKABLE void start(int fps);
 
+    // Stops a running test after the current format. Its results are discarded.
+    Q_INVOKABLE void cancel();
+
 signals:
     void changed();
 
@@ -33,4 +38,5 @@ private:
     QString m_Message;
     QVariantList m_Results;
     QPointer<QThread> m_Worker;
+    std::atomic<bool> m_Cancelled{false};
 };

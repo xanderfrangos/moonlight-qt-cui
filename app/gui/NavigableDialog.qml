@@ -47,6 +47,9 @@ Dialog {
         else if (standardButtons & Dialog.Cancel) {
             reject = { "role": "reject", "text": rejectText || qsTr("Cancel") }
         }
+        else if (standardButtons & Dialog.Close) {
+            reject = { "role": "reject", "text": rejectText || qsTr("Close") }
+        }
 
         var buttons = []
         if (destructive) {
@@ -66,16 +69,19 @@ Dialog {
     // What the TV mode Help button does
     signal tvHelpRequested()
 
-    // Focuses the first button: the primary one, or the safe one when
-    // accepting can't be undone
-    function focusFirstButton() {
+    // The first button: the primary one, or the safe one when accepting
+    // can't be undone
+    function firstButton() {
         if (SystemProperties.tvMode) {
-            if (footer && footer.firstButton) {
-                footer.firstButton.forceActiveFocus(Qt.TabFocus)
-            }
+            return footer ? footer.firstButton : null
         }
-        else if (footer && footer.count > 0) {
-            footer.itemAt(0).forceActiveFocus(Qt.TabFocus)
+        return footer && footer.count > 0 ? footer.itemAt(0) : null
+    }
+
+    function focusFirstButton() {
+        var button = firstButton()
+        if (button) {
+            button.forceActiveFocus(Qt.TabFocus)
         }
     }
 

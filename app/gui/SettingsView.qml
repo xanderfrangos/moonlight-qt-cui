@@ -1004,8 +1004,116 @@ Flickable {
                     id: calibrationDialog
                     title: qsTr("PyroWave local decode test — %1 FPS").arg(StreamingPreferences.fps)
                     width: Math.min(settingsPage.width - 24, 860)
-                    height: Math.min(settingsPage.height - 24, 560)
+                    // Tall enough to show every result above the Close button,
+                    // scrolling only when the page is shorter than that
+                    height: Math.min(settingsPage.height - 24, implicitHeight)
                     standardButtons: Dialog.Close
+
+                    // Closing, including with Escape or the gamepad's back
+                    // button, stops a test that is still running
+                    onClosed: PyroWaveCalibrator.cancel()
+
+                    // Focus goes into the dialog, so Escape reaches it. The
+                    // first result is focused once the test finishes.
+                    onOpened: focusFirstOption()
+
+                    readonly property bool testing: PyroWaveCalibrator.running
+                    onTestingChanged: {
+                        if (!testing && opened) {
+                            // The buttons are enabled by their own bindings
+                            // on the results, which may not have updated yet
+                            Qt.callLater(focusFirstOption)
+                        }
+                    }
+
+                    // The result buttons by their place on screen: two rows
+                    // per resolution (10-bit above 8-bit) and a column for
+                    // each chroma format
+                    property var optionButtons: ({})
+
+                    function registerOption(button) {
+                        optionButtons[button.gridRow + "," + button.gridColumn] = button
+                    }
+
+                    function unregisterOption(button) {
+                        var key = button.gridRow + "," + button.gridColumn
+                        if (optionButtons[key] === button) {
+                            delete optionButtons[key]
+                        }
+                    }
+
+                    function optionAt(row, column) {
+                        var button = optionButtons[row + "," + column]
+                        return button && button.enabled ? button : null
+                    }
+
+                    function focusFirstOption() {
+                        for (var row = 0; row < rows.length * 2; row++) {
+                            for (var column = 0; column < 2; column++) {
+                                var button = optionAt(row, column)
+                                if (button) {
+                                    button.forceActiveFocus(Qt.TabFocus)
+                                    return
+                                }
+                            }
+                        }
+                        focusFirstButton()
+                    }
+
+                    // Moves focus around the grid, skipping formats that
+                    // can't be applied. In the settings page the gamepad
+                    // sends Tab and Shift+Tab for down and up.
+                    function navigateFrom(button, event) {
+                        var rowStep = 0
+                        var columnStep = 0
+                        if (event.key === Qt.Key_Up || event.key === Qt.Key_Backtab ||
+                                (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) {
+                            rowStep = -1
+                        }
+                        else if (event.key === Qt.Key_Down || event.key === Qt.Key_Tab) {
+                            rowStep = 1
+                        }
+                        else if (event.key === Qt.Key_Left) {
+                            columnStep = -1
+                        }
+                        else if (event.key === Qt.Key_Right) {
+                            columnStep = 1
+                        }
+                        else {
+                            return
+                        }
+                        event.accepted = true
+
+                        var target = null
+                        if (columnStep !== 0) {
+                            target = optionAt(button.gridRow, button.gridColumn + columnStep)
+                        }
+                        else {
+                            // The nearest row with an option, preferring the
+                            // same column
+                            for (var row = button.gridRow + rowStep;
+                                 !target && row >= 0 && row < rows.length * 2; row += rowStep) {
+                                target = optionAt(row, button.gridColumn) || optionAt(row, 1 - button.gridColumn)
+                            }
+                            // Below the last row is the Close button
+                            if (!target && rowStep > 0) {
+                                target = firstButton()
+                            }
+                        }
+                        if (target) {
+                            target.forceActiveFocus(Qt.TabFocus)
+                        }
+                    }
+
+                    function ensureVisible(item) {
+                        var top = item.mapToItem(calibrationTable, 0, 0).y
+                        if (top < calibrationFlickable.contentY) {
+                            calibrationFlickable.contentY = top
+                        }
+                        else if (top + item.height > calibrationFlickable.contentY + calibrationFlickable.height) {
+                            calibrationFlickable.contentY = top + item.height - calibrationFlickable.height
+                        }
+                    }
 
                     readonly property var rows: (Qt.platform.os === "linux" ? [
                         { name: "4K", width: 3840, height: 2160 },
@@ -1093,9 +1201,11 @@ Flickable {
                     }
 
                     contentItem: Flickable {
+                        id: calibrationFlickable
                         clip: true
                         contentWidth: width
                         contentHeight: calibrationTable.height
+                        implicitHeight: calibrationTable.height
 
                         Column {
                             id: calibrationTable
@@ -1143,6 +1253,9 @@ Flickable {
                                         Repeater {
                                             model: [0, 1]
                                             delegate: Button {
+                                                id: chroma444Button
+                                                readonly property int gridRow: calibrationRow.rowIndex * 2 + index
+                                                readonly property int gridColumn: 0
                                                 width: parent.width
                                                 height: 34
                                                 font.pointSize: 10
@@ -1153,6 +1266,10 @@ Flickable {
                                                 ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                                                 ToolTip.text: calibrationDialog.optionDetail(option)
                                                 onClicked: calibrationDialog.applyChoice(option)
+                                                onActiveFocusChanged: if (activeFocus) calibrationDialog.ensureVisible(chroma444Button)
+                                                Keys.onPressed: (event) => calibrationDialog.navigateFrom(chroma444Button, event)
+                                                Component.onCompleted: calibrationDialog.registerOption(chroma444Button)
+                                                Component.onDestruction: calibrationDialog.unregisterOption(chroma444Button)
                                             }
                                         }
                                     }
@@ -1163,6 +1280,9 @@ Flickable {
                                         Repeater {
                                             model: [2, 3]
                                             delegate: Button {
+                                                id: chroma420Button
+                                                readonly property int gridRow: calibrationRow.rowIndex * 2 + index
+                                                readonly property int gridColumn: 1
                                                 width: parent.width
                                                 height: 34
                                                 font.pointSize: 10
@@ -1173,6 +1293,10 @@ Flickable {
                                                 ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                                                 ToolTip.text: calibrationDialog.optionDetail(option)
                                                 onClicked: calibrationDialog.applyChoice(option)
+                                                onActiveFocusChanged: if (activeFocus) calibrationDialog.ensureVisible(chroma420Button)
+                                                Keys.onPressed: (event) => calibrationDialog.navigateFrom(chroma420Button, event)
+                                                Component.onCompleted: calibrationDialog.registerOption(chroma420Button)
+                                                Component.onDestruction: calibrationDialog.unregisterOption(chroma420Button)
                                             }
                                         }
                                     }
