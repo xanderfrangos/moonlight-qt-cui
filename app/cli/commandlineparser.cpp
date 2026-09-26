@@ -39,6 +39,11 @@ public:
         addHelpOption();
         addVersionOption();
         addOption(QCommandLineOption("haptics-license", "Print haptics component notices, licenses and covered source (use alone)."));
+        // Applied in main() before this parser runs. Keep the older names as
+        // aliases so all command parsers accept the same launch options.
+        addToggleOption("gamepad-ui", "the gamepad UI, a GUI suited to gamepads and TVs, for this launch");
+        addToggleOption("controller-ui", "the gamepad UI (same as --gamepad-ui)");
+        addToggleOption("tv-mode", "the gamepad UI (same as --gamepad-ui)");
     }
 
     void handleHelpAndVersionOptions()
@@ -166,12 +171,6 @@ GlobalCommandLineParser::ParseResult GlobalCommandLineParser::parse(const QStrin
         "See 'moonlight <action> --help' for help of specific action."
     );
     parser.addPositionalArgument("action", "Action to execute", "<action>");
-
-    // TV mode is applied in main() before this parser runs, but it must be
-    // registered here so it isn't rejected as an unknown option.
-    // --tv-mode is the original name for --controller-ui.
-    parser.addToggleOption("controller-ui", "the controller UI, a GUI suited to gamepads and TVs, for this launch");
-    parser.addToggleOption("tv-mode", "the controller UI (same as --controller-ui)");
 
     parser.parse(args);
     auto posArgs = parser.positionalArguments();

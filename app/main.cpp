@@ -455,10 +455,11 @@ static void setInjectedEnvironmentVariable(const char* name, const QByteArray& v
     qputenv("MOONLIGHT_INJECTED_ENV", injectedEnvVars);
 }
 
-// TV mode affects settings that must be applied before the QGuiApplication
+// Gamepad UI affects settings that must be applied before the QGuiApplication
 // (and therefore GlobalCommandLineParser) is created, so we look for its
-// options directly. --controller-ui is an alias for --tv-mode. Returns -1 if
-// none of them were passed, otherwise 1 or 0 for the last one given.
+// options directly. --controller-ui and --tv-mode remain aliases for
+// --gamepad-ui. Returns -1 if none were passed, otherwise 1 or 0 for the last
+// one given.
 static int getTvModeArgument(int argc, char *argv[])
 {
     // Our command line parser also accepts long options with a single dash
@@ -472,10 +473,12 @@ static int getTvModeArgument(int argc, char *argv[])
 
     int tvModeArgument = -1;
     for (int i = 1; i < argc; i++) {
-        if (isOption(argv[i], "tv-mode") || isOption(argv[i], "controller-ui")) {
+        if (isOption(argv[i], "gamepad-ui") || isOption(argv[i], "controller-ui") ||
+                isOption(argv[i], "tv-mode")) {
             tvModeArgument = 1;
         }
-        else if (isOption(argv[i], "no-tv-mode") || isOption(argv[i], "no-controller-ui")) {
+        else if (isOption(argv[i], "no-gamepad-ui") || isOption(argv[i], "no-controller-ui") ||
+                 isOption(argv[i], "no-tv-mode")) {
             tvModeArgument = 0;
         }
     }

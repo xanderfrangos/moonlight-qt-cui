@@ -442,8 +442,8 @@ public:
     UIDisplayMode uiDisplayMode;
     // GUI scale in percent. Takes effect on the next launch.
     int uiScale;
-    // Controller and TV friendly GUI. Takes effect on the next launch and
-    // can be overridden with --controller-ui/--no-controller-ui (or --tv-mode).
+    // Gamepad and TV friendly GUI. Takes effect on the next launch and can be
+    // overridden with --gamepad-ui/--no-gamepad-ui (or the older aliases).
     bool tvMode;
     Language language;
     CaptureSysKeysMode captureSysKeysMode;
