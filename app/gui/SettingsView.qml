@@ -1312,6 +1312,7 @@ Flickable {
                         width: parent.width
                         wrapMode: Text.Wrap
                         text: qsTr("Only affects 10-bit SDR streams. Reconnect the stream after changing this setting.")
+                        bottomPadding: 10
                     }
                 }
 
@@ -1322,7 +1323,7 @@ Flickable {
 
                     Label {
                         width: parent.width
-                        text: qsTr("Smooth banded gradients")
+                        text: qsTr("Reduce banding")
                         font.pointSize: 12
                         wrapMode: Text.Wrap
                     }
@@ -2677,171 +2678,201 @@ Flickable {
                         ToolTip.text: qsTr("Automatic sizes the graphs for the stream window, the way 100% looks at 1080p.")
                     }
 
-                    Label {
+                    Row {
                         width: parent.width
-                        text: qsTr("Graph height")
-                        font.pointSize: 12
-                        wrapMode: Text.Wrap
-                    }
+                        spacing: 10
 
-                    AutoResizingComboBox {
-                        id: performanceGraphHeightComboBox
-                        textRole: "text"
-                        model: ListModel {
-                            id: performanceGraphHeightListModel
-                            ListElement {
-                                text: qsTr("Compact")
-                                val: StreamingPreferences.PGH_COMPACT
+                        Column {
+                            width: (parent.width - parent.spacing) / 2
+                            spacing: 5
+
+                            Label {
+                                width: parent.width
+                                text: qsTr("Graph position")
+                                font.pointSize: 12
+                                wrapMode: Text.Wrap
                             }
-                            ListElement {
-                                text: qsTr("Normal")
-                                val: StreamingPreferences.PGH_NORMAL
-                            }
-                            ListElement {
-                                text: qsTr("Tall")
-                                val: StreamingPreferences.PGH_TALL
-                            }
-                        }
-                        currentIndex: {
-                            for (var i = 0; i < performanceGraphHeightListModel.count; i++) {
-                                if (performanceGraphHeightListModel.get(i).val === StreamingPreferences.performanceGraphHeight) {
-                                    return i
+
+                            AutoResizingComboBox {
+                                id: performanceGraphPositionComboBox
+                                textRole: "text"
+                                model: ListModel {
+                                    id: performanceGraphPositionListModel
+                                    ListElement {
+                                        text: qsTr("Right (text stats on the left)")
+                                        val: StreamingPreferences.PGP_RIGHT
+                                    }
+                                    ListElement {
+                                        text: qsTr("Left (text stats on the right)")
+                                        val: StreamingPreferences.PGP_LEFT
+                                    }
+                                }
+                                currentIndex: {
+                                    for (var i = 0; i < performanceGraphPositionListModel.count; i++) {
+                                        if (performanceGraphPositionListModel.get(i).val === StreamingPreferences.performanceGraphPosition) {
+                                            return i
+                                        }
+                                    }
+                                    return 0
+                                }
+                                onActivated: {
+                                    StreamingPreferences.performanceGraphPosition = performanceGraphPositionListModel.get(currentIndex).val
+                                }
+                                Component.onCompleted: {
+                                    recalculateWidth()
+                                    languageChanged.connect(recalculateWidth)
                                 }
                             }
-                            return 1
                         }
-                        onActivated: {
-                            StreamingPreferences.performanceGraphHeight = performanceGraphHeightListModel.get(currentIndex).val
-                        }
-                        Component.onCompleted: {
-                            recalculateWidth()
-                            languageChanged.connect(recalculateWidth)
-                        }
-                    }
 
-                    Label {
-                        width: parent.width
-                        text: qsTr("Graph position")
-                        font.pointSize: 12
-                        wrapMode: Text.Wrap
-                    }
+                        Column {
+                            width: (parent.width - parent.spacing) / 2
+                            spacing: 5
 
-                    AutoResizingComboBox {
-                        id: performanceGraphPositionComboBox
-                        textRole: "text"
-                        model: ListModel {
-                            id: performanceGraphPositionListModel
-                            ListElement {
-                                text: qsTr("Right (text stats on the left)")
-                                val: StreamingPreferences.PGP_RIGHT
+                            Label {
+                                width: parent.width
+                                text: qsTr("Graph height")
+                                font.pointSize: 12
+                                wrapMode: Text.Wrap
                             }
-                            ListElement {
-                                text: qsTr("Left (text stats on the right)")
-                                val: StreamingPreferences.PGP_LEFT
-                            }
-                        }
-                        currentIndex: {
-                            for (var i = 0; i < performanceGraphPositionListModel.count; i++) {
-                                if (performanceGraphPositionListModel.get(i).val === StreamingPreferences.performanceGraphPosition) {
-                                    return i
+
+                            AutoResizingComboBox {
+                                id: performanceGraphHeightComboBox
+                                textRole: "text"
+                                model: ListModel {
+                                    id: performanceGraphHeightListModel
+                                    ListElement {
+                                        text: qsTr("Compact")
+                                        val: StreamingPreferences.PGH_COMPACT
+                                    }
+                                    ListElement {
+                                        text: qsTr("Normal")
+                                        val: StreamingPreferences.PGH_NORMAL
+                                    }
+                                    ListElement {
+                                        text: qsTr("Tall")
+                                        val: StreamingPreferences.PGH_TALL
+                                    }
+                                }
+                                currentIndex: {
+                                    for (var i = 0; i < performanceGraphHeightListModel.count; i++) {
+                                        if (performanceGraphHeightListModel.get(i).val === StreamingPreferences.performanceGraphHeight) {
+                                            return i
+                                        }
+                                    }
+                                    return 1
+                                }
+                                onActivated: {
+                                    StreamingPreferences.performanceGraphHeight = performanceGraphHeightListModel.get(currentIndex).val
+                                }
+                                Component.onCompleted: {
+                                    recalculateWidth()
+                                    languageChanged.connect(recalculateWidth)
                                 }
                             }
-                            return 0
-                        }
-                        onActivated: {
-                            StreamingPreferences.performanceGraphPosition = performanceGraphPositionListModel.get(currentIndex).val
-                        }
-                        Component.onCompleted: {
-                            recalculateWidth()
-                            languageChanged.connect(recalculateWidth)
                         }
                     }
 
-                    Label {
+                    Row {
                         width: parent.width
-                        text: qsTr("Graph background opacity")
-                        font.pointSize: 12
-                        wrapMode: Text.Wrap
-                    }
+                        spacing: 10
 
-                    AutoResizingComboBox {
-                        id: performanceGraphOpacityComboBox
-                        textRole: "text"
-                        model: ListModel {
-                            id: performanceGraphOpacityListModel
-                            ListElement {
-                                text: qsTr("95%")
-                                val: 95
+                        Column {
+                            width: (parent.width - parent.spacing) / 2
+                            spacing: 5
+
+                            Label {
+                                width: parent.width
+                                text: qsTr("Graph history")
+                                font.pointSize: 12
+                                wrapMode: Text.Wrap
                             }
-                            ListElement {
-                                text: qsTr("75%")
-                                val: 75
-                            }
-                            ListElement {
-                                text: qsTr("50%")
-                                val: 50
-                            }
-                            ListElement {
-                                text: qsTr("25%")
-                                val: 25
-                            }
-                        }
-                        currentIndex: {
-                            for (var i = 0; i < performanceGraphOpacityListModel.count; i++) {
-                                if (performanceGraphOpacityListModel.get(i).val === StreamingPreferences.performanceGraphOpacity) {
-                                    return i
+
+                            AutoResizingComboBox {
+                                id: performanceGraphHistoryComboBox
+                                textRole: "text"
+                                model: ListModel {
+                                    id: performanceGraphHistoryListModel
+                                    ListElement {
+                                        text: qsTr("5 seconds")
+                                        val: 5
+                                    }
+                                    ListElement {
+                                        text: qsTr("10 seconds")
+                                        val: 10
+                                    }
+                                    ListElement {
+                                        text: qsTr("30 seconds")
+                                        val: 30
+                                    }
+                                }
+                                currentIndex: {
+                                    for (var i = 0; i < performanceGraphHistoryListModel.count; i++) {
+                                        if (performanceGraphHistoryListModel.get(i).val === StreamingPreferences.performanceGraphHistory) {
+                                            return i
+                                        }
+                                    }
+                                    return 1
+                                }
+                                onActivated: {
+                                    StreamingPreferences.performanceGraphHistory = performanceGraphHistoryListModel.get(currentIndex).val
+                                }
+                                Component.onCompleted: {
+                                    recalculateWidth()
+                                    languageChanged.connect(recalculateWidth)
                                 }
                             }
-                            return 1
                         }
-                        onActivated: {
-                            StreamingPreferences.performanceGraphOpacity = performanceGraphOpacityListModel.get(currentIndex).val
-                        }
-                        Component.onCompleted: {
-                            recalculateWidth()
-                            languageChanged.connect(recalculateWidth)
-                        }
-                    }
 
-                    Label {
-                        width: parent.width
-                        text: qsTr("Graph history")
-                        font.pointSize: 12
-                        wrapMode: Text.Wrap
-                    }
+                        Column {
+                            width: (parent.width - parent.spacing) / 2
+                            spacing: 5
 
-                    AutoResizingComboBox {
-                        id: performanceGraphHistoryComboBox
-                        textRole: "text"
-                        model: ListModel {
-                            id: performanceGraphHistoryListModel
-                            ListElement {
-                                text: qsTr("5 seconds")
-                                val: 5
+                            Label {
+                                width: parent.width
+                                text: qsTr("Graph background opacity")
+                                font.pointSize: 12
+                                wrapMode: Text.Wrap
                             }
-                            ListElement {
-                                text: qsTr("10 seconds")
-                                val: 10
-                            }
-                            ListElement {
-                                text: qsTr("30 seconds")
-                                val: 30
-                            }
-                        }
-                        currentIndex: {
-                            for (var i = 0; i < performanceGraphHistoryListModel.count; i++) {
-                                if (performanceGraphHistoryListModel.get(i).val === StreamingPreferences.performanceGraphHistory) {
-                                    return i
+
+                            AutoResizingComboBox {
+                                id: performanceGraphOpacityComboBox
+                                textRole: "text"
+                                model: ListModel {
+                                    id: performanceGraphOpacityListModel
+                                    ListElement {
+                                        text: qsTr("95%")
+                                        val: 95
+                                    }
+                                    ListElement {
+                                        text: qsTr("75%")
+                                        val: 75
+                                    }
+                                    ListElement {
+                                        text: qsTr("50%")
+                                        val: 50
+                                    }
+                                    ListElement {
+                                        text: qsTr("25%")
+                                        val: 25
+                                    }
+                                }
+                                currentIndex: {
+                                    for (var i = 0; i < performanceGraphOpacityListModel.count; i++) {
+                                        if (performanceGraphOpacityListModel.get(i).val === StreamingPreferences.performanceGraphOpacity) {
+                                            return i
+                                        }
+                                    }
+                                    return 1
+                                }
+                                onActivated: {
+                                    StreamingPreferences.performanceGraphOpacity = performanceGraphOpacityListModel.get(currentIndex).val
+                                }
+                                Component.onCompleted: {
+                                    recalculateWidth()
+                                    languageChanged.connect(recalculateWidth)
                                 }
                             }
-                            return 1
-                        }
-                        onActivated: {
-                            StreamingPreferences.performanceGraphHistory = performanceGraphHistoryListModel.get(currentIndex).val
-                        }
-                        Component.onCompleted: {
-                            recalculateWidth()
-                            languageChanged.connect(recalculateWidth)
                         }
                     }
 
