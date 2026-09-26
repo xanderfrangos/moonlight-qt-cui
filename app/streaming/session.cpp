@@ -656,6 +656,7 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_GamepadMenuJsId(-1),
       m_FlushingWindowEventsRef(0),
       m_ShouldExit(false),
+      m_QuitHostAppRequested(false),
       m_AsyncConnectionSuccess(false),
       m_PortTestResults(0),
       m_ConnectionStartedAtTicks(0),
@@ -1494,7 +1495,8 @@ private:
         // Only quit the running app if our session terminated gracefully
         bool shouldQuit =
                 !m_Session->m_UnexpectedTermination &&
-                m_Session->m_Preferences->quitAppAfter;
+                (m_Session->m_Preferences->quitAppAfter ||
+                 m_Session->m_QuitHostAppRequested);
 
         // Notify the UI
         if (shouldQuit) {
@@ -2021,8 +2023,9 @@ void Session::activateGamepadMenuSelection()
         return;
 
     case GamepadMenuEndSession:
-        // Quit the app running on the host in addition to ending our stream
-        m_Preferences->quitAppAfter = true;
+        // Quit the app running on the host in addition to ending our stream.
+        // This is a per-session request; don't modify the shared preferences.
+        m_QuitHostAppRequested = true;
         break;
 
     case GamepadMenuDisconnect:
@@ -2237,9 +2240,10 @@ void Session::setShouldExit(bool quitHostApp)
     // If the caller has explicitly asked us to quit the host app,
     // override whatever the preferences say and do it. If the
     // caller doesn't override to force quit, let the preferences
-    // dictate what we do.
+    // dictate what we do. This must not modify the shared preferences,
+    // or a later save would persist it as the user's setting.
     if (quitHostApp) {
-        m_Preferences->quitAppAfter = true;
+        m_QuitHostAppRequested = true;
     }
 
     m_ShouldExit = true;
