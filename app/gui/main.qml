@@ -1005,7 +1005,6 @@ ApplicationWindow {
         canGoBack: stackView.depth > 1
         canOpenSettings: !(stackView.currentItem instanceof SettingsView)
         focusItem: window.activeFocusItem
-        safeX: tvSafeX
         safeY: tvSafeY
     }
 

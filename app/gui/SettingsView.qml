@@ -1776,16 +1776,15 @@ Flickable {
                 }
 
                 Row {
+                    id: uiDisplayScaleRow
                     width: parent.width
                     spacing: 10
 
                     Column {
-                        width: (parent.width - parent.spacing) / 2
                         spacing: 5
                         visible: SystemProperties.hasDesktopEnvironment
 
                         Label {
-                            width: parent.width
                             id: uiDisplayModeTitle
                             text: qsTr("GUI display mode")
                             font.pointSize: 12
@@ -1815,6 +1814,8 @@ Flickable {
                             }
 
                             id: uiDisplayModeComboBox
+                            // The column sizes to its contents, so bound the width by the row instead
+                            maximumWidth: (uiDisplayScaleRow.width - uiDisplayScaleRow.spacing) / 2
                             visible: SystemProperties.hasDesktopEnvironment
                             textRole: "text"
                             model: ListModel {
@@ -1840,12 +1841,10 @@ Flickable {
                     }
 
                     Column {
-                        width: (parent.width - parent.spacing) / 2
                         spacing: 5
                         visible: SystemProperties.supportsUiScale
 
                         Label {
-                            width: parent.width
                             id: uiScaleTitle
                             text: qsTr("GUI scale")
                             font.pointSize: 12
@@ -1855,6 +1854,7 @@ Flickable {
 
                         AutoResizingComboBox {
                             id: uiScaleComboBox
+                            maximumWidth: (uiDisplayScaleRow.width - uiDisplayScaleRow.spacing) / 2
                             visible: SystemProperties.supportsUiScale
                             textRole: "text"
                             model: ListModel {
@@ -2697,15 +2697,14 @@ Flickable {
                     }
 
                     Row {
+                        id: graphPositionRow
                         width: parent.width
                         spacing: 10
 
                         Column {
-                            width: (parent.width - parent.spacing) / 2
                             spacing: 5
 
                             Label {
-                                width: parent.width
                                 text: qsTr("Graph position")
                                 font.pointSize: 12
                                 wrapMode: Text.Wrap
@@ -2713,6 +2712,8 @@ Flickable {
 
                             AutoResizingComboBox {
                                 id: performanceGraphPositionComboBox
+                                // The column sizes to its contents, so bound the width by the row instead
+                                maximumWidth: (graphPositionRow.width - graphPositionRow.spacing) / 2
                                 textRole: "text"
                                 model: ListModel {
                                     id: performanceGraphPositionListModel
@@ -2744,11 +2745,9 @@ Flickable {
                         }
 
                         Column {
-                            width: (parent.width - parent.spacing) / 2
                             spacing: 5
 
                             Label {
-                                width: parent.width
                                 text: qsTr("Graph height")
                                 font.pointSize: 12
                                 wrapMode: Text.Wrap
@@ -2756,6 +2755,7 @@ Flickable {
 
                             AutoResizingComboBox {
                                 id: performanceGraphHeightComboBox
+                                maximumWidth: (graphPositionRow.width - graphPositionRow.spacing) / 2
                                 textRole: "text"
                                 model: ListModel {
                                     id: performanceGraphHeightListModel
@@ -2792,15 +2792,14 @@ Flickable {
                     }
 
                     Row {
+                        id: graphHistoryRow
                         width: parent.width
                         spacing: 10
 
                         Column {
-                            width: (parent.width - parent.spacing) / 2
                             spacing: 5
 
                             Label {
-                                width: parent.width
                                 text: qsTr("Graph history")
                                 font.pointSize: 12
                                 wrapMode: Text.Wrap
@@ -2808,6 +2807,7 @@ Flickable {
 
                             AutoResizingComboBox {
                                 id: performanceGraphHistoryComboBox
+                                maximumWidth: (graphHistoryRow.width - graphHistoryRow.spacing) / 2
                                 textRole: "text"
                                 model: ListModel {
                                     id: performanceGraphHistoryListModel
@@ -2843,11 +2843,9 @@ Flickable {
                         }
 
                         Column {
-                            width: (parent.width - parent.spacing) / 2
                             spacing: 5
 
                             Label {
-                                width: parent.width
                                 text: qsTr("Graph background opacity")
                                 font.pointSize: 12
                                 wrapMode: Text.Wrap
@@ -2855,6 +2853,7 @@ Flickable {
 
                             AutoResizingComboBox {
                                 id: performanceGraphOpacityComboBox
+                                maximumWidth: (graphHistoryRow.width - graphHistoryRow.spacing) / 2
                                 textRole: "text"
                                 model: ListModel {
                                     id: performanceGraphOpacityListModel

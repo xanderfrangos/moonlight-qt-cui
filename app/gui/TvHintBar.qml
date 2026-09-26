@@ -5,9 +5,10 @@ import StreamingPreferences 1.0
 import InputModeTracker 1.0
 import TvTheme 1.0
 
-// Shows what the gamepad buttons do on the current screen in TV mode.
-// It fades out while the mouse is in use, but keeps its space so the
-// page doesn't jump around.
+// Shows what the gamepad buttons do on the current screen in TV mode, in a
+// strip along the bottom of the window. It fades out while the mouse is in
+// use or the page shows no hints, but keeps its space so the page doesn't
+// jump around.
 Item {
     // Whether the page shows hints at all (segues don't)
     property bool active: true
@@ -19,8 +20,8 @@ Item {
     property bool canOpenSettings: true
     // The control with focus, which decides what the select button says
     property Item focusItem: null
-    // How far to stay in from the window's right and bottom edges
-    property int safeX: 0
+    // The window's safe area margin, which sets how far the hints stay in
+    // from the right edge and how much room the strip gives them
     property int safeY: 0
 
     // Face button positions, matching ControllerButtonStyle::FacePosition
@@ -59,39 +60,47 @@ Item {
         return qsTr("Select")
     }
 
-    implicitHeight: 72 + safeY
+    // Space above and below the row, kept tight so the strip stays slim
+    readonly property int verticalPadding: Math.round((safeY - 12) / 2)
 
-    Row {
-        anchors.right: parent.right
-        anchors.rightMargin: safeX
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.verticalCenterOffset: -safeY / 2
-        spacing: TvTheme.spacingXLarge
+    implicitHeight: hintRow.height + 2 * verticalPadding
+
+    Item {
+        anchors.fill: parent
 
         opacity: active && InputModeTracker.gamepadActive ? 1.0 : 0.0
+        visible: opacity > 0
         Behavior on opacity { NumberAnimation { duration: TvTheme.animationNormal } }
 
-        TvButtonHint {
-            position: swapped ? east : south
-            text: selectText
-        }
+        Row {
+            id: hintRow
+            anchors.right: parent.right
+            anchors.rightMargin: safeY
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: TvTheme.spacingLarge
 
-        TvButtonHint {
-            visible: inGrid && !inPopup
-            position: swapped ? north : west
-            text: qsTr("Options")
-        }
+            TvButtonHint {
+                position: swapped ? east : south
+                text: selectText
+            }
 
-        TvButtonHint {
-            visible: canOpenSettings && !inPopup && !editingSlider
-            position: swapped ? west : north
-            text: qsTr("Settings")
-        }
+            TvButtonHint {
+                visible: inGrid && !inPopup
+                position: swapped ? north : west
+                text: qsTr("Options")
+            }
 
-        TvButtonHint {
-            visible: !editingSlider
-            position: swapped ? south : east
-            text: inPopup ? qsTr("Close") : canGoBack ? qsTr("Back") : qsTr("Exit")
+            TvButtonHint {
+                visible: canOpenSettings && !inPopup && !editingSlider
+                position: swapped ? west : north
+                text: qsTr("Settings")
+            }
+
+            TvButtonHint {
+                visible: !editingSlider
+                position: swapped ? south : east
+                text: inPopup ? qsTr("Close") : canGoBack ? qsTr("Back") : qsTr("Exit")
+            }
         }
     }
 }
