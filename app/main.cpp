@@ -485,6 +485,46 @@ static int getTvModeArgument(int argc, char *argv[])
     return tvModeArgument;
 }
 
+// GUI scale is consumed before QGuiApplication is constructed because Qt reads
+// QT_SCALE_FACTOR only at startup. Accept both forms handled by
+// QCommandLineParser: --gui-scale=200 and --gui-scale 200 (also single-dash
+// long options, which our parser supports).
+static bool getGuiScaleArgument(int argc, char *argv[], int* guiScale)
+{
+    bool optionSet = false;
+    QString scaleValue;
+
+    for (int i = 1; i < argc; i++) {
+        const QString argument = QString::fromLocal8Bit(argv[i]);
+        if (argument == "--gui-scale" || argument == "-gui-scale") {
+            optionSet = true;
+            scaleValue = i + 1 < argc ? QString::fromLocal8Bit(argv[++i]) : QString();
+        }
+        else if (argument.startsWith("--gui-scale=")) {
+            optionSet = true;
+            scaleValue = argument.mid(QStringLiteral("--gui-scale=").size());
+        }
+        else if (argument.startsWith("-gui-scale=")) {
+            optionSet = true;
+            scaleValue = argument.mid(QStringLiteral("-gui-scale=").size());
+        }
+    }
+
+    if (!optionSet) {
+        *guiScale = -1;
+        return true;
+    }
+
+    bool ok;
+    const int parsedScale = scaleValue.toInt(&ok);
+    if (!ok || !StreamingPreferences::isValidUiScale(parsedScale)) {
+        return false;
+    }
+
+    *guiScale = parsedScale;
+    return true;
+}
+
 int main(int argc, char *argv[])
 {
     // Available headlessly from every package; includes the exact covered source.
@@ -532,13 +572,22 @@ int main(int argc, char *argv[])
     // TV mode can be forced on or off for this launch from the command line
     int tvModeArgument = getTvModeArgument(argc, argv);
     bool tvMode = tvModeArgument >= 0 ? tvModeArgument == 1 : StreamingPreferences::loadTvMode();
+    int guiScaleArgument = -1;
+    if (!getGuiScaleArgument(argc, argv, &guiScaleArgument)) {
+        fputs("Invalid --gui-scale value. Use one of 100, 125, 150, 175, 200, 250, 300, 350, or 400.\n", stderr);
+        return 1;
+    }
 
     // Apply GUI preferences that Qt only reads at startup. User-provided
-    // environment variables take precedence.
+    // environment variables take precedence over saved preferences. An
+    // explicit GUI-scale command-line option takes precedence over both.
     {
         // Scaling is only applied where we enable High DPI support (not EGLFS)
-        int uiScale = StreamingPreferences::loadUiScale();
-        if (uiScale != 100 && WMUtils::isRunningWindowManager() && !qEnvironmentVariableIsSet("QT_SCALE_FACTOR")) {
+        int uiScale = guiScaleArgument >= 0 ? guiScaleArgument : StreamingPreferences::loadUiScale();
+        if (WMUtils::isRunningWindowManager() && guiScaleArgument >= 0) {
+            setInjectedEnvironmentVariable("QT_SCALE_FACTOR", QByteArray::number(uiScale / 100.0));
+        }
+        else if (uiScale != 100 && WMUtils::isRunningWindowManager() && !qEnvironmentVariableIsSet("QT_SCALE_FACTOR")) {
             setInjectedEnvironmentVariable("QT_SCALE_FACTOR", QByteArray::number(uiScale / 100.0));
         }
 
@@ -1135,6 +1184,7 @@ int main(int argc, char *argv[])
 
     qInfo() << "TV mode:" << tvMode << (tvModeArgument >= 0 ? "(from command line)" : "");
     SystemProperties::setTvModeState(tvMode, tvModeArgument >= 0);
+    SystemProperties::setUiScaleOverridden(guiScaleArgument >= 0);
     if (tvMode) {
         // TV mode's typefaces are bundled, with their licenses beside them.
         // Figtree is the default and QML asks for Sora by name for titles.

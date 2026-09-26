@@ -47,7 +47,8 @@ Flickable {
         // A command line option keeps TV mode fixed across a restart
         var tvModeAfterRestart = SystemProperties.tvModeOverridden ? SystemProperties.tvMode : StreamingPreferences.tvMode
 
-        if ((SystemProperties.supportsUiScale && StreamingPreferences.uiScale !== SystemProperties.activeUiScale) ||
+        if ((SystemProperties.supportsUiScale && !SystemProperties.uiScaleOverridden &&
+             StreamingPreferences.uiScale !== SystemProperties.activeUiScale) ||
                 tvModeAfterRestart !== SystemProperties.tvMode) {
             restartDialog.open()
         }
@@ -2433,6 +2434,7 @@ Flickable {
                             id: uiScaleComboBox
                             maximumWidth: (uiDisplayScaleRow.width - uiDisplayScaleRow.spacing) / 2
                             visible: SystemProperties.supportsUiScale
+                            enabled: !SystemProperties.uiScaleOverridden
                             textRole: "text"
                             model: ListModel {
                                 id: uiScaleListModel
@@ -2440,10 +2442,12 @@ Flickable {
 
                             Component.onCompleted: {
                                 var scales = [100, 125, 150, 175, 200, 250, 300, 350, 400]
+                                var selectedScale = SystemProperties.uiScaleOverridden ?
+                                                       SystemProperties.activeUiScale : StreamingPreferences.uiScale
                                 currentIndex = 0
                                 for (var i = 0; i < scales.length; i++) {
                                     uiScaleListModel.append({ "text": qsTr("%1%").arg(scales[i]), "val": scales[i] })
-                                    if (scales[i] === StreamingPreferences.uiScale) {
+                                    if (scales[i] === selectedScale) {
                                         currentIndex = i
                                     }
                                 }
@@ -2454,7 +2458,7 @@ Flickable {
                             // ::onActivated must be used, as it only listens for when the index is changed by a human
                             onActivated: {
                                 var scale = uiScaleListModel.get(currentIndex).val
-                                if (StreamingPreferences.uiScale !== scale) {
+                                if (!SystemProperties.uiScaleOverridden && StreamingPreferences.uiScale !== scale) {
                                     StreamingPreferences.uiScale = scale
                                     promptRestartIfNeeded()
                                 }
@@ -2463,7 +2467,17 @@ Flickable {
                             ToolTip.delay: 1000
                             ToolTip.timeout: 5000
                             ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                            ToolTip.text: qsTr("Increases the size of text and controls in Moonlight, such as when using a TV. Requires restarting Moonlight.")
+                            ToolTip.text: SystemProperties.uiScaleOverridden ?
+                                              qsTr("The GUI scale is set by the --gui-scale command line option.") :
+                                              qsTr("Increases the size of text and controls in Moonlight, such as when using a TV. Requires restarting Moonlight. Can also be set for one launch with --gui-scale.")
+                        }
+
+                        Label {
+                            width: parent.width
+                            visible: SystemProperties.uiScaleOverridden
+                            font.pointSize: 9
+                            wrapMode: Text.Wrap
+                            text: qsTr("The GUI scale is overridden to %1% for this launch. Remove --gui-scale to use the saved setting.").arg(SystemProperties.activeUiScale)
                         }
                     }
                 }

@@ -465,17 +465,26 @@ QString StreamingPreferences::getSuffixFromLanguage(StreamingPreferences::Langua
     }
 }
 
+bool StreamingPreferences::isValidUiScale(int scale)
+{
+    // Keep this in sync with the GUI scale choices in SettingsView.qml.
+    static const int k_ValidScales[] = { 100, 125, 150, 175, 200, 250, 300, 350, 400 };
+    for (int validScale : k_ValidScales) {
+        if (scale == validScale) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int StreamingPreferences::loadUiScale()
 {
     QSettings settings;
 
     // Only accept the scale factors offered in the UI
-    static const int k_ValidScales[] = { 100, 125, 150, 175, 200, 250, 300, 350, 400 };
     int scale = settings.value(SER_UISCALE, 100).toInt();
-    for (int validScale : k_ValidScales) {
-        if (scale == validScale) {
-            return scale;
-        }
+    if (isValidUiScale(scale)) {
+        return scale;
     }
 
     return 100;

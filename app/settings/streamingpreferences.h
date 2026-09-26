@@ -28,6 +28,7 @@ public:
 
     // These preferences must be applied before the QGuiApplication is created,
     // so they can be read directly from storage without a preferences instance.
+    static bool isValidUiScale(int scale);
     static int loadUiScale();
     static bool loadTvMode();
 

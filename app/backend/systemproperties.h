@@ -34,6 +34,7 @@ public:
     Q_PROPERTY(QString versionString MEMBER versionString CONSTANT)
     Q_PROPERTY(bool supportsUiScale MEMBER supportsUiScale CONSTANT)
     Q_PROPERTY(int activeUiScale MEMBER activeUiScale CONSTANT)
+    Q_PROPERTY(bool uiScaleOverridden MEMBER uiScaleOverridden CONSTANT)
     Q_PROPERTY(bool hoverEffectsDisabled MEMBER hoverEffectsDisabled CONSTANT)
     Q_PROPERTY(bool tvMode MEMBER tvMode CONSTANT)
     Q_PROPERTY(bool tvModeOverridden MEMBER tvModeOverridden CONSTANT)
@@ -73,6 +74,8 @@ public:
     // Called by main() with the TV mode state for this launch, and whether it
     // was forced by a command line option rather than the saved preference
     static void setTvModeState(bool enabled, bool overridden);
+    // Called by main() when --gui-scale overrides the saved preference.
+    static void setUiScaleOverridden(bool overridden);
 
     // For code outside QML, such as the stream's overlays
     static bool isTvMode();
@@ -118,6 +121,7 @@ private:
     bool supportsLs1Upscaling;
     bool supportsUiScale;
     int activeUiScale;
+    bool uiScaleOverridden;
     bool hoverEffectsDisabled;
     bool tvMode;
     bool tvModeOverridden;

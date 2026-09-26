@@ -94,11 +94,17 @@ private:
 
 static bool s_TvMode = false;
 static bool s_TvModeOverridden = false;
+static bool s_UiScaleOverridden = false;
 
 void SystemProperties::setTvModeState(bool enabled, bool overridden)
 {
     s_TvMode = enabled;
     s_TvModeOverridden = overridden;
+}
+
+void SystemProperties::setUiScaleOverridden(bool overridden)
+{
+    s_UiScaleOverridden = overridden;
 }
 
 bool SystemProperties::isTvMode()
@@ -117,6 +123,7 @@ SystemProperties::SystemProperties()
     // GUI scaling is applied at startup via QT_SCALE_FACTOR (see main.cpp),
     // but not on EGLFS where we don't enable High DPI support.
     supportsUiScale = WMUtils::isRunningWindowManager();
+    uiScaleOverridden = supportsUiScale && s_UiScaleOverridden;
     activeUiScale = 100;
     if (qEnvironmentVariableIsSet("QT_SCALE_FACTOR")) {
         double scaleFactor = qEnvironmentVariable("QT_SCALE_FACTOR").toDouble();

@@ -44,6 +44,17 @@ public:
         addToggleOption("gamepad-ui", "the gamepad UI, a GUI suited to gamepads and TVs, for this launch");
         addToggleOption("controller-ui", "the gamepad UI (same as --gamepad-ui)");
         addToggleOption("tv-mode", "the gamepad UI (same as --gamepad-ui)");
+        addValueOption("gui-scale", "GUI scale in percent (100, 125, 150, 175, 200, 250, 300, 350, or 400) for this launch");
+    }
+
+    void validateCommonOptions() const
+    {
+        if (isSet("gui-scale")) {
+            const int scale = getIntOption("gui-scale");
+            if (!StreamingPreferences::isValidUiScale(scale)) {
+                showError(QString("Invalid gui-scale value: %1").arg(value("gui-scale")));
+            }
+        }
     }
 
     void handleHelpAndVersionOptions()
@@ -179,6 +190,7 @@ GlobalCommandLineParser::ParseResult GlobalCommandLineParser::parse(const QStrin
         // This method will not return and terminates the process if --version
         // or --help is specified
         parser.handleHelpAndVersionOptions();
+        parser.validateCommonOptions();
         parser.handleUnknownOptions();
         return NormalStartRequested;
     }
@@ -229,6 +241,7 @@ void QuitCommandLineParser::parse(const QStringList &args)
         parser.showError(parser.errorText());
     }
 
+    parser.validateCommonOptions();
     parser.handleUnknownOptions();
 
     // This method will not return and terminates the process if --version or
@@ -272,6 +285,7 @@ void PairCommandLineParser::parse(const QStringList &args)
         parser.showError(parser.errorText());
     }
 
+    parser.validateCommonOptions();
     parser.handleUnknownOptions();
 
     // This method will not return and terminates the process if --version or
@@ -403,6 +417,7 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
         parser.showError(parser.errorText());
     }
 
+    parser.validateCommonOptions();
     parser.handleUnknownOptions();
 
     // Resolve display's width and height
@@ -612,6 +627,7 @@ void ListCommandLineParser::parse(const QStringList &args)
         parser.showError(parser.errorText());
     }
 
+    parser.validateCommonOptions();
     parser.handleUnknownOptions();
 
 
