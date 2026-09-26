@@ -2,6 +2,7 @@
 
 // The unchanged generator is compiled under this name by the production wrapper.
 char* getSdpPayloadForStreamConfigBase(int rtspClientVersion, int* length);
+void setIntraRefreshEnabled(int enabled);
 
 #define CHECK(condition) do { \
     if (!(condition)) { \
@@ -58,7 +59,7 @@ int main(void) {
     };
     static const char attribute[] = "a=x-ss-video[0].intraRefresh:1\r\n";
     size_t host, codec;
-    int caps, encrypted;
+    int caps, encrypted, enabled;
 #ifdef _WIN32
     WSADATA wsaData;
     CHECK(WSAStartup(MAKEWORD(2, 2), &wsaData) == 0);
@@ -80,57 +81,82 @@ int main(void) {
     ((struct sockaddr_in*)&RemoteAddr)->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     VideoPortNumber = 47998;
 
-    for (host = 0; host < sizeof(hosts) / sizeof(hosts[0]); host++) {
-        memcpy(AppVersionQuad, hosts[host].version, sizeof(AppVersionQuad));
-        for (codec = 0; codec < sizeof(codecs) / sizeof(codecs[0]); codec++) {
-            NegotiatedVideoFormat = codecs[codec].format;
-            for (caps = 0; caps < 8; caps++) {
-                VideoCallbacks.capabilities =
-                        ((caps & 1) ? CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC : 0) |
-                        ((caps & 2) ? CAPABILITY_REFERENCE_FRAME_INVALIDATION_HEVC : 0) |
-                        ((caps & 4) ? CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1 : 0);
-                for (encrypted = 0; encrypted < 2; encrypted++) {
-                    int baseLength = -1, actualLength = -1;
-                    char* base;
-                    char* actual;
-                    char* added;
-                    bool expected = hosts[host].eligible &&
-                            (VideoCallbacks.capabilities & codecs[codec].recovery);
-                    cases++;
-                    StreamConfig.encryptionFlags = encrypted ? ENCFLG_ALL : 0;
-                    EncryptionFeaturesSupported = encrypted ?
-                            SS_ENC_CONTROL_V2 | SS_ENC_VIDEO | SS_ENC_AUDIO : 0;
-                    resetGeneratorState();
-                    base = getSdpPayloadForStreamConfigBase(14, &baseLength);
-                    resetGeneratorState();
-                    actual = getSdpPayloadForStreamConfig(14, &actualLength);
-                    CHECK(base != NULL && actual != NULL);
-                    if (expected) {
-                        CHECK(actualLength == baseLength + sizeof(attribute) - 1);
-                        CHECK(strlen(actual) == (size_t)actualLength);
-                        added = strstr(actual, attribute);
-                        CHECK(added != NULL);
-                        CHECK(strstr(added + sizeof(attribute) - 1, attribute) == NULL);
-                        CHECK(strncmp(added + sizeof(attribute) - 1,
-                                      "t=0 0\r\nm=video ", sizeof("t=0 0\r\nm=video ") - 1) == 0);
-                        // Removing the one requested attribute must recover the
-                        // entire original SDP, including its trailing NUL.
-                        memmove(added, added + sizeof(attribute) - 1,
-                                (size_t)actualLength - (size_t)(added - actual) -
-                                (sizeof(attribute) - 1) + 1);
+    // The request is off until the client opts in.
+    {
+        int baseLength = -1, actualLength = -1;
+        char* base;
+        char* actual;
+        cases++;
+        memcpy(AppVersionQuad, hosts[4].version, sizeof(AppVersionQuad));
+        NegotiatedVideoFormat = VIDEO_FORMAT_H265;
+        VideoCallbacks.capabilities = CAPABILITY_REFERENCE_FRAME_INVALIDATION_HEVC;
+        StreamConfig.encryptionFlags = 0;
+        EncryptionFeaturesSupported = 0;
+        resetGeneratorState();
+        base = getSdpPayloadForStreamConfigBase(14, &baseLength);
+        resetGeneratorState();
+        actual = getSdpPayloadForStreamConfig(14, &actualLength);
+        CHECK(base != NULL && actual != NULL);
+        CHECK(actualLength == baseLength);
+        CHECK(memcmp(actual, base, (size_t)baseLength + 1) == 0);
+        free(base);
+        free(actual);
+    }
+
+    for (enabled = 0; enabled < 2; enabled++) {
+        setIntraRefreshEnabled(enabled);
+        for (host = 0; host < sizeof(hosts) / sizeof(hosts[0]); host++) {
+            memcpy(AppVersionQuad, hosts[host].version, sizeof(AppVersionQuad));
+            for (codec = 0; codec < sizeof(codecs) / sizeof(codecs[0]); codec++) {
+                NegotiatedVideoFormat = codecs[codec].format;
+                for (caps = 0; caps < 8; caps++) {
+                    VideoCallbacks.capabilities =
+                            ((caps & 1) ? CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC : 0) |
+                            ((caps & 2) ? CAPABILITY_REFERENCE_FRAME_INVALIDATION_HEVC : 0) |
+                            ((caps & 4) ? CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1 : 0);
+                    for (encrypted = 0; encrypted < 2; encrypted++) {
+                        int baseLength = -1, actualLength = -1;
+                        char* base;
+                        char* actual;
+                        char* added;
+                        bool expected = enabled && hosts[host].eligible &&
+                                (VideoCallbacks.capabilities & codecs[codec].recovery);
+                        cases++;
+                        StreamConfig.encryptionFlags = encrypted ? ENCFLG_ALL : 0;
+                        EncryptionFeaturesSupported = encrypted ?
+                                SS_ENC_CONTROL_V2 | SS_ENC_VIDEO | SS_ENC_AUDIO : 0;
+                        resetGeneratorState();
+                        base = getSdpPayloadForStreamConfigBase(14, &baseLength);
+                        resetGeneratorState();
+                        actual = getSdpPayloadForStreamConfig(14, &actualLength);
+                        CHECK(base != NULL && actual != NULL);
+                        if (expected) {
+                            CHECK(actualLength == baseLength + sizeof(attribute) - 1);
+                            CHECK(strlen(actual) == (size_t)actualLength);
+                            added = strstr(actual, attribute);
+                            CHECK(added != NULL);
+                            CHECK(strstr(added + sizeof(attribute) - 1, attribute) == NULL);
+                            CHECK(strncmp(added + sizeof(attribute) - 1,
+                                          "t=0 0\r\nm=video ", sizeof("t=0 0\r\nm=video ") - 1) == 0);
+                            // Removing the one requested attribute must recover the
+                            // entire original SDP, including its trailing NUL.
+                            memmove(added, added + sizeof(attribute) - 1,
+                                    (size_t)actualLength - (size_t)(added - actual) -
+                                    (sizeof(attribute) - 1) + 1);
+                        }
+                        else {
+                            CHECK(actualLength == baseLength);
+                        }
+                        // Legacy SDP can contain binary attributes, so compare by
+                        // its returned length, not strlen().
+                        if (memcmp(actual, base, (size_t)baseLength + 1) != 0) {
+                            fprintf(stderr, "Expected:\n%.*s\nActual:\n%.*s\n",
+                                    baseLength, base, baseLength, actual);
+                            CHECK(false);
+                        }
+                        free(base);
+                        free(actual);
                     }
-                    else {
-                        CHECK(actualLength == baseLength);
-                    }
-                    // Legacy SDP can contain binary attributes, so compare by
-                    // its returned length, not strlen().
-                    if (memcmp(actual, base, (size_t)baseLength + 1) != 0) {
-                        fprintf(stderr, "Expected:\n%.*s\nActual:\n%.*s\n",
-                                baseLength, base, baseLength, actual);
-                        CHECK(false);
-                    }
-                    free(base);
-                    free(actual);
                 }
             }
         }
@@ -138,6 +164,6 @@ int main(void) {
 #ifdef _WIN32
     WSACleanup();
 #endif
-    printf("PASS: %d SDP cases (host/version, negotiated codec, recovery, encryption)\n", cases);
+    printf("PASS: %d SDP cases (setting, host/version, negotiated codec, recovery, encryption)\n", cases);
     return 0;
 }

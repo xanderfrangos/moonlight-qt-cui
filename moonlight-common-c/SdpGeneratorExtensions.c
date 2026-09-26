@@ -8,7 +8,7 @@
 
 #include <limits.h>
 
-static int s_IntraRefreshEnabled = 1;
+static int s_IntraRefreshEnabled = 0;
 
 void setIntraRefreshEnabled(int enabled) {
     s_IntraRefreshEnabled = enabled != 0;

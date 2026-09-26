@@ -3028,7 +3028,7 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 8000
                     ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                    ToolTip.text: qsTr("Requests Intra Refresh from supported hosts when the selected decoder can recover reference frames.")
+                    ToolTip.text: qsTr("Replaces large keyframes with a gradual refresh to avoid bitrate spikes. Helps on Wi-Fi; on Ethernet it usually just lowers image quality slightly and slows recovery from packet loss.")
                 }
 
                 Label {

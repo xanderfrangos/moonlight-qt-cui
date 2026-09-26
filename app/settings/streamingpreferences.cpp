@@ -301,8 +301,7 @@ void StreamingPreferences::reload()
     audioDriver = settings.value(SER_AUDIODRIVER, QString()).toString();
     videoCodecConfig = static_cast<VideoCodecConfig>(settings.value(SER_VIDEOCFG,
                                                   static_cast<int>(VideoCodecConfig::VCC_AUTO)).toInt());
-    // Keep the existing capability-based request enabled for existing users.
-    useIntraRefresh = settings.value(SER_USEINTRAREFRESH, true).toBool();
+    useIntraRefresh = settings.value(SER_USEINTRAREFRESH, false).toBool();
     videoDecoderSelection = static_cast<VideoDecoderSelection>(settings.value(SER_VIDEODEC,
                                                   static_cast<int>(VideoDecoderSelection::VDS_AUTO)).toInt());
     rendererSelection = static_cast<RendererSelection>(settings.value(SER_RENDERER,

@@ -1527,8 +1527,9 @@ Intra Refresh negotiation (2026-09-23, based on `eefde52f`) is owned by the
 parent repository's `moonlight-common-c/SdpGeneratorExtensions.c`. The qmake
 target compiles this wrapper instead of the submodule's `SdpGenerator.c`;
 the wrapper includes that unchanged source with only its entry point renamed.
-The Advanced Settings `Use Intra Refresh` preference defaults on to preserve
-the existing behavior. When enabled, the wrapper adds
+The Advanced Settings `Use Intra Refresh` preference defaults off because it
+trades image quality and loss-recovery time for smoother frame sizes. When
+enabled, the wrapper adds
 `x-ss-video[0].intraRefresh:1` to the generated attribute block for Sunshine
 protocol versions at least 7.1.350 when the decoder advertises reference-frame
 recovery for the actual negotiated codec. The setting is disabled in the UI
