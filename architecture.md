@@ -2929,6 +2929,12 @@ it cannot isolate the game engine or detect repeated image content from timing
 alone. It is independent of the native-confirmed client hitch metric and does
 not change buffer adaptation.
 
+The opt-in performance graphs `Incoming smoothness (host)` and `VRR cadence
+smoothness` plot the same two scores ten times a second on a fixed 0-100%
+axis, holding the last valid value while a score is unavailable. The VRR graph
+follows whichever score the text overlay shows beside `VRR pacing` for the
+active policy, read from the pacer telemetry's readiness window.
+
 For historical revision 3-5 policies, the stats overlay and session summary show
 client readiness over a rolling 30-second outcome window, alongside the selected
 target and a buffer-limit indicator. Revision 3 and later measure preparation completion against the intended

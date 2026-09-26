@@ -150,6 +150,15 @@ public:
         return { m_Snapshot.renderedFrames, m_Snapshot.pacerDroppedFrames };
     }
 
+    // Just the VRR readiness window, without the percentile work snapshot()
+    // does, for the graphs to read ten times a second
+    Vrr13::ReadinessWindow::Snapshot vrrReadiness(bool* active) const
+    {
+        QMutexLocker lock(&m_Lock);
+        *active = m_Snapshot.vrrActive;
+        return m_Snapshot.vrrReadiness;
+    }
+
     // Taking rather than reading keeps the accumulated window aligned with the
     // graph sampling interval instead of the whole session.
     PacerFrametimeStats takeFrametimeStats()

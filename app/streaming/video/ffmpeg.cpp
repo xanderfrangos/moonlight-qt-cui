@@ -1112,6 +1112,13 @@ void FFmpegVideoDecoder::publishStatsGraphSample(PDECODE_UNIT du)
                 du->frameHostProcessingLatency / 10.0f);
     }
     m_StatsGraphCounters.reassembly.add(reassemblyMs);
+
+    // Already updated for this frame by the caller
+    m_StatsGraphCounters.incomingSmoothnessValid = m_ActiveWndVideoStats.incomingTimingValid;
+    if (m_ActiveWndVideoStats.incomingTimingValid) {
+        m_StatsGraphCounters.incomingSmoothness = (float)IncomingFrameTiming::smoothnessPercent(
+                m_ActiveWndVideoStats.incomingTimingVarianceTicksSquared);
+    }
 }
 
 void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& counters)
@@ -1138,6 +1145,27 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
         const PacerTelemetryCounters pacerCounters = m_Pacer->telemetryCounters();
         counters.jitterDroppedFrames = pacerCounters.pacerDroppedFrames;
         counters.queueDepth = m_Pacer->queueDepth();
+
+        // The same score the text overlay shows beside "VRR pacing", for
+        // whichever policy the controller runs
+        bool vrrActive = false;
+        const auto readiness = m_Pacer->vrrReadiness(&vrrActive);
+        if (vrrActive && readiness.samples != 0) {
+            if (readiness.intervalPolicy) {
+                counters.vrrSmoothnessValid = readiness.interval.evaluatedUs != 0;
+                counters.vrrSmoothness = (float)readiness.interval.qualityPercent();
+            }
+            else if (readiness.meanMissPolicy) {
+                counters.vrrSmoothnessValid = true;
+                counters.vrrSmoothness = (float)Vrr13::ReadinessWindow::meanMissScore(readiness);
+            }
+            else {
+                const uint64_t lateFrames = qMin(readiness.misses, readiness.samples);
+                counters.vrrSmoothnessValid = true;
+                counters.vrrSmoothness = (float)((readiness.samples - lateFrames) * 100.0 /
+                                                 readiness.samples);
+            }
+        }
 
         const PacerFrametimeStats frametime = m_Pacer->takeFrametimeStats();
         if (frametime.count != 0) {

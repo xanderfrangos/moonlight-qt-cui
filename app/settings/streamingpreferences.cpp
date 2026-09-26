@@ -484,6 +484,7 @@ const QVector<StreamingPreferences::PerformanceGraphInfo>& StreamingPreferences:
         { PG_NETWORK_LATENCY, QT_TR_NOOP("Network latency"), PGT_NETWORK, true },
         { PG_NETWORK_JITTER, QT_TR_NOOP("Network jitter"), PGT_NETWORK, true },
         { PG_NETWORK_DROPS, QT_TR_NOOP("Dropped by network"), PGT_NETWORK, true },
+        { PG_INCOMING_SMOOTHNESS, QT_TR_NOOP("Incoming smoothness (host)"), PGT_NETWORK, false },
         { PG_RENDERING_FRAMETIME, QT_TR_NOOP("Rendering frametime"), PGT_CLIENT, true },
         { PG_DECODING_FRAMETIME, QT_TR_NOOP("Decoding frametime"), PGT_CLIENT, false },
         { PG_HOST_PROCESSING_LATENCY, QT_TR_NOOP("Host processing latency"), PGT_CLIENT, true },
@@ -492,6 +493,7 @@ const QVector<StreamingPreferences::PerformanceGraphInfo>& StreamingPreferences:
         { PG_QUEUE_DEPTH, QT_TR_NOOP("Frame queue depth"), PGT_CLIENT, true },
         { PG_RENDERING_TIME, QT_TR_NOOP("Rendering time"), PGT_CLIENT, true },
         { PG_JITTER_DROPS, QT_TR_NOOP("Dropped by client pacer"), PGT_CLIENT, true },
+        { PG_VRR_SMOOTHNESS, QT_TR_NOOP("VRR cadence smoothness"), PGT_CLIENT, false },
     };
     return k_Graphs;
 }

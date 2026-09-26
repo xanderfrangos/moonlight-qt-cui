@@ -249,6 +249,10 @@ void StatsGraphs::appendSample(const StatsGraphCounters& counters, double interv
     }
 
     point.queueDepth = (float)counters.queueDepth;
+    point.incomingSmoothness = counters.incomingSmoothnessValid ? counters.incomingSmoothness
+                                                                : previous.incomingSmoothness;
+    point.vrrSmoothness = counters.vrrSmoothnessValid ? counters.vrrSmoothness
+                                                      : previous.vrrSmoothness;
 
     m_LastCounters = counters;
 

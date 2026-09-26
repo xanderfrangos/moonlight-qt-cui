@@ -696,6 +696,14 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
         { StreamingPreferences::PG_RENDERING_TIME, &StatsGraphPoint::renderingTimeMs,
           &StatsGraphPoint::renderingTimeMinMs, &StatsGraphPoint::renderingTimeMaxMs,
           QColor(0xD4, 0xE1, 0x57), " ms", 1, 10 },
+
+        // Opt-in scores. Always drawn against the full 0-100% range.
+        { StreamingPreferences::PG_INCOMING_SMOOTHNESS, &StatsGraphPoint::incomingSmoothness,
+          nullptr, nullptr,
+          QColor(0x80, 0xCB, 0xC4), "%", 2, 100 },
+        { StreamingPreferences::PG_VRR_SMOOTHNESS, &StatsGraphPoint::vrrSmoothness,
+          nullptr, nullptr,
+          QColor(0xA5, 0xD6, 0xA7), "%", 2, 100 },
     };
 
     // Dealing one graph to each column in turn keeps the columns within one

@@ -209,6 +209,8 @@ public:
         PG_DECODING_FRAMETIME = 10,
         PG_DECODING_TIME = 11,
         PG_RENDERING_TIME = 12,
+        PG_INCOMING_SMOOTHNESS = 13,
+        PG_VRR_SMOOTHNESS = 14,
     };
     Q_ENUM(PerformanceGraph)
 

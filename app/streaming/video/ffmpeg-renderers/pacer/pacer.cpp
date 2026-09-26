@@ -115,6 +115,11 @@ PacerTelemetryCounters Pacer::telemetryCounters() const
     return m_Telemetry.counters();
 }
 
+Vrr13::ReadinessWindow::Snapshot Pacer::vrrReadiness(bool* active) const
+{
+    return m_Telemetry.vrrReadiness(active);
+}
+
 PacerFrametimeStats Pacer::takeFrametimeStats()
 {
     return m_Telemetry.takeFrametimeStats();

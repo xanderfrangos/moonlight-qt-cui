@@ -50,6 +50,7 @@ public:
     // Counters only, without the percentile computation telemetrySnapshot()
     // performs. Used by the high-rate stats graph sampler.
     PacerTelemetryCounters telemetryCounters() const;
+    Vrr13::ReadinessWindow::Snapshot vrrReadiness(bool* active) const;
 
     // Frames buffered ahead of display. VRR keeps its own queue; the legacy
     // paths split theirs between pacing and rendering, so this is their sum.

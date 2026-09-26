@@ -95,6 +95,12 @@ struct StatsGraphCounters {
     bool networkLatencyValid = false;
     // A gauge, not a counter: frames buffered ahead of display right now
     uint32_t queueDepth = 0;
+    // Rolling scores in percent, matching the text overlay's. Each is invalid
+    // until its window has enough frames, and the VRR one outside VRR.
+    float incomingSmoothness = 0;
+    bool incomingSmoothnessValid = false;
+    float vrrSmoothness = 0;
+    bool vrrSmoothnessValid = false;
 
     // Per-frame values, taken and reset on every sample. All in milliseconds.
     StatsGraphAccumulator incomingFrametime;
@@ -160,6 +166,8 @@ struct StatsGraphPoint {
     float networkLatencyMs = 0;
     float networkJitterMs = 0;
     float queueDepth = 0;
+    float incomingSmoothness = 0;
+    float vrrSmoothness = 0;
 };
 
 // Samples stream statistics on a fixed interval and publishes a painted plot of
