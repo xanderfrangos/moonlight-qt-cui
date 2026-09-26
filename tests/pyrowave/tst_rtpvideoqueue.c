@@ -34,6 +34,9 @@ static unsigned fecPercent;
 uint64_t PltGetMicroseconds(void) { return ++fakeNowUs; }
 void connectionSawFrame(uint32_t frame) { (void)frame; }
 void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS status) { (void)status; }
+// Matches the pre-RFI-gate behavior this harness was written against: non-PyroWave
+// formats still report unrecoverable blocks as speculative frame loss.
+bool isReferenceFrameInvalidationEnabled(void) { return true; }
 void notifyFrameLost(unsigned frame, bool speculative) {
     (void)frame;
     (void)speculative;
