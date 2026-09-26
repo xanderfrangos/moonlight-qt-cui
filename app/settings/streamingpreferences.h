@@ -306,7 +306,6 @@ public:
     Q_PROPERTY(double fsr1RcasSharpness MEMBER fsr1RcasSharpness NOTIFY fsr1RcasSharpnessChanged)
     Q_PROPERTY(bool ls1Upscaling MEMBER ls1Upscaling NOTIFY ls1UpscalingChanged)
     Q_PROPERTY(int ls1Sharpness MEMBER ls1Sharpness NOTIFY ls1SharpnessChanged)
-    Q_PROPERTY(QString ls1DllPath MEMBER ls1DllPath NOTIFY ls1DllPathChanged)
     Q_PROPERTY(VideoDecoderSelection videoDecoderSelection MEMBER videoDecoderSelection NOTIFY videoDecoderSelectionChanged)
     Q_PROPERTY(RendererSelection rendererSelection MEMBER rendererSelection NOTIFY rendererSelectionChanged)
     Q_PROPERTY(WindowMode windowMode MEMBER windowMode NOTIFY windowModeChanged)
@@ -417,7 +416,6 @@ public:
     // LS1 (D3D11 on Windows, Vulkan on Linux) uses the user's Lossless Scaling DLL at runtime.
     bool ls1Upscaling;
     int ls1Sharpness;
-    QString ls1DllPath;
     VideoDecoderSelection videoDecoderSelection;
     WindowMode windowMode;
     WindowMode recommendedFullScreenMode;
@@ -461,7 +459,6 @@ signals:
     void fsr1RcasSharpnessChanged();
     void ls1UpscalingChanged();
     void ls1SharpnessChanged();
-    void ls1DllPathChanged();
     void videoDecoderSelectionChanged();
     void uiDisplayModeChanged();
     void uiScaleChanged();

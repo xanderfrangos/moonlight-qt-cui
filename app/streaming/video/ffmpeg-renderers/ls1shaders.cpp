@@ -263,8 +263,7 @@ QStringList translatorCandidates(const QString& dllPath) {
 
 } // namespace
 
-QString findLosslessScalingDll(const QString& configuredPath) {
-    if (!configuredPath.isEmpty()) return configuredPath;
+QString findLosslessScalingDll() {
     const QString environment = qEnvironmentVariable("MOONLIGHT_LOSSLESS_SCALING_DLL");
     if (!environment.isEmpty()) return environment;
     const QString home = QDir::homePath();

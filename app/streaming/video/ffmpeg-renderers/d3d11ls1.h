@@ -17,9 +17,8 @@
 class D3D11Ls1Upscaler : public D3D11Upscaler
 {
 public:
-    // The configured path if set, otherwise Lossless Scaling in any Steam
-    // library. Empty if it can't be found.
-    static QString findLosslessScalingDll(const QString& configuredPath);
+    // Lossless Scaling in any Steam library. Empty if it can't be found.
+    static QString findLosslessScalingDll();
 
     // Variant 0-4 selects the model's sharpness
     bool initialize(ID3D11Device* device, const QString& dllPath, int variant,

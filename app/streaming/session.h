@@ -247,7 +247,6 @@ private:
                        double fsr1RcasSharpness = 20.0,
                        bool ls1Upscaling = false,
                        int ls1Sharpness = 0,
-                       const QString& ls1DllPath = QString(),
                        int vrrDisplayRefreshHz = 0,
                        bool* effectiveVrr = nullptr, bool smoothVrrFrameTiming = true,
                        bool gamescopeMailbox = false, int vrrLatencyMode = 0,
@@ -322,7 +321,6 @@ private:
         double fsr1RcasSharpness = 20.0;
         bool ls1Upscaling = false;
         int ls1Sharpness = 0;
-        QString ls1DllPath;
         int refreshRate = 0;
         StreamingPreferences::WindowMode effectiveWindowMode = StreamingPreferences::WM_WINDOWED;
         StreamingPreferences::VideoDecoderSelection decoderSelection = StreamingPreferences::VDS_AUTO;

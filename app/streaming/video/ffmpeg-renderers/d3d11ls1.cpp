@@ -65,12 +65,8 @@ QStringList steamLibraries()
 
 }
 
-QString D3D11Ls1Upscaler::findLosslessScalingDll(const QString& configuredPath)
+QString D3D11Ls1Upscaler::findLosslessScalingDll()
 {
-    if (!configuredPath.isEmpty()) {
-        return configuredPath;
-    }
-
     const QString environment = qEnvironmentVariable("MOONLIGHT_LOSSLESS_SCALING_DLL");
     if (!environment.isEmpty()) {
         return environment;

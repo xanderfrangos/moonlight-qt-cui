@@ -291,7 +291,6 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             bool enableVrr, bool preferVrrRenderer, bool fsr1Upscaling,
                             double fsr1RcasSharpness,
                             bool ls1Upscaling, int ls1Sharpness,
-                            const QString& ls1DllPath,
                             int vrrDisplayRefreshHz,
                             [[maybe_unused]] bool* effectiveVrr, bool smoothVrrFrameTiming,
                             bool gamescopeMailbox, int vrrLatencyMode, bool gamescopeRepaint,
@@ -327,7 +326,6 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.fsr1RcasSharpness = fsr1RcasSharpness;
     params.ls1Upscaling = ls1Upscaling;
     params.ls1Sharpness = ls1Sharpness;
-    params.ls1DllPath = ls1DllPath;
     params.vrrDisplayRefreshHz = vrrDisplayRefreshHz;
     params.testOnly = testOnly;
     params.vds = vds;
@@ -591,8 +589,7 @@ bool Session::populateDecoderProperties(SDL_Window* window)
                        m_PresentationSettings.fsr1Upscaling,
                        m_PresentationSettings.fsr1RcasSharpness,
                        m_PresentationSettings.ls1Upscaling,
-                       m_PresentationSettings.ls1Sharpness,
-                       m_PresentationSettings.ls1DllPath)) {
+                       m_PresentationSettings.ls1Sharpness)) {
         return false;
     }
 
@@ -714,7 +711,6 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     m_PresentationSettings.fsr1RcasSharpness = m_Preferences->fsr1RcasSharpness;
     m_PresentationSettings.ls1Upscaling = m_Preferences->ls1Upscaling;
     m_PresentationSettings.ls1Sharpness = m_Preferences->ls1Sharpness;
-    m_PresentationSettings.ls1DllPath = m_Preferences->ls1DllPath;
 
     if (requestedVrr) {
         const bool hasAdaptiveHeadroom = hasStrictRefreshRate &&
@@ -2841,7 +2837,6 @@ void Session::exec()
                                m_PresentationSettings.fsr1RcasSharpness,
                                m_PresentationSettings.ls1Upscaling,
                                m_PresentationSettings.ls1Sharpness,
-                               m_PresentationSettings.ls1DllPath,
                                m_PresentationSettings.refreshRate,
                                &m_PresentationSettings.enableVrr,
                                m_PresentationSettings.smoothVrrFrameTiming,

@@ -117,7 +117,6 @@ typedef struct _DECODER_PARAMETERS {
     double fsr1RcasSharpness = 20.0;
     bool ls1Upscaling = false;
     int ls1Sharpness = 0;
-    QString ls1DllPath;
     // Strictly obtained during Session initialization. A value of zero means
     // the session was not qualified for VRR; Pacer must not substitute a
     // legacy 60 Hz fallback when this path is requested.

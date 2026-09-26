@@ -3984,7 +3984,7 @@ bool D3D11VARenderer::setupRenderingResources()
     // settings make them exclusive; LS1 wins if both are set, as on Linux.
     const bool tenBit = (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_10BIT) != 0;
     if (m_DecoderParams.ls1Upscaling) {
-        const QString dllPath = D3D11Ls1Upscaler::findLosslessScalingDll(m_DecoderParams.ls1DllPath);
+        const QString dllPath = D3D11Ls1Upscaler::findLosslessScalingDll();
         if (dllPath.isEmpty()) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "LS1 requested, but no Steam-installed Lossless.dll was found");

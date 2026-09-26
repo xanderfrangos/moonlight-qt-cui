@@ -14,6 +14,9 @@
 #ifdef Q_OS_WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#include "streaming/video/ffmpeg-renderers/d3d11ls1.h"
+#elif defined(Q_OS_LINUX) && defined(HAVE_LIBPLACEBO_VULKAN)
+#include "streaming/video/ffmpeg-renderers/ls1shaders.h"
 #endif
 
 class SystemPropertyQueryThread : public QThread
@@ -113,10 +116,14 @@ SystemProperties::SystemProperties()
 #endif
 
     // FSR1 and LS1 are integrated with the D3D11 renderer on Windows and the
-    // libplacebo Vulkan renderer on Linux.
-#if defined(Q_OS_WIN32) || (defined(Q_OS_LINUX) && defined(HAVE_LIBPLACEBO_VULKAN))
+    // libplacebo Vulkan renderer on Linux. LS1 is only offered when the user
+    // has Lossless Scaling installed through Steam.
+#if defined(Q_OS_WIN32)
     supportsFsr1Upscaling = true;
-    supportsLs1Upscaling = true;
+    supportsLs1Upscaling = !D3D11Ls1Upscaler::findLosslessScalingDll().isEmpty();
+#elif defined(Q_OS_LINUX) && defined(HAVE_LIBPLACEBO_VULKAN)
+    supportsFsr1Upscaling = true;
+    supportsLs1Upscaling = !findLosslessScalingDll().isEmpty();
 #else
     supportsFsr1Upscaling = false;
     supportsLs1Upscaling = false;

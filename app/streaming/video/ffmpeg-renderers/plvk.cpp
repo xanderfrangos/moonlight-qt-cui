@@ -962,7 +962,7 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
 
 #ifdef Q_OS_LINUX
     if (params->ls1Upscaling) {
-        const QString dllPath = findLosslessScalingDll(params->ls1DllPath);
+        const QString dllPath = findLosslessScalingDll();
         if (dllPath.isEmpty()) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "LS1 requested, but no Steam-installed Lossless.dll was found");

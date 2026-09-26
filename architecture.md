@@ -76,8 +76,11 @@ runs inside `prepareFrameForPresent()`, so it adds to both the legacy and the
 VRR preparation time. This has only been compiled, not measured on a live
 stream.
 
-Windows D3D11 LS1 integration (2026-09-25): the `ls1upscaling`, LS1 sharpness
-and DLL path settings now also drive `D3D11Ls1Upscaler` in `d3d11ls1.cpp`.
+Windows D3D11 LS1 integration (2026-09-25): the `ls1upscaling` and LS1
+sharpness settings now also drive `D3D11Ls1Upscaler` in `d3d11ls1.cpp`. There
+is no DLL path setting: `Lossless.dll` is found in the Steam libraries (or
+`MOONLIGHT_LOSSLESS_SCALING_DLL`), and `SystemProperties` hides the LS1 option
+when it isn't found.
 Both it and `D3D11Fsr1Upscaler` derive from `D3D11Upscaler`
 (`d3d11upscaler.cpp`), which owns the enlargement rule, the stream-sized RGB
 intermediate, and the letterbox viewport. The renderer holds at most one

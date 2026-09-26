@@ -1164,20 +1164,6 @@ Flickable {
 
                     Label {
                         width: parent.width
-                        text: qsTr("Lossless.dll path (blank to find Steam installation)")
-                        font.pointSize: 12
-                        wrapMode: Text.Wrap
-                    }
-
-                    TextField {
-                        width: parent.width
-                        text: StreamingPreferences.ls1DllPath
-                        placeholderText: qsTr("Automatic Steam path")
-                        onEditingFinished: StreamingPreferences.ls1DllPath = text.trim()
-                    }
-
-                    Label {
-                        width: parent.width
                         text: qsTr("LS1 sharpness: %1").arg(StreamingPreferences.ls1Sharpness)
                         font.pointSize: 12
                     }

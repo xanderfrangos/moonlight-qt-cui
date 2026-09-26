@@ -18,7 +18,7 @@ struct Ls1Shaders {
     QString translator;
 };
 
-QString findLosslessScalingDll(const QString& configuredPath);
+QString findLosslessScalingDll();
 bool loadLs1Shaders(const QString& dllPath, int variant, Ls1Shaders* shaders,
                     QString* error);
 bool patchLs1OutputFormat(QByteArray* shader, uint32_t spirvFormat);
