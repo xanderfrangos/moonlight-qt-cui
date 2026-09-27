@@ -935,27 +935,6 @@ Flickable {
                 }
 
                 CheckBox {
-                    id: useIntraRefresh
-                    width: parent.width
-                    text: qsTr("Use Intra Refresh")
-                    font.pointSize: 12
-                    enabled: SystemProperties.intraRefreshProbeComplete && SystemProperties.supportsIntraRefresh
-                    checked: StreamingPreferences.useIntraRefresh
-                    onCheckedChanged: StreamingPreferences.useIntraRefresh = checked
-
-                    Component.onCompleted: {
-                        if (!SystemProperties.intraRefreshProbeComplete) {
-                            SystemProperties.refreshIntraRefreshAvailability()
-                        }
-                    }
-
-                    ToolTip.delay: 1000
-                    ToolTip.timeout: 8000
-                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                    ToolTip.text: qsTr("Replaces large keyframes with a gradual refresh to avoid bitrate spikes. Helps on Wi-Fi; on Ethernet it usually just lowers image quality slightly and slows recovery from packet loss.")
-                }
-
-                CheckBox {
                     id: enableYUV444
                     width: parent.width
                     text: qsTr("Enable YUV 4:4:4")
@@ -3172,6 +3151,27 @@ Flickable {
                             }
                         }
                     }
+                }
+
+                CheckBox {
+                    id: useIntraRefresh
+                    width: parent.width
+                    text: qsTr("Use Intra Refresh")
+                    font.pointSize: 12
+                    enabled: SystemProperties.intraRefreshProbeComplete && SystemProperties.supportsIntraRefresh
+                    checked: StreamingPreferences.useIntraRefresh
+                    onCheckedChanged: StreamingPreferences.useIntraRefresh = checked
+
+                    Component.onCompleted: {
+                        if (!SystemProperties.intraRefreshProbeComplete) {
+                            SystemProperties.refreshIntraRefreshAvailability()
+                        }
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 8000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Replaces large keyframes with a gradual refresh to avoid bitrate spikes. Helps on Wi-Fi; on Ethernet it usually just lowers image quality slightly and slows recovery from packet loss.")
                 }
 
                 Label {
