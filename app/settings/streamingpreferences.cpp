@@ -776,8 +776,6 @@ int StreamingPreferences::getDefaultBitrate(int width, int height, int fps, bool
 
 int StreamingPreferences::getDefaultPyroWaveBitrate(int width, int height, int fps, bool yuv444, bool hdr)
 {
-    // Keep the default within what a gigabit link carries after FEC and
-    // audio. Faster links can raise the slider.
-    const int kbps = pyroWaveRecommendedKbps(width, height, fps, yuv444, hdr);
-    return std::clamp(kbps, 20000, 900000) / 1000 * 1000;
+    // Match the author recommendation shown by calibration without running it.
+    return pyroWaveRecommendedKbps(width, height, fps, yuv444, hdr);
 }

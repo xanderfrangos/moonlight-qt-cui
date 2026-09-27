@@ -455,8 +455,8 @@ void testQueueCapacityAndDrops(int latencyMode, size_t capacity)
         expect(backend.waitForPrepareCount(1),
                "first worker frame must enter the preparation gate");
 
-        // The active frame and `capacity` successors (three; Smooth: four)
-        // absorb a short decoder burst. One more successor evicts only the
+        // The active frame and `capacity` successors absorb a short decoder
+        // burst. One more successor evicts only the
         // oldest queued frame.
         for (size_t i = 1; i <= capacity; ++i) {
             worker.submit(frame(static_cast<int>(i) + 1, lifetimes[i]));
@@ -1650,8 +1650,8 @@ void testTraceCapturesEveryDeliveredFrame()
     FakeVrrFramePresenter backend;
     backend.blockPreparation();
     PacerTelemetry telemetry;
-    TrackedFrameLifetime lifetimes[10];
-    // The burst below overflows a three-frame queue; Smooth holds four.
+    TrackedFrameLifetime lifetimes[11];
+    // The burst below (frames 2-5 and 11) overflows the four-frame queue.
     VrrSessionConfig traceConfig = enabledConfig();
     traceConfig.latencyMode = 1;
     {
@@ -1663,8 +1663,9 @@ void testTraceCapturesEveryDeliveredFrame()
         for (int frameNumber = 2; frameNumber <= 5; ++frameNumber) {
             worker.submit(frame(frameNumber, lifetimes[frameNumber - 1]));
         }
+        worker.submit(frame(11, lifetimes[10]));
         backend.releasePreparation();
-        expect(backend.waitForPresentCount(4),
+        expect(backend.waitForPresentCount(5),
                "replay trace test must drain retained frames");
 
         WINDOW_STATE_CHANGE_INFO minimized {};
@@ -1680,7 +1681,7 @@ void testTraceCapturesEveryDeliveredFrame()
         restored.stateChangeFlags = WINDOW_STATE_CHANGE_RESTORED;
         worker.notifyWindowChanged(&restored);
         worker.submit(frame(7, lifetimes[6]));
-        expect(backend.waitForPresentCount(5),
+        expect(backend.waitForPresentCount(6),
                "restored trace frame must present after an explicit rebase");
 
         WINDOW_STATE_CHANGE_INFO resized {};
@@ -1689,12 +1690,12 @@ void testTraceCapturesEveryDeliveredFrame()
         resized.height = 1080;
         worker.notifyWindowChanged(&resized);
         worker.submit(frame(8, lifetimes[7]));
-        expect(backend.waitForPresentCount(6),
+        expect(backend.waitForPresentCount(7),
                "first frame after a geometry refresh must use a new trace epoch");
 
         backend.blockPreparation();
         worker.submit(frame(9, lifetimes[8]));
-        expect(backend.waitForPrepareCount(7),
+        expect(backend.waitForPrepareCount(8),
                "display-epoch race test must hold an in-flight frame");
         WINDOW_STATE_CHANGE_INFO displayChanged {};
         displayChanged.stateChangeFlags = WINDOW_STATE_CHANGE_DISPLAY;
@@ -1703,11 +1704,11 @@ void testTraceCapturesEveryDeliveredFrame()
         backend.releasePreparation();
         expect(backend.waitForCancelCount(1),
                "an in-flight frame must be cancelled after display state changes");
-        expect(backend.presentCount() == 6,
+        expect(backend.presentCount() == 7,
                "a decision from the prior display epoch must not be presented");
 
         worker.submit(frame(10, lifetimes[9]));
-        expect(backend.waitForPresentCount(7),
+        expect(backend.waitForPresentCount(8),
                "the post-interrupt frame must start the refreshed display epoch");
     }
 
@@ -1901,7 +1902,7 @@ void testTraceCapturesEveryDeliveredFrame()
                    [](int column) { return column >= 0; }),
            "replay schema must expose raw arrivals and terminal disposition");
 
-    bool observedFrames[11] = {};
+    bool observedFrames[12] = {};
     bool observedCapacityDrop = false;
     bool observedRejectedArrival = false;
     bool observedRestoreRebase = false;
@@ -1925,8 +1926,8 @@ void testTraceCapturesEveryDeliveredFrame()
             observedCleanFooter =
                 lines[i].contains("format_version=2") &&
                 lines[i].contains("clean_shutdown=1") &&
-                lines[i].contains("arrival_sequence_allocated=10") &&
-                lines[i].contains("rows_enqueued=10") &&
+                lines[i].contains("arrival_sequence_allocated=11") &&
+                lines[i].contains("rows_enqueued=11") &&
                 lines[i].contains("rows_dropped=0") &&
                 lines[i].contains("size_capped=0") &&
                 lines[i].contains("write_failed=0") &&
@@ -1947,7 +1948,7 @@ void testTraceCapturesEveryDeliveredFrame()
         }
         ++rowCount;
         const int frameNumber = fields[frameColumn].toInt();
-        if (frameNumber >= 1 && frameNumber <= 10) {
+        if (frameNumber >= 1 && frameNumber <= 11) {
             observedFrames[frameNumber] = true;
         }
         expect(fields[rtpColumn].toULongLong() ==
@@ -2021,12 +2022,12 @@ void testTraceCapturesEveryDeliveredFrame()
                 fields[midframeWindowStateFlagsColumn] == "0";
         }
     }
-    expect(rowCount == 10,
+    expect(rowCount == 11,
            "trace must contain exactly one terminal row per delivered frame");
     expect(observedFrames[1] && observedFrames[2] && observedFrames[3] &&
                observedFrames[4] && observedFrames[5] && observedFrames[6] &&
                observedFrames[7] && observedFrames[8] &&
-               observedFrames[9] && observedFrames[10],
+               observedFrames[9] && observedFrames[10] && observedFrames[11],
            "trace must not omit evicted or presented deliveries");
     expect(observedCapacityDrop,
            "trace must identify the frame evicted by queue capacity");
@@ -2686,8 +2687,9 @@ int main()
     testCapabilityRejection();
     testPresentationRequestSelectedBeforePreparation();
     testEmptyQueueDoesNotRepeatFrames();
-    testQueueCapacityAndDrops(1, VrrMaximumQueuedFrames);
-    testQueueCapacityAndDrops(2, VrrMaximumQueuedFrames);
+    // Every profile waits in the same queue
+    testQueueCapacityAndDrops(1, VrrLargestQueuedFrames);
+    testQueueCapacityAndDrops(2, VrrLargestQueuedFrames);
     testQueueCapacityAndDrops(0, VrrLargestQueuedFrames);
     testLatePreparedFramePresentsImmediately();
     testQueuedStaleFrameYieldsToFreshSuccessor();

@@ -34,6 +34,11 @@ public:
     // The launch warning for that case, or empty.
     static QString launchWarning();
 
+    // The speed of the fastest connected wired link in Mbps, or 0 when none is
+    // connected or its speed is unknown. wirelessConnected, when given, reports
+    // whether a wireless adapter is connected.
+    static int wiredLinkMbps(bool* wirelessConnected = nullptr);
+
     bool needsFix() const { return m_NeedsFix; }
     bool canApply() const;
     bool busy() const { return m_Busy; }

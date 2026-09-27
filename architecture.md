@@ -271,26 +271,84 @@ enqueue in moonlight-common-c to decoder output, so it includes time waiting in
 the 15-frame decode-unit queue; the wait is shown separately. When that queue
 overflows it is flushed and an IDR is requested, which restarts cadence.
 
-The Windows and Linux Settings pages can run a short PyroWave GPU decode test
-at the selected FPS. Windows tests 4K, 1440p, 1080p, and 720p;
-Linux also tests Deck-native 800p. Each resolution has 4:2:0/4:4:4 and
-8-bit/10-bit output cases. The worker refuses to run during an active stream.
-It encodes one synthetic 8-bit image at the codec author's good-quality rate
-ceiling, then decodes 24 paced repetitions through the stream's GPU surface
-path. The tooltip distinguishes the compressed payload for that synthetic
-image from the author's quality-guide bitrate. Neither is a measured network capacity or a reliable picture
-quality score for a game. The GPU completion check reads one pixel through
-libplacebo on Linux or D3D11 on Windows. The dialog reports mean and p95 GPU
-service without a pass/fail or "slow" label: one short synthetic sample cannot
-certify a format's live cadence. Clicking a valid format selects PyroWave,
-resolution, chroma, and HDR output. It keeps the current PyroWave bitrate or
-uses the normal PyroWave default when switching codecs. Host encoding, network throughput, rendering,
-presented cadence, and HDR fidelity remain unmeasured. Earlier versions used
-a fixed 900 Mbps assumed link cap and treated `sleep_until()` wakeup lateness
-as decoder backlog; this could mark every Windows format slow and substitute
-a 25% lower bitrate even when live decode took under 1 ms. A later modeled
-backlog heuristic still called 4K 4:2:0 10-bit "slow" at 5.08 ms p95 while
-accepting 4K 4:4:4 10-bit at 5.14 ms p95, so the binary label was removed.
+PyroWave calibration (2026-09-26, over `41312909`): select PyroWave in
+Settings > Video codec to show Calibrate PyroWave. The codec selector and
+YUV 4:4:4 checkbox sit above the bitrate controls. Calibration grades, at the selected FPS, 4K, 1440p, 1080p, 720p and (Linux)
+Deck-native 800p, each in 4:4:4/4:2:0 and HDR (10-bit)/SDR (8-bit). The worker
+refuses to run during a stream, reports each format as it finishes, and stops
+within a frame when the dialog closes (a format cut short has no result). For
+each probe it encodes one synthetic image at the bitrate's per-frame budget and
+runs the pipeline saturated: decodes feed a three-frame queue drawn in order,
+so the interval between two frames finishing is the second one's cost. On Linux
+a second thread draws each frame with `pl_render_fast_params` into a target the
+size of the dialog's screen (`rgb10a2`/HDR10 for 10-bit frames tagged BT.2020
+PQ as a stream tags them, `rgba8`/sRGB for 8-bit) and waits with a one-pixel
+download. On Windows the one-pixel D3D11 decode-completion readback runs on the
+decoding thread, nothing is drawn, and decoding may use three quarters of each
+frame period. A short run (half a second of frames) warms clocks and shaders
+and stops a format whose mean cost exceeds the period. A timed run of three
+seconds of frames (at least 300) follows, and a format keeps up when its p99
+per-frame cost fits the frame period. The grade does not depend on the VRR latency mode. A miss that isn't
+plain overload is measured once more and the better run kept, because a system
+stall can land in any run.
+
+The default bitrate and calibration's author recommendation use the same
+35 dB calculation rounded up to 5 Mbps, including the HDR allowance. The
+default no longer applies a separate 900 Mbps cap and needs no calibration.
+Calibration starts from that recommendation, capped at 80% of the fastest connected wired link
+(`NetworkBuffers::wiredLinkMbps()`: sysfs speed, or `GetAdaptersAddresses`
+receive speed), leaving room for record padding, FEC, RTP/UDP/IP headers,
+audio and input; Wi-Fi or no wired link leaves it uncapped with a note. If the
+top bitrate misses, a quick run at the regression floor (30 dB) checks whether
+a lower bitrate cuts the mean GPU time per frame by at least 10%. If not, the
+format is "Can't keep up" at the top bitrate, which it applies if selected: a
+pass at the lower bitrate would be noise at the period's edge, bought with
+picture quality. If it does, the floor
+is timed and one bisection step on the dB scale finds the highest bitrate that
+keeps up. `pyroWaveQualityDb()` inverts the author's regression (linear between
+whole-dB levels, extrapolated below 30 dB) to grade the chosen bitrate: at
+least 35 dB is full quality, 32-35 dB reduced, below 32 dB low, shown as text.
+The color is smoothness risk, with margin for a live stream costing about a
+third more than the test (4K 4:4:4 10-bit took 8.3-9.1 ms per frame while
+backlogged live against a 6.7 ms test mean): green ("Any display") at a p99
+cost of at most 60% of the period, yellow ("Needs VRR") up to 80%, orange
+("Needs VRR · Smooth mode", the large buffer) up to the full period, and red
+("Can't keep up") beyond it. Clicking a format applies the codec, resolution, chroma, HDR and the
+bitrate shown, and turns off automatic bitrate. A full sweep at 116 FPS takes
+about 100 s on the Deck.
+
+Why this shape, on the Deck (Van Gogh, 4K HDR10 target, 116 FPS): decode cost
+follows resolution and chroma, not bitrate. Decode alone for 4K 4:4:4 10-bit
+took 7.75-8.16 ms per frame from 330 to 850 Mbps, so lowering bitrate rarely
+rescues a format. With the render overlapped as in a stream, mean costs were
+6.4-6.8 ms for 4K 4:4:4 10-bit (74-79% of the period), 5.6-6.2 ms for 4K 4:4:4
+8-bit, 3.6-4.2 ms for 4K 4:2:0 10-bit and 3.3-3.8 ms for 1440p 4:4:4 10-bit.
+Two sweeps on 2026-09-26 gave p99 costs of 9.4-10.3 ms for 4K 4:4:4 10-bit
+(can't keep up), 8.4-8.5 ms for 4K 4:4:4 8-bit (near limit), 6.1-7.0 ms for 4K
+4:2:0, 5.4-6.0 ms for 1440p 4:4:4 and under 4.6 ms for everything smaller; only
+4K 4:2:0 8-bit changed grade between runs, at the near-limit edge. Live, 4K 4:4:4 HDR at 116
+FPS held on 2026-09-25 but on 2026-09-26 the decode-unit queue overflowed every
+1-2 s (decoder wait p90 42-120 ms, an IDR each time), while 4K 4:2:0 and 1440p
+4:4:4 stayed clean; the synthetic test does not include presentation, network
+receive, host cadence bursts or the Deck's shared CPU/GPU power budget, which
+is why near-limit formats carry a warning.
+
+Earlier measures were misleading. Grading the p99.95 lateness of a queue
+replay against the VRR buffer let the buffer hide 4K 4:4:4 10-bit's overload
+under Balanced, while one system stall in 2000 frames marked 1080p 4:2:0 and
+800p 4:4:4 (27-31% of the period) near limit. Timing a paced run with the test's own
+threads sleeping to each arrival put scheduler jitter into the tail: three
+identical 4K 4:4:4 10-bit runs gave p99 latency of 51, 12.7 and 22 ms, while
+the saturated replay's p99 cost was 9.26-9.30 ms. Drawing serially (decode,
+draw, wait, decode again) measured 113-120% of the period for that format,
+understating the overlap a stream gets. One paced decode plus one-pixel wait
+per period overstated cost 2-3x because the GPU idled between frames (1080p
+4:4:4 10-bit: 6.6 ms p95 against 2.6 ms back to back). Before that, a fixed
+900 Mbps link cap and `sleep_until()` lateness treated as backlog marked every
+Windows format slow. Host encoding, throughput beyond this device's link,
+presented cadence and the picture quality of real content remain unmeasured:
+the synthetic image fills the byte budget, and the dB grade is the author's
+regression for the bitrate, not a measurement of the stream.
 
 `HAVE_PYROWAVE` adds a member to `FFmpegVideoDecoder`, so changing that qmake
 option requires `make -C build/app clean` before rebuilding the app. An
@@ -303,7 +361,7 @@ isolated 4 ms late frame ~100x. Capture `20260923-232347-186` (116 FPS Balanced,
 4K HEVC on the 890M) scored 99.77% against the 99.5% target while visibly
 hitching every few seconds, so the buffer never grew and released 8.2 -> 6.9 ms
 although decode waits ran 6.4 ms p50 and 8.7-11.4 ms on the hitching frames.
-Production Balanced now sets `playout_readiness_floor_per_mille=500` and
+Production Balanced then set `playout_readiness_floor_per_mille=500` and
 `playout_readiness_floor_window_us=10000000`: `playoutDelayMinimumUs()` is at
 least the median ready offset (decode completion after the mapped source slot)
 of the last ten seconds of timestamp-playout frames, recomputed ten times per
@@ -326,13 +384,65 @@ PyroWave (`20260926-131302`, 1440p and 4K, after the on-time release) 17-30% of
 frames per ten seconds finished decode after their slot while the median floor
 and the one-second mean (p50 254 us against the 500 us tolerance) stayed quiet,
 so the buffer released 8.2 -> 4.6 ms with 10 growth decisions in 2.5 minutes.
-Production Balanced now uses `playout_readiness_floor_per_mille=900`. Replay
+Production Balanced then used `playout_readiness_floor_per_mille=900` (removed
+later that day; see Profile consistency below). Replay
 (exploratory; the captures fail the strict gate): >2 ms presented jerk 1440p
 106 -> 54, 4K 88 -> 54, `232347-186` 44 -> 21 per mille, for +1.1, +0.6 and
 +2.6 ms median decode-to-submission. p95 bought 46/47/21 for +1.4/+0.9/+3.4 ms.
 `responsive-buffer-stress.json` passes on both new captures (delay max 10.4 ms,
 p99 13.7 ms, zero modelled interval violations) and `latency-presets-stress.json`
 passes in `vrrqueuesim`.
+
+Profile consistency (2026-09-26, over `41312909`): the latency profiles are one
+dial. Low Latency, Balanced Target and Smooth differ in their on-time target,
+source-frame allowance, hold and release, with each trade ordered the same
+way; all wait in the same four-frame queue.
+Their total playout-delay allowances are one, two, and four fitted source
+frames, respectively. The former fixed 16 ms / 24 ms ceilings made the latter
+two profiles fall below their frame allowance at slower source rates; those
+fixed ceilings are removed. The worker queue's capacity remains a separate
+safety bound, so the learned delay may still be lower than the profile's
+allowance.
+`testProfilesOrderEveryTrade` asserts the ordering. Low Latency's release rose
+from 125 to Balanced's 250 us/s so it no longer drains slower than Balanced.
+No profile uses the readiness floor above any more; the parameters remain so
+captures that recorded them replay exactly.
+
+The floor was removed after live capture `20260926-181149-830188` (4K 4:2:0
+10-bit PyroWave, 485-680 Mbps, 116 FPS on the Deck). Both Balanced connections
+(2, 4) and the Smooth one (5) began with the same ~1 s decoder backlog.
+Balanced's floor counted its 50-128 ms ready offsets and reached the 16 ms
+ceiling within 0.5 s; the three-frame queue then allowed only 16.86 ms, and the
+decoder never recovered (decode call 7-9 ms, decode-unit queue p50 16-39 ms,
+client timing 77-91%, 140-250 pacer drops, 326 frames cut at the on-time
+deadline). Smooth's decoder recovered within a second (0.8 ms calls) and held
+13.8 ms with 99.39% client timing and 33 drops. Replaying the Balanced
+connections under all three profiles gave Low Latency 8.6 ms, Smooth 8.7 ms and
+Balanced 16.0 ms on identical input. Excluding overloaded frames from the
+floor (local decode over a source period, or ready offsets beyond the ceiling)
+was tried and dropped: the first still lost the floor's help on brief stalls,
+the second left the overloaded connections at 14.9-15.1 ms.
+
+Replay over the 16 Deck captures from 2026-09-26, current policy against the
+previous one: Balanced mean >2 ms jerk 153.0 -> 171.7 per mille, median
+decode-to-submission 11.79 -> 10.49 ms; the overloaded connections drop from
+16.0 ms to 8.4-8.6 ms, like the other profiles; Low Latency >= Balanced >=
+Smooth in jerk on all 16 (previously Balanced beat Smooth on two). Balanced
+loses the most where the floor had been holding it high: `000845` (9 -> 88),
+connection 3 (4K 4:4:4, brief decoder stalls, 69 -> 141), and Smooth's
+connection 5 replayed as Balanced (29 -> 74, its 29 came from the startup
+backlog holding the floor up). Replay cannot show whether the pinned delay
+kept the live decoder behind; one candidate is the PyroWave surface hold,
+submitted on libplacebo's graphics queue behind renders prepared ahead into
+mailbox images. Exact baselines pass for `181149` connections 2 and 4 and
+`155747`; `000845` connection 4 and `181149` connection 5 are inexact on the
+unmodified baseline as well (8 and 1 frames with targets but no submission).
+
+The pacing worker's on-time reassembly lead leaves out frames whose own
+decode (reassembly to decode complete, less a deliberate hold) took longer
+than a source period: releasing later frames earlier cannot relieve an
+overloaded decoder, and counting them moved every deadline before the frames
+finished arriving.
 
 Decode hold clear of the Present (2026-09-26): the full sandbox capture
 `Moonlight-sandbox-20260926-133637-302` (4K Balanced, 890M, PresentMon joined
@@ -1821,9 +1931,12 @@ contract; it does not replace network assembly or codec reference handling.
 
 ### 7.1 Queue ownership and backpressure
 
-The VRR queue admits three waiting frames plus one active frame; the Smooth
-profile admits four (`playout_queue_frames`, 0 = the historical three in older
-captures). The same count sets the delay budget in `playoutQueueLimitUs()`:
+The VRR queue admits four waiting frames plus one active frame in every
+profile (`playout_queue_frames`; Smooth alone until 2026-09-26, and 0 = the
+historical three in older captures). Separately, profile playout-delay
+allowances are one, two, or four fitted source frames for Low Latency, Balanced
+Target, or Smooth. The queue limit in `playoutQueueLimitUs()` remains a safety
+bound on those allowances:
 waiting frames x period, minus render lead and the full Reduce judder retiming
 budget. With three frames at 116 FPS that budget was ~16.9 ms once the retiming
 cap rose to 6 ms, so Smooth's 24 ms ceiling was unreachable and live overlays

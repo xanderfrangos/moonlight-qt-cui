@@ -2987,20 +2987,19 @@ void testNativeFlipProtectionPreventsScanoutTears()
 
 void testBalancedReadinessFloorFollowsLoad()
 {
-    // Balanced floors its delay at the recent p90 ready offset. Slow
-    // decode on most frames must raise the delay; once decode recovers the
-    // floor must fall away within its window rather than pin the buffer.
+    // Captures that recorded a readiness floor replay it: the delay is
+    // floored at the recent p90 ready offset. Slow decode on most frames must
+    // raise the delay; once decode recovers the floor must fall away within
+    // its window rather than pin the buffer. No profile uses it any more.
     auto session = config(116, 120);
     session.latencyMode = 1;
     const auto production = vrrTimingParametersForSession(session);
-    expect(production.playoutReadinessFloorPerMille == 900 &&
-               production.playoutReadinessFloorWindowUs == 10000000,
-           "Balanced must floor its delay at the recent p90 ready offset");
-    for (int mode : {0, 2}) {
+    constexpr uint64_t kRecordedFloorPerMille = 900;
+    for (int mode : {0, 1, 2}) {
         auto other = config(116, 120);
         other.latencyMode = mode;
         expect(vrrTimingParametersForSession(other).playoutReadinessFloorPerMille == 0,
-               "Smooth and Low Latency must keep their existing delay policy");
+               "no profile may floor its delay at a ready-offset percentile");
     }
     const auto run = [&](uint64_t perMille, bool tailOnly = false) {
         auto policy = production;
@@ -3023,10 +3022,10 @@ void testBalancedReadinessFloorFollowsLoad()
         return std::array<uint64_t, 2>{loadedUs, relievedUs};
     };
     const auto without = run(0);
-    const auto with = run(production.playoutReadinessFloorPerMille);
+    const auto with = run(kRecordedFloorPerMille);
     // A late tail that a median cannot see must still raise the p90 floor.
     const auto medianTail = run(500, true);
-    const auto tail = run(production.playoutReadinessFloorPerMille, true);
+    const auto tail = run(kRecordedFloorPerMille, true);
     std::printf("readiness floor with a 12.5%% late tail: median %llu us, p90 %llu us\n",
                 (unsigned long long) medianTail[0], (unsigned long long) tail[0]);
     expect(tail[0] > medianTail[0] + 1000,
@@ -3040,6 +3039,46 @@ void testBalancedReadinessFloorFollowsLoad()
            "the floor must follow a slow median ready offset up");
     expect(with[1] + 1000 < with[0] && with[1] <= without[1] + 500,
            "the floor must release once decode recovers");
+}
+
+void testProfilesOrderEveryTrade()
+{
+    // The profiles are one latency/smoothness dial. Every trade moves the
+    // same way from Low Latency through Balanced to Smooth, and they share
+    // the queue, so capacity never clips one profile's delay before its own
+    // ceiling does.
+    const auto parameters = [](int mode) {
+        auto session = config(116, 120);
+        session.latencyMode = mode;
+        return vrrTimingParametersForSession(session);
+    };
+    const auto low = parameters(2);
+    const auto balanced = parameters(1);
+    const auto smooth = parameters(0);
+    expect(low.playoutOnTimeTargetPerMillion < balanced.playoutOnTimeTargetPerMillion &&
+               balanced.playoutOnTimeTargetPerMillion < smooth.playoutOnTimeTargetPerMillion,
+           "on-time targets must rise from Low Latency to Smooth");
+    expect(low.playoutReadinessWindowUs <= balanced.playoutReadinessWindowUs &&
+               balanced.playoutReadinessWindowUs <= smooth.playoutReadinessWindowUs,
+           "readiness memory must lengthen from Low Latency to Smooth");
+    expect(low.playoutDelayCapSourcePeriodPerMille < balanced.playoutDelayCapSourcePeriodPerMille &&
+               balanced.playoutDelayCapSourcePeriodPerMille < smooth.playoutDelayCapSourcePeriodPerMille,
+           "delay caps must rise from Low Latency to Smooth");
+    expect(low.playoutDelayMaximumUs <= balanced.playoutDelayMaximumUs &&
+               balanced.playoutDelayMaximumUs <= smooth.playoutDelayMaximumUs,
+           "absolute delay ceilings must not fall from Low Latency to Smooth");
+    expect(low.playoutMeanMissHoldUs <= balanced.playoutMeanMissHoldUs &&
+               balanced.playoutMeanMissHoldUs <= smooth.playoutMeanMissHoldUs,
+           "earned protection must be held longer from Low Latency to Smooth");
+    expect(low.playoutMeanMissReleaseUsPerSecond >= balanced.playoutMeanMissReleaseUsPerSecond &&
+               balanced.playoutMeanMissReleaseUsPerSecond >= smooth.playoutMeanMissReleaseUsPerSecond,
+           "protection must release no slower from Smooth to Low Latency");
+    for (const auto* profile : {&low, &balanced, &smooth}) {
+        expect(profile->playoutQueueFrames == VrrLargestQueuedFrames,
+               "every profile must wait in the same full queue");
+        expect(profile->playoutReadinessFloorPerMille == 0,
+               "no profile may floor its delay at a ready-offset percentile");
+    }
 }
 
 void testFirstPresentAfterVrrFloorGapLatches()
@@ -3190,8 +3229,8 @@ void testSmoothQueueReachesItsCeilingNearRefresh()
             d = controller.schedule(frame(i, rtp, true, at), at);
             controller.noteSubmission(true, false, d.targetUs);
         }
-        expect(controller.queuedFrameCapacity() == (mode == 0 ? 4u : 3u),
-               "only Smooth may hold a fourth waiting frame");
+        expect(controller.queuedFrameCapacity() == 4u,
+               "every profile must wait in the same four-frame queue");
         if (mode == 0) {
             expect(d.playoutDelayMaximumUs >= 23500,
                    "Smooth must reach its 24 ms ceiling at 116 FPS with Reduce judder enabled");
@@ -5595,7 +5634,7 @@ void testMeanMissBuffer()
             policy.playoutSerialServiceGate == 2 &&
             policy.playoutRecentPressureRelease == 2 &&
             policy.playoutMeanMissHoldUs == (mode == 2 ? 6000000 : mode == 1 ? 8000000 : 10000000) &&
-            policy.playoutMeanMissReleaseUsPerSecond == (mode == 0 ? 50 : mode == 2 ? 125 : 250),
+            policy.playoutMeanMissReleaseUsPerSecond == (mode == 0 ? 50 : 250),
             "every preset must select the production interval queue and record its release policy");
     }
 }
@@ -6095,6 +6134,7 @@ int main()
     testTearingPresentClearsLatchedFlip();
     testNativeFlipProtectionPreventsScanoutTears();
     testBalancedReadinessFloorFollowsLoad();
+    testProfilesOrderEveryTrade();
     testFirstPresentAfterVrrFloorGapLatches();
     testExplicitAdaptiveOnlyPolicy();
     testProductionAdaptiveProtectionRecoversWithoutDrift();

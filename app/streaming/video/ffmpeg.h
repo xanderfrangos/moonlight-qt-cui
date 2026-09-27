@@ -205,6 +205,10 @@ private:
     uint64_t m_PyroWaveLastErrorLogUs = 0;
     uint32_t m_PyroWaveHeldDecodes = 0;
     uint64_t m_PyroWaveHeldUs = 0;
+    uint32_t m_PyroWaveStaleSkips = 0;
+    // The current run of skipped frames, logged once a frame is decoded again
+    uint32_t m_PyroWaveSkipRun = 0;
+    uint64_t m_PyroWaveSkipRunWaitUs = 0;
     uint64_t holdPyroWaveDecodeForPresent(uint32_t rtpTimestamp);
 
     static const uint8_t k_H264TestFrame[];

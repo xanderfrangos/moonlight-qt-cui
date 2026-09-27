@@ -400,6 +400,11 @@ void FFmpegVideoDecoder::reset()
                         "PyroWave decoded %u frames with lost packets this session",
                         m_PyroWavePartialFrames);
         }
+        if (m_PyroWaveStaleSkips != 0) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "PyroWave skipped %u stale frames this session",
+                        m_PyroWaveStaleSkips);
+        }
         if (m_PyroWaveHeldDecodes != 0) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "PyroWave held %u decodes clear of a VRR flip this session (average %.2f ms)",
@@ -414,6 +419,9 @@ void FFmpegVideoDecoder::reset()
     m_PyroWavePartialFrames = 0;
     m_PyroWaveHeldDecodes = 0;
     m_PyroWaveHeldUs = 0;
+    m_PyroWaveStaleSkips = 0;
+    m_PyroWaveSkipRun = 0;
+    m_PyroWaveSkipRunWaitUs = 0;
 
     if (m_CurrentTestMode != TestMode::TestFrameOnly) {
         Session::get()->getOverlayManager().setOverlayRenderer(nullptr);
@@ -3238,6 +3246,25 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
 
     m_ActiveWndVideoStats.receivedFrames++;
     m_ActiveWndVideoStats.totalFrames++;
+
+    // Every PyroWave frame decodes on its own, so a frame that has waited
+    // more than two frame periods while a newer one is queued is dropped
+    // unopened. Decoding it would cost the GPU time the queue needs to drain,
+    // and it would only be shown late or discarded by the pacer.
+    if (m_PyroWaveActive && m_FramesIn != 0 && m_StreamFps > 0) {
+        const uint64_t waitUs = LiGetMicroseconds() - du->enqueueTimeUs;
+        if (waitUs > 2000000ULL / m_StreamFps && LiGetPendingVideoFrames() > 0) {
+            m_PyroWaveStaleSkips++;
+            if (m_PyroWaveSkipRun++ == 0) m_PyroWaveSkipRunWaitUs = waitUs;
+            return DR_OK;
+        }
+        if (m_PyroWaveSkipRun != 0) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "PyroWave skipped %u stale frames (the oldest waited %.1f ms)",
+                        m_PyroWaveSkipRun, m_PyroWaveSkipRunWaitUs / 1000.0);
+            m_PyroWaveSkipRun = 0;
+        }
+    }
 
     int requiredBufferSize = du->fullLength;
     if (du->frameType == FRAME_TYPE_IDR) {

@@ -81,7 +81,8 @@ public:
                  uint64_t initialWarmupUs = 1000000,
                  size_t initialMinimumSamples = 2,
                  uint64_t recentPressureRelease = 0,
-                 uint64_t serialServiceGate = 0) {
+                 uint64_t serialServiceGate = 0,
+                 bool holdRenewsBelowTargetOnly = false) {
         m_Stats.toleranceUs = toleranceUs;
         m_Stats.severityWeighted = severityWeighted;
         minimum = std::min(minimum, maximum);
@@ -186,7 +187,10 @@ public:
             (recentPressureRelease < 2 || (freshError && delayedAbsorbable && lateness));
         const bool holdProtection = pressureHolds ||
             historyHolds;
-        if (holdProtection) {
+        // While the score still meets the target, a small dip pauses release
+        // for that frame without restarting the clean-time hold.
+        if (holdProtection &&
+                (!holdRenewsBelowTargetOnly || !severityWeighted || belowTarget)) {
             m_LastPressure = s.submitted;
             if (severityWeighted) m_ReleaseFraction = 0;
         }

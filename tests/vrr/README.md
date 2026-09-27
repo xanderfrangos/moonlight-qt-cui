@@ -20,6 +20,9 @@ requires below-target long-window quality, current pressure, fresh readiness-
 related interval error, and serial local work that fits the intended interval.
 Only current pressure renews the clean-time release hold; old score debt remains
 useful for qualifying future growth but cannot pin the live delay by itself.
+While the long-window score still meets the target, current pressure only
+pauses release for that frame (`playout_hold_renew_below_target`); it restarts
+the hold once the score falls below target.
 Preset allowances are now 2/2/4 fitted source frames, additionally limited by
 16/16/24 ms and the unchanged three-frame queue-capacity bound. Initial interval
 calibration needs at least 500 ms and 32 consecutive valid intervals. Growth

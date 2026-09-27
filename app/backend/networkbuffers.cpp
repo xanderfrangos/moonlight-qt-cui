@@ -1,6 +1,7 @@
 #include "networkbuffers.h"
 
 #include <QClipboard>
+#include <QDir>
 #include <QFile>
 #include <QGuiApplication>
 #include <QPointer>
@@ -255,6 +256,70 @@ bool NetworkBuffers::receiveBufferTooSmall()
     const qint64 current = readRmemMax();
     return current > 0 && current < k_RequiredBytes;
 #endif
+}
+
+int NetworkBuffers::wiredLinkMbps(bool* wirelessConnected)
+{
+    int fastest = 0;
+    bool wireless = false;
+#if defined(Q_OS_LINUX)
+    const QDir netDir(QStringLiteral("/sys/class/net"));
+    for (const QString& name : netDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        const QString path = netDir.filePath(name);
+        // Virtual interfaces (bridges, VPNs, containers) have no device
+        if (!QFile::exists(path + QStringLiteral("/device"))) {
+            continue;
+        }
+        QFile state(path + QStringLiteral("/operstate"));
+        if (!state.open(QIODevice::ReadOnly) || state.readAll().trimmed() != "up") {
+            continue;
+        }
+        if (QFile::exists(path + QStringLiteral("/wireless")) ||
+                QFile::exists(path + QStringLiteral("/phy80211"))) {
+            wireless = true;
+            continue;
+        }
+        QFile speed(path + QStringLiteral("/speed"));
+        if (speed.open(QIODevice::ReadOnly)) {
+            bool ok = false;
+            const int mbps = speed.readAll().trimmed().toInt(&ok);
+            if (ok && mbps > fastest) {
+                fastest = mbps;
+            }
+        }
+    }
+#elif defined(Q_OS_WIN)
+    ULONG size = 16 * 1024;
+    std::vector<unsigned char> buffer;
+    ULONG result = ERROR_BUFFER_OVERFLOW;
+    for (int attempt = 0; attempt < 3 && result == ERROR_BUFFER_OVERFLOW; ++attempt) {
+        buffer.resize(size);
+        result = GetAdaptersAddresses(AF_UNSPEC,
+                                      GAA_FLAG_SKIP_UNICAST | GAA_FLAG_SKIP_ANYCAST |
+                                      GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                                      nullptr, reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data()), &size);
+    }
+    if (result == NO_ERROR) {
+        for (auto adapter = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data()); adapter != nullptr; adapter = adapter->Next) {
+            if (adapter->OperStatus != IfOperStatusUp) {
+                continue;
+            }
+            if (adapter->IfType == IF_TYPE_IEEE80211) {
+                wireless = true;
+            }
+            else if (adapter->IfType == IF_TYPE_ETHERNET_CSMACD) {
+                const int mbps = int(adapter->ReceiveLinkSpeed / 1000000);
+                if (mbps > fastest) {
+                    fastest = mbps;
+                }
+            }
+        }
+    }
+#endif
+    if (wirelessConnected != nullptr) {
+        *wirelessConnected = wireless;
+    }
+    return fastest;
 }
 
 QString NetworkBuffers::launchWarning()

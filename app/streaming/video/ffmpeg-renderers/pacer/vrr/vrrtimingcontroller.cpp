@@ -19,13 +19,14 @@ constexpr uint64_t kFixedPlayoutDelayUs = 3000;
 constexpr uint64_t kPlayoutStartUs = 6000;
 constexpr uint64_t kPlayoutMinimumUs = 1000;
 constexpr uint64_t kPlayoutMaximumUs = 8000;
-// Smooth is intentionally allowed to retain more protection than the other
-// profiles. Its 24 ms ceiling needs a fourth waiting frame near 120 FPS: with
-// three, the queue budget (3 periods minus render lead and the 6 ms Reduce
-// judder retiming) clipped it to ~16.9 ms at 116 FPS, about two frames.
-constexpr uint64_t kSmoothPlayoutMaximumUs = 24000;
+// Profile buffer allowances are measured in fitted source frames, independent
+// of display refresh: one for Low Latency, two for Balanced, four for Smooth.
 constexpr uint64_t kSmoothPlayoutCapSourcePeriodPerMille = 4000;
-constexpr uint64_t kSmoothPlayoutQueueFrames = 4;
+// Every profile waits in the same four-frame queue and differs only in how
+// much of it its delay ceiling uses. With three frames, Balanced's 16 ms
+// ceiling filled the queue budget near 120 FPS, so capacity rather than the
+// profile clipped its delay.
+constexpr uint64_t kPlayoutQueueFrames = VrrLargestQueuedFrames;
 // Smooth's tighter cadence target is intentionally a separate policy value;
 // keep the historical default below unchanged for old captures and direct
 // IntervalBuffer callers.
@@ -182,7 +183,7 @@ VrrTimingParameters vrrTimingParametersForSession(
     // needed more room. New live sessions use the fitted source period;
     // captured policies retain the old nominal-period behavior by default.
     parameters.playoutDelayCapUsesObservedPeriod = 1;
-    parameters.playoutQueueFrames = latencyMode == 0 ? kSmoothPlayoutQueueFrames : VrrMaximumQueuedFrames;
+    parameters.playoutQueueFrames = kPlayoutQueueFrames;
     parameters.playoutCapacityTelemetry = 1;
     parameters.playoutCatchupPerMille = config.smoothFrameTiming ? 20 : 0;
     parameters.playoutGpuReadinessAdaptation = 1;
@@ -209,26 +210,16 @@ VrrTimingParameters vrrTimingParametersForSession(
     parameters.playoutMeanMissHoldUs = latencyMode == 2 ? 6000000 : latencyMode == 1 ? 8000000 : 10000000;
     // Balanced's 250 us/s recovery is the measured latency/smoothness knee:
     // faster recovery saved little additional latency and noticeably raised
-    // presented jerk. Smooth and Low Latency retain their mode-specific rates
-    // until matching live traces justify changing them.
-    parameters.playoutMeanMissReleaseUsPerSecond = latencyMode == 0 ? 50 :
-        latencyMode == 2 ? 125 : 250;
-    // The one-second mean error dilutes isolated late frames, so Balanced
-    // released below the delay its 4K decode tail needed and hitched on each
-    // slow frame. Floor it at the median ready offset of the last ten
-    // seconds: it follows decode/network load both ways within the window
-    // and rare stalls cannot inflate it. Replay of 20260923-232347-186: >2 ms
-    // jerk 81 -> 44 per mille for +1.0 ms median latency; the 19-minute
-    // 20260922-224404-796 session stays within +0.2 ms. Smooth gained nothing;
-    // Low Latency awaits a matching capture.
-    // A median cannot see a tail. On lossy 900 Mbps PyroWave (20260926-131302)
-    // 10-20% of frames finished decoding after their slot while the median
-    // floor and the one-second mean both stayed quiet, so the buffer released
-    // to 5.5 ms. The p90 floor halves >2 ms presented jerk on all three
-    // Balanced captures (1440p 106 -> 54, 4K 88 -> 54, 232347 44 -> 21 per
-    // mille) for +1.1, +0.6 and +2.6 ms median latency; p95 buys little more.
-    parameters.playoutReadinessFloorPerMille = latencyMode == 1 ? 900 : 0;
-    parameters.playoutReadinessFloorWindowUs = 10000000;
+    // presented jerk. Profiles order every trade the same way, so Low Latency
+    // releases at least as fast as Balanced, and Smooth slowest.
+    parameters.playoutMeanMissReleaseUsPerSecond = latencyMode == 0 ? 50 : 250;
+    // A dip that leaves the quality score above target does not restart the
+    // hold, so release resumes at the rate above once the dip passes.
+    parameters.playoutHoldRenewBelowTarget = parameters.playoutResponsiveBuffer >= 7 ? 1 : 0;
+    // No profile floors its delay at a recent ready-offset percentile. Such a
+    // floor counts every late frame, including a decoder that has fallen
+    // behind, and held Balanced at its ceiling after an ordinary startup
+    // backlog. The parameter remains for captures that recorded it.
     parameters.playoutOnTimeTargetPerMillion = latencyMode == 2 ? 990000 :
         latencyMode == 1 ? 995000 : 999900;
     parameters.playoutReadinessWindowUs = latencyMode == 2 ? 60000000 :
@@ -271,8 +262,9 @@ VrrTimingParameters vrrTimingParametersForSession(
     parameters.sourcePlayoutDelayUs = kFixedPlayoutDelayUs;
     parameters.playoutDelayStartUs = kPlayoutStartUs;
     parameters.playoutDelayMinimumUs = kPlayoutMinimumUs;
-    parameters.playoutDelayMaximumUs = latencyMode == 0 ?
-        kSmoothPlayoutMaximumUs : 16000;
+    // Use a source-frame budget for every preset. Fixed millisecond ceilings
+    // made Balanced and Smooth collapse to roughly one frame on slower streams.
+    parameters.playoutDelayMaximumUs = kPlayoutMinimumUs;
     parameters.playoutDelayPercentilePerMille = kPlayoutPercentilePerMille;
     parameters.playoutBurstExclusionPerMille = kPlayoutBurstExclusionPerMille;
     // The independent smoothing preference trades timestamp fidelity for
@@ -299,10 +291,11 @@ VrrTimingParameters vrrTimingParametersForSession(
     parameters.playoutSmoothingRecoveryUs = 0;
     parameters.playoutMetronomeEnabled = 0;
     parameters.playoutDelayStartPeriodPerMille = kPlayoutStartPeriodPerMille;
-    // A slower desktop/source must not expand the configured-rate ceiling.
-    // Source-relative preset caps still impose their smaller limit. Captured
-    // parameters retain their recorded limit for exact replay.
-    parameters.playoutDelayMaximumPeriodPerMille = 0;
+    // The maximum and cap both express the selected total buffer in source
+    // frames: one for Low Latency, two for Balanced, four for Smooth. Use the
+    // fitted source period, never the display refresh, for this allowance.
+    parameters.playoutDelayMaximumPeriodPerMille =
+        latencyMode == 2 ? 1000 : latencyMode == 1 ? 2000 : 4000;
     parameters.playoutSmoothingSnapPerMille = kPlayoutMetronomeSnapPerMille;
     parameters.playoutOffsetReseedFrames = kPlayoutOffsetReseedFrames;
     parameters.playoutDelaySlewAcrossBands = 1;
@@ -2157,7 +2150,8 @@ void VrrTimingController::noteSubmission(bool submitted, bool cancelled,
                 m_Parameters.playoutIntervalInitialWarmupUs,
                 m_Parameters.playoutIntervalInitialMinimumSamples,
                 m_Parameters.playoutRecentPressureRelease,
-                m_Parameters.playoutSerialServiceGate);
+                m_Parameters.playoutSerialServiceGate,
+                m_Parameters.playoutHoldRenewBelowTarget != 0);
         }
         else m_MeanMissBuffer.observe(submissionUs, ready > deadline ? ready - deadline : 0,
             p.applied, submitted && !cancelled && m_Pending.hasPreparationDuration &&
@@ -2984,9 +2978,9 @@ void VrrTimingController::updateLatencyFixState()
 
 uint64_t VrrTimingController::playoutQueueLimitUs() const
 {
-    // One frame is active, three (Smooth: four) can wait, and the next arrival
-    // needs a slot. Use the faster of fitted and negotiated cadence during rate
-    // transitions.
+    // One frame is active, four (captures that recorded no size: three) can
+    // wait, and the next arrival needs a slot. Use the faster of fitted and
+    // negotiated cadence during rate transitions.
     const uint64_t period = std::min(m_SourcePeriodUs, m_ConfiguredStreamPeriodUs);
     const uint64_t capacity = period * queuedFrameCapacity();
     const uint64_t work = saturatingAdd(m_RenderLeadUs, m_Parameters.presentationSafetyUs);

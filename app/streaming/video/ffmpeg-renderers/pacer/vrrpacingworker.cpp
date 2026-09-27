@@ -1226,10 +1226,14 @@ void VrrPacingWorker::publishReceiveDeadline(const PacedFrame& frame,
         return;
     }
     // A deliberate decode hold is spare time, not cost: counting it would
-    // move every deadline earlier and cut more detail for nothing.
-    if (frame.reassembledUs()) {
-        m_RecentDuration.observe(frame.reassembledUs() + frame.decodeHoldUs(),
-                                 frame.decodeCompleteUs());
+    // move every deadline earlier and cut more detail for nothing. A frame
+    // whose own decode took longer than a source period is left out too:
+    // releasing later frames earlier cannot relieve an overloaded decoder, and
+    // counting it moved every deadline before the frames finished arriving.
+    const uint64_t decodeStartUs = frame.reassembledUs() + frame.decodeHoldUs();
+    if (frame.reassembledUs() && frame.decodeCompleteUs() >= decodeStartUs &&
+            frame.decodeCompleteUs() - decodeStartUs <= decision.sourcePeriodUs) {
+        m_RecentDuration.observe(decodeStartUs, frame.decodeCompleteUs());
     }
     m_DecodeGpuCost.observe(frame.decodeSubmitUs(), frame.decodeCompleteUs());
     if (m_DecodeGpuCost.ready() && m_PresentCallCost.ready()) {

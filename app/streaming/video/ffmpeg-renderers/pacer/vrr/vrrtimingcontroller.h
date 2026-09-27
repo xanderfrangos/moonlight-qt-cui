@@ -50,6 +50,9 @@
     X(size_t, playout_interval_initial_minimum_samples, playoutIntervalInitialMinimumSamples, 2) \
     X(uint64_t, playout_mean_miss_hold_us, playoutMeanMissHoldUs, 4000000) \
     X(uint64_t, playout_mean_miss_release_us_per_second, playoutMeanMissReleaseUsPerSecond, 200) \
+    /* Nonzero restarts the clean-time hold only while the quality score is */ \
+    /* below target; above it, current pressure only pauses release. */ \
+    X(uint64_t, playout_hold_renew_below_target, playoutHoldRenewBelowTarget, 0) \
     /* Nonzero floors the adaptive playout delay at this per-mille percentile */ \
     /* of recent timestamp-playout ready offsets (decode completion after the */ \
     /* mapped source slot), so release cannot drain below what current frames */ \
