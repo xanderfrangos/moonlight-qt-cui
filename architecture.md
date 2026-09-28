@@ -17,8 +17,12 @@ which replaces queued images without tearing, so it needs no change; the plan's
 `SetMaximumFrameLatency(1)` suggestion would make those presents block (see the
 comment at its swapchain setup) and was not adopted. DXVA2 (FLIPEX under DWM),
 EGL/OpenGL, SDL, Metal and DRM keep their swap settings and get the Pacer
-behavior only. The overlay shows a "V-Sync Mailbox" chip. Not yet built or
-measured on hardware.
+behavior only. The stats graph card shows the V-Sync type as its own chip
+("FIFO" or "Mailbox") after the "V-Sync" chip. Default stays FIFO rather
+than the plan's suggested Mailbox default, so existing users see no change.
+Under Gamescope the Pacer mailbox keeps stale frames from reaching the
+compositor; the Vulkan Mailbox request can still be overridden to FIFO by
+Steam's frame limiter. Not yet built or measured on hardware.
 
 Original Moonlight `master` merge (2026-09-25, `032529d7`): D3D11VA now
 logs the adapter driver version and uses upstream's vendor and driver checks

@@ -668,11 +668,12 @@ QStringList streamInfoChips(const StatsGraphStreamInfo& info)
     if (info.syncMode == StatsGraphSyncMode::Vrr) {
         chips.append(QStringLiteral("VRR"));
     }
-    else if (info.syncMode == StatsGraphSyncMode::VSync) {
+    else if (info.syncMode == StatsGraphSyncMode::VSync ||
+             info.syncMode == StatsGraphSyncMode::VSyncMailbox) {
         chips.append(QStringLiteral("V-Sync"));
-    }
-    else if (info.syncMode == StatsGraphSyncMode::VSyncMailbox) {
-        chips.append(QStringLiteral("V-Sync Mailbox"));
+        // The fixed V-Sync type gets its own chip so it is always visible
+        chips.append(info.syncMode == StatsGraphSyncMode::VSyncMailbox ?
+                         QStringLiteral("Mailbox") : QStringLiteral("FIFO"));
     }
     if (info.videoFormat != 0) {
         chips.append(QString::fromUtf8(codecName(info.videoFormat)));
