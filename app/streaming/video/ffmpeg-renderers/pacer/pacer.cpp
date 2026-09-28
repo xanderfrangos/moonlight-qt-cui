@@ -1,5 +1,6 @@
 #include "pacer.h"
 #include "fixedvsynctrace.h"
+#include "presenttimingvsyncsource.h"
 #include "path.h"
 #include <QCryptographicHash>
 #include <QVarLengthArray>
@@ -45,6 +46,7 @@ Pacer::Pacer(IFFmpegRenderer* renderer) :
     m_Stopping(false),
     m_Shutdown(false),
     m_VsyncSource(nullptr),
+    m_PresentTimingSource(nullptr),
     m_VsyncRenderer(renderer),
     m_MaxVideoFps(0),
     m_DisplayFps(0),
@@ -55,7 +57,8 @@ Pacer::Pacer(IFFmpegRenderer* renderer) :
     m_SkipsSinceTick(0),
     m_PrevTickRepeated(false),
     m_SmoothRepeat(false),
-    m_RepeatRequested(false)
+    m_RepeatRequested(false),
+    m_SmoothHandoffUs(0)
 {
 
 }
@@ -88,7 +91,10 @@ void Pacer::shutdown()
         SDL_WaitThread(m_VsyncThread, nullptr);
     }
 
-    // Stop V-sync callbacks
+    // Stop V-sync callbacks. The render thread may still report refreshes.
+    m_FrameQueueLock.lock();
+    m_PresentTimingSource = nullptr;
+    m_FrameQueueLock.unlock();
     delete m_VsyncSource;
     m_VsyncSource = nullptr;
 
@@ -96,6 +102,7 @@ void Pacer::shutdown()
     if (m_RenderThread != nullptr) {
         m_RenderQueueNotEmpty.wakeAll();
         SDL_WaitThread(m_RenderThread, nullptr);
+        m_VsyncRenderer->setPresentTimingSink(nullptr);
     }
     else {
         // Notify the renderer that it is being destroyed soon
@@ -220,6 +227,7 @@ int Pacer::renderThread(void* context)
     while (!me->m_Stopping) {
         // Wait for the renderer to be ready for the next frame
         me->m_VsyncRenderer->waitToRender();
+        const uint64_t readyUs = LiGetMicroseconds();
 
         // Acquire the frame queue lock to protect the queue and
         // the not empty condition
@@ -249,10 +257,19 @@ int Pacer::renderThread(void* context)
         // A new frame replaces any repeat that was still waiting
         me->m_RepeatRequested = false;
 
+        // Smooth learns its hand-over lead from the time a frame took once
+        // both it and the renderer were ready: waking this thread plus the
+        // CPU render and submit. Waiting for a free swapchain image is
+        // excluded; that is paced by the refreshes themselves.
+        const uint64_t startUs = me->m_Smooth && me->m_RenderQueue.count() == 1 &&
+                me->m_SmoothHandoffUs != 0 ? SDL_max(me->m_SmoothHandoffUs, readyUs) : 0;
         AVFrame* frame = me->m_RenderQueue.dequeue();
         me->m_FrameQueueLock.unlock();
 
-        me->renderFrame(frame);
+        const uint64_t renderedUs = me->renderFrame(frame);
+        if (startUs != 0 && renderedUs > startUs) {
+            me->observeRenderSpan(renderedUs - startUs);
+        }
     }
 
     // Notify the renderer that it is being destroyed soon
@@ -383,7 +400,7 @@ void Pacer::handleSmoothVsync(uint64_t tickUs)
     // This decision is shown on the next refresh. Frames must reach the
     // renderer TIMER_SLACK_MS before it, like the default path.
     const uint64_t showUs = tickUs + periodUs;
-    const uint64_t renderLeadUs = SDL_min((uint64_t)TIMER_SLACK_MS * 1000, periodUs / 2);
+    const uint64_t renderLeadUs = SDL_min((uint64_t)m_RenderLead.leadUs(), periodUs / 2);
     const int queueBefore = m_PacingQueue.count();
 
     int chosen = findSmoothFrameLocked(showUs);
@@ -460,6 +477,7 @@ void Pacer::sendSmoothFrameAndUnlock(int chosen, uint64_t tickUs, uint64_t showU
     recordVsyncTick(tickUs, true, (uint32_t)skippedFrames.size(),
                     queueBefore, m_PacingQueue.count(), &shownInfo, late);
 
+    m_SmoothHandoffUs = LiGetMicroseconds();
     enqueueFrameForRenderingAndUnlock(frame);
 
     for (AVFrame* skippedFrame : skippedFrames) {
@@ -694,11 +712,29 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
             break;
         }
 
+        // Smooth needs a refresh clock. Where the platform has no V-sync
+        // wakeup (Gamescope's X11), one can be kept in phase from the
+        // refresh times the compositor reports for presented frames.
+        if (m_VsyncSource == nullptr && m_VsyncMode == StreamingPreferences::VSM_SMOOTH) {
+            auto source = new PresentTimingVsyncSource();
+            if (m_VsyncRenderer->setPresentTimingSink(this)) {
+                m_VsyncSource = source;
+                m_PresentTimingSource = source;
+            }
+            else {
+                delete source;
+            }
+        }
+
         SDL_assert(m_VsyncSource != nullptr || !(m_RendererAttributes & RENDERER_ATTRIBUTE_FORCE_PACING));
 
         if (m_VsyncSource != nullptr && !m_VsyncSource->initialize(window, m_DisplayFps)) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "Vsync source failed to initialize. Frame pacing will not be available!");
+            if (m_PresentTimingSource != nullptr) {
+                m_VsyncRenderer->setPresentTimingSink(nullptr);
+                m_PresentTimingSource = nullptr;
+            }
             delete m_VsyncSource;
             m_VsyncSource = nullptr;
         }
@@ -712,20 +748,29 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
     if (m_VsyncMode == StreamingPreferences::VSM_SMOOTH) {
         if (m_VsyncSource != nullptr) {
             m_Smooth = true;
-            m_Smoother.configure(m_MaxVideoFps, m_DisplayFps,
-                                 (int64_t)TIMER_SLACK_MS * 1000);
+            // The old fixed lead is the floor: the GPU and compositor time
+            // after submission is not measured, so only a slow CPU render
+            // lengthens it. A reported-refresh clock (Gamescope) adds more
+            // margin for Gamescope's own composition before each refresh.
+            const int64_t periodUs = 1000000 / SDL_max(m_DisplayFps, 1);
+            m_RenderLead.configure(SDL_min((int64_t)TIMER_SLACK_MS * 1000, periodUs / 2),
+                                   m_PresentTimingSource != nullptr ? 2500 : 2000,
+                                   periodUs / 2);
+            m_Smoother.configure(m_MaxVideoFps, m_DisplayFps, m_RenderLead.leadUs());
             // Repeats run on the render thread, which only exists when the
             // renderer supports it
             m_SmoothRepeat = (m_RendererAttributes & RENDERER_ATTRIBUTE_REPEAT_FRAME) &&
                     m_VsyncRenderer->isRenderThreadSupported();
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "V-Sync mode: Smooth (frames scheduled onto refreshes from host timestamps; %s)",
+                        "V-Sync mode: Smooth (frames scheduled onto refreshes from host timestamps; "
+                        "refresh clock: %s; %s)",
+                        m_PresentTimingSource != nullptr ? "compositor-reported refreshes" : "display V-sync",
                         m_SmoothRepeat ? "empty refreshes re-present the last frame" :
                                          "empty refreshes present nothing");
         }
         else {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "Smooth V-Sync needs a V-sync source, which this platform lacks; using Default");
+                        "Smooth V-Sync needs a V-sync source or reported refresh times, which this platform and renderer lack; using Default");
             m_VsyncMode = StreamingPreferences::VSM_DEFAULT;
         }
     }
@@ -760,7 +805,7 @@ void Pacer::notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info)
     // overrides this path to discard stale work on suspension/minimize.
 }
 
-void Pacer::renderFrame(AVFrame* frame)
+uint64_t Pacer::renderFrame(AVFrame* frame)
 {
     const uint64_t decoderOutputUs =
         static_cast<uint64_t>(frame->pkt_dts);
@@ -826,6 +871,43 @@ void Pacer::renderFrame(AVFrame* frame)
         m_FrameQueueLock.lock();
     }
 
+    m_FrameQueueLock.unlock();
+
+    return afterRender;
+}
+
+void Pacer::observeRenderSpan(uint64_t spanUs)
+{
+    m_FrameQueueLock.lock();
+    if (m_RenderLead.observe(static_cast<int64_t>(spanUs))) {
+        m_Smoother.setRenderLeadUs(m_RenderLead.leadUs());
+        if (m_Trace != nullptr) {
+            FixedVsyncTrace::Row row;
+            row.event = "lead";
+            row.timeUs = LiGetMicroseconds();
+            row.a = m_RenderLead.leadUs();
+            row.b = m_RenderLead.lastPercentileUs();
+            row.displayPeriodUs = m_Smoother.displayPeriodUs();
+            m_Trace->record(row);
+        }
+    }
+    m_FrameQueueLock.unlock();
+}
+
+void Pacer::onRefreshReported(uint64_t refreshUs, uint64_t uncertaintyUs)
+{
+    m_FrameQueueLock.lock();
+    if (m_PresentTimingSource != nullptr) {
+        m_PresentTimingSource->observeRefresh(refreshUs);
+        if (m_Trace != nullptr) {
+            FixedVsyncTrace::Row row;
+            row.event = "refresh";
+            row.timeUs = refreshUs;
+            row.a = static_cast<int64_t>(uncertaintyUs);
+            row.displayPeriodUs = static_cast<uint64_t>(m_PresentTimingSource->periodUs());
+            m_Trace->record(row);
+        }
+    }
     m_FrameQueueLock.unlock();
 }
 

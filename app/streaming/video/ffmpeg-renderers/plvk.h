@@ -73,6 +73,7 @@ public:
     virtual bool prepareDecoderContext(AVCodecContext* context, AVDictionary** options) override;
     virtual void renderFrame(AVFrame* frame) override;
     virtual IVrrFramePresenter* getVrrFramePresenter() override;
+    virtual bool setPresentTimingSink(IPresentTimingSink* sink) override;
     virtual VrrFallbackReason checkSupport() const override;
     virtual bool canLatchAdaptivePresent() const override;
     virtual uint64_t waitForDecode(AVFrame* frame) override;
@@ -299,6 +300,10 @@ private:
     bool m_LoggedPresentationFeedback = false;
 #ifdef Q_OS_LINUX
     std::unique_ptr<VulkanTiming> m_GamescopeTiming;
+    // Smooth V-Sync's refresh clock under Gamescope. Render thread only
+    // once streaming starts.
+    IPresentTimingSink* m_PresentTimingSink = nullptr;
+    uint64_t m_FixedPresentationId = 0;
 #endif
 #ifdef HAS_WAYLAND
     std::unique_ptr<Vrr13::WaylandFeedback> m_PresentationFeedback;

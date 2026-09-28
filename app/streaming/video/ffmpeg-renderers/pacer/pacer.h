@@ -4,6 +4,7 @@
 #include "../renderer.h"
 #include "pacertelemetry.h"
 #include "fixedvsyncsmoother.h"
+#include "refreshclock.h"
 #include "vrr/vrrtypes.h"
 
 #include <QQueue>
@@ -15,6 +16,7 @@
 
 class VrrPacingWorker;
 class FixedVsyncTrace;
+class PresentTimingVsyncSource;
 
 // The maximum number of frames pacer will ever hold is:
 // - 3 frames in the pacing queue
@@ -37,7 +39,7 @@ public:
     }
 };
 
-class Pacer
+class Pacer : public IPresentTimingSink
 {
 public:
     Pacer(IFFmpegRenderer* renderer);
@@ -86,6 +88,9 @@ public:
 
     void signalVsync();
 
+    // Render thread: a refresh the compositor reported (Smooth on Gamescope)
+    void onRefreshReported(uint64_t refreshUs, uint64_t uncertaintyUs) override;
+
     void renderOnMainThread();
 
 private:
@@ -130,7 +135,11 @@ private:
                          bool late);
     void enqueueFrameForRenderingAndUnlock(AVFrame* frame);
 
-    void renderFrame(AVFrame* frame);
+    // Returns the time the renderer finished with the frame
+    uint64_t renderFrame(AVFrame* frame);
+
+    // Smooth: a frame took spanUs from hand-over until it was submitted
+    void observeRenderSpan(uint64_t spanUs);
 
     void dropFrameForEnqueue(QQueue<AVFrame*>& queue);
 
@@ -157,6 +166,9 @@ private:
     bool m_Shutdown;
 
     IVsyncSource* m_VsyncSource;
+    // m_VsyncSource when it runs on reported refreshes (Gamescope), else
+    // null. Guarded by m_FrameQueueLock.
+    PresentTimingVsyncSource* m_PresentTimingSource;
     IFFmpegRenderer* m_VsyncRenderer;
     int m_MaxVideoFps;
     int m_DisplayFps;
@@ -188,6 +200,13 @@ private:
     bool m_SmoothRepeat;
     // Guarded by m_FrameQueueLock
     bool m_RepeatRequested;
+    // Smooth: how long before a refresh a frame must reach the renderer,
+    // learned from recent hand-over to render-complete spans. Guarded by
+    // m_FrameQueueLock.
+    RenderLeadEstimator m_RenderLead;
+    // Smooth: when the newest frame was handed to the render queue.
+    // Guarded by m_FrameQueueLock.
+    uint64_t m_SmoothHandoffUs;
     std::unique_ptr<FixedVsyncTrace> m_Trace;
     PacerTelemetry m_Telemetry;
     std::unique_ptr<VrrPacingWorker> m_VrrWorker;

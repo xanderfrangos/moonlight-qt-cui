@@ -229,3 +229,21 @@ void VulkanTiming::finish(VrrPresentFeedback& feedback)
     feedback.latchTimeUs = sample.time;
     feedback.presentationUncertaintyUs = sample.uncertainty;
 }
+
+void VulkanTiming::finishFixed()
+{
+    m_ArmedId = 0;
+    if (m_AcceptedId) collect();
+    m_AcceptedId = 0;
+}
+
+bool VulkanTiming::takeDisplayTime(uint64_t& timeUs, uint64_t& uncertaintyUs)
+{
+    if (m_Completed.empty()) return false;
+    const auto sample = m_Completed.front();
+    m_Completed.pop_front();
+    ++m_Statistics.emitted;
+    timeUs = sample.time;
+    uncertaintyUs = sample.uncertainty;
+    return true;
+}

@@ -1,5 +1,8 @@
 #include "../../app/streaming/video/ffmpeg-renderers/pacer/fixedvsyncsmoother.h"
+#include "../../app/streaming/video/ffmpeg-renderers/pacer/refreshclock.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -235,6 +238,99 @@ int main()
         expect(decisions[200].slotUs > decisions[199].slotUs &&
                decisions[201].slotUs > decisions[200].slotUs,
                "a burst frame keeps its own refresh");
+    }
+
+    {
+        // Gamescope-style sparse refresh reports from a 59.94 Hz display that
+        // SDL reports as 60 Hz. The clock must learn both the period and the
+        // phase and predict the real refreshes.
+        const double truePeriod = 1000000.0 / 59.94;
+        const double phase = 1000000.0 + 5123.0;
+        RefreshClock clock;
+        clock.configure(1000000.0 / 60);
+        clock.seed(1000000);
+        const auto refresh = [&](int64_t n) { return phase + n * truePeriod; };
+        int64_t n = 0;
+        for (int i = 0; i < 40; i++) {
+            n += 7 + (i * 13) % 31;
+            const double noise = ((i * 37) % 7 - 3) * 15.0;
+            clock.observe(static_cast<uint64_t>(std::llround(refresh(n) + noise)));
+        }
+        expect(std::fabs(clock.periodUs() - truePeriod) < 2.0, "refresh clock learns the real period");
+        double worst = 0;
+        for (int64_t m = n; m < n + 120; m++) {
+            const uint64_t after = static_cast<uint64_t>(refresh(m) - truePeriod / 3);
+            const double predicted = static_cast<double>(clock.nextRefreshAfter(after));
+            worst = std::max(worst, std::fabs(predicted - refresh(m)));
+        }
+        expect(worst < 250, "refresh clock predicts the next two seconds of refreshes");
+
+        // One report half a refresh off is ignored; three in a row move the grid
+        const double before = static_cast<double>(clock.nextRefreshAfter(static_cast<uint64_t>(refresh(n + 200))));
+        clock.observe(static_cast<uint64_t>(refresh(n + 130) + truePeriod / 2));
+        const double afterOne = static_cast<double>(clock.nextRefreshAfter(static_cast<uint64_t>(refresh(n + 200))));
+        expect(std::fabs(before - afterOne) < 1.0 && clock.rejected() == 1,
+               "a single off-grid report does not move the refresh clock");
+        for (int i = 1; i <= 3; i++) {
+            clock.observe(static_cast<uint64_t>(refresh(n + 130 + i) + 5000));
+        }
+        const double shifted = static_cast<double>(clock.nextRefreshAfter(static_cast<uint64_t>(refresh(n + 200))));
+        expect(clock.rephased() == 1 && std::fabs(shifted - (refresh(n + 200) + 5000)) < 250,
+               "persistent off-grid reports rephase the refresh clock");
+    }
+
+    {
+        // Without reports the clock runs freely at the nominal rate and
+        // always predicts a refresh strictly in the future
+        RefreshClock clock;
+        clock.configure(11111.1);
+        expect(clock.nextRefreshAfter(5000) == 0, "an unseeded refresh clock predicts nothing");
+        clock.seed(1000000);
+        expect(clock.nextRefreshAfter(1000000) == 1011111, "free-running clock ticks at the nominal rate");
+        expect(clock.nextRefreshAfter(1011111) > 1011111, "prediction is strictly after the given time");
+    }
+
+    {
+        // The hand-over lead keeps its floor on a fast renderer, grows in
+        // bounded steps on a slow one, and gives the time back slowly
+        RenderLeadEstimator lead;
+        lead.configure(3000, 2000, 8333);
+        for (int i = 0; i < 256; i++) {
+            lead.observe(300 + (i % 5) * 100);
+        }
+        expect(lead.leadUs() == 3000, "a fast renderer keeps the floor lead");
+
+        int64_t previous = lead.leadUs();
+        bool bounded = true;
+        for (int i = 0; i < 512; i++) {
+            lead.observe(4000 + (i % 10) * 50);
+            bounded = bounded && lead.leadUs() - previous <= RenderLeadEstimator::kGrowPerUpdateUs;
+            previous = lead.leadUs();
+        }
+        expect(bounded, "the lead grows in bounded steps");
+        expect(lead.leadUs() >= 6300 && lead.leadUs() <= 6500, "a slow renderer gets p95 plus margin");
+
+        for (int i = 0; i < 64; i++) {
+            lead.observe(1000);
+        }
+        expect(lead.leadUs() > 5500, "the lead shrinks slowly");
+        for (int i = 0; i < 4096; i++) {
+            lead.observe(1000);
+        }
+        expect(lead.leadUs() == 3000, "the lead returns to its floor");
+
+        const int64_t settled = lead.leadUs();
+        for (int i = 0; i < 256; i++) {
+            lead.observe(500000);
+        }
+        expect(lead.leadUs() == settled, "stalls do not count as render time");
+
+        RenderLeadEstimator capped;
+        capped.configure(3000, 2000, 5555);
+        for (int i = 0; i < 512; i++) {
+            capped.observe(9000);
+        }
+        expect(capped.leadUs() == 5555, "the lead never exceeds half a refresh");
     }
 
     if (failures == 0) {

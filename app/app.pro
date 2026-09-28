@@ -306,6 +306,7 @@ ffmpeg {
         streaming/video/ffmpeg-renderers/swframemapper.cpp \
         streaming/video/ffmpeg-renderers/pacer/pacer.cpp \
         streaming/video/ffmpeg-renderers/pacer/fixedvsynctrace.cpp \
+        streaming/video/ffmpeg-renderers/pacer/presenttimingvsyncsource.cpp \
         streaming/video/ffmpeg-renderers/pacer/vrrpacingworker.cpp \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtimingcontroller.cpp \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtargetwaiter.cpp
@@ -320,6 +321,8 @@ ffmpeg {
         streaming/video/ffmpeg-renderers/pacer/pacer.h \
         streaming/video/ffmpeg-renderers/pacer/fixedvsyncsmoother.h \
         streaming/video/ffmpeg-renderers/pacer/fixedvsynctrace.h \
+        streaming/video/ffmpeg-renderers/pacer/presenttimingvsyncsource.h \
+        streaming/video/ffmpeg-renderers/pacer/refreshclock.h \
         streaming/video/ffmpeg-renderers/pacer/pacertelemetry.h \
         streaming/video/ffmpeg-renderers/pacer/vrrpacingworker.h \
         streaming/video/ffmpeg-renderers/ivrrframepresenter.h \

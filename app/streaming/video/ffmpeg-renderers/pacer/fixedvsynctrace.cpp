@@ -64,6 +64,8 @@ void FixedVsyncTrace::write(const QString& path, int mode, int sourceFps, int di
         "; times=LiGetMicroseconds; rtp=90 kHz host stamp\n"
         "# tick: a=sent b=skipped c=queue_before d=queue_after e=missed_slot f=late\n"
         "# admit: a=host_us b=smoothed_host_us c=transit_us d=desired_offset_us e=resynced f=rephased\n"
+        "# refresh: a refresh the compositor reported (Gamescope); a=uncertainty_us, display_period_us=refresh clock period\n"
+        "# lead: Smooth hand-over lead changed; a=lead_us b=p95_render_span_us\n"
         "event,time_us,rtp,arrival_us,due_us,slot_us,a,b,c,d,e,f,offset_us,display_period_us\n";
     bool healthy = true;
     bool truncated = false;

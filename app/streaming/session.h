@@ -330,6 +330,10 @@ private:
         // StreamingPreferences::VsyncMode for fixed V-Sync. Always Default
         // while VRR is requested.
         int vsyncMode = 0;
+        // Smooth under Gamescope needs the Vulkan renderer, whose presents
+        // report refresh times. Probe and playback both prefer it so the
+        // negotiated color range matches.
+        bool smoothPrefersVulkan = false;
         bool enableVrr = false;
         int vrrLatencyMode = 0;
         bool gamescopeMailbox = false;

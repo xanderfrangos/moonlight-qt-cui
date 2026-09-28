@@ -18,7 +18,9 @@
 class FixedVsyncTrace {
 public:
     struct Row {
-        // Static literal: "tick" (one per refresh) or "admit" (one per frame)
+        // Static literal: "tick" (one per refresh), "admit" (one per frame),
+        // "refresh" (a refresh the compositor reported) or "lead" (Smooth's
+        // hand-over lead changed)
         const char* event = "tick";
         uint64_t timeUs = 0;
         int64_t rtp = -1;
@@ -28,6 +30,8 @@ public:
         // tick: sent, skipped, queue_before, queue_after, missed_slot, late
         // admit: host_us, smoothed_host_us, transit_us, desired_offset_us,
         //        resynced, rephased
+        // refresh: uncertainty_us
+        // lead: lead_us, p95_render_span_us
         int64_t a = 0, b = 0, c = 0, d = 0, e = 0, f = 0;
         int64_t offsetUs = 0;
         uint64_t displayPeriodUs = 0;

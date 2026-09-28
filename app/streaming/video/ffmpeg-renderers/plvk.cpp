@@ -555,7 +555,13 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
         av_free((void*)vkParams.opt_extensions);
 #endif
 #ifdef Q_OS_LINUX
-    const bool gamescopeTiming = decoderParams->enableVrr && isGamescopeWsiPresentation(SDL_GetCurrentVideoDriver()) &&
+    // Smooth V-Sync has no V-sync wakeup under Gamescope; the reported
+    // display times of its ordinary presents become its refresh clock.
+    const bool smoothRefreshClock = !decoderParams->testOnly && !decoderParams->enableVrr &&
+        decoderParams->enableVsync && decoderParams->vsyncMode == StreamingPreferences::VSM_SMOOTH &&
+        isGamescopePresentation(SDL_GetCurrentVideoDriver());
+    const bool gamescopeTiming = ((decoderParams->enableVrr && isGamescopeWsiPresentation(SDL_GetCurrentVideoDriver())) ||
+                                  smoothRefreshClock) &&
         isExtensionSupportedByPhysicalDevice(device, VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
     if (gamescopeTiming) {
         optionalExtensions.push_back(VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
@@ -607,7 +613,9 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
         if (enabled && timing->initialize(m_Vulkan->device)) {
             m_GamescopeTiming = std::move(timing);
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "Vulkan VRR: Gamescope WSI presentation timing enabled for diagnostics");
+                        smoothRefreshClock ?
+                            "Vulkan: Gamescope presentation timing enabled as the Smooth V-Sync refresh clock" :
+                            "Vulkan VRR: Gamescope WSI presentation timing enabled for diagnostics");
         }
     }
 #endif
@@ -1679,6 +1687,17 @@ void PlVkRenderer::cleanupRenderContext()
     // The render context is about to stop servicing retirement polls. Finish
     // outstanding commands before dropping the AVFrame references they own.
     releaseAllVrrSourceFrames();
+#endif
+}
+
+bool PlVkRenderer::setPresentTimingSink(IPresentTimingSink* sink)
+{
+#ifdef Q_OS_LINUX
+    m_PresentTimingSink = sink;
+    return sink == nullptr || m_GamescopeTiming != nullptr;
+#else
+    (void) sink;
+    return false;
 #endif
 }
 
@@ -2846,7 +2865,15 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
 
     // Submit the frame for display and swap buffers
     m_HasPendingSwapchainFrame = false;
+#ifdef Q_OS_LINUX
+    if (m_PresentTimingSink != nullptr && m_GamescopeTiming) {
+        m_GamescopeTiming->begin(++m_FixedPresentationId);
+    }
+#endif
     if (!submitSwapchainFrame()) {
+#ifdef Q_OS_LINUX
+        if (m_GamescopeTiming) m_GamescopeTiming->finishFixed();
+#endif
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "pl_swapchain_submit_frame() failed");
 
@@ -2856,6 +2883,15 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
         SDL_PushEvent(&event);
         goto UnmapExit;
     }
+#ifdef Q_OS_LINUX
+    if (m_PresentTimingSink != nullptr && m_GamescopeTiming) {
+        m_GamescopeTiming->finishFixed();
+        uint64_t displayUs, uncertaintyUs;
+        while (m_GamescopeTiming->takeDisplayTime(displayUs, uncertaintyUs)) {
+            m_PresentTimingSink->onRefreshReported(displayUs, uncertaintyUs);
+        }
+    }
+#endif
 #if defined(HAS_WAYLAND) && defined(Q_OS_LINUX)
     if (m_GamescopeRepaint && frame && renderSucceeded) m_GamescopeRepaint->request();
 #endif

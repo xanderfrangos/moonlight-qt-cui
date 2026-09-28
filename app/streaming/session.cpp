@@ -345,7 +345,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                 enableVrr ? "enabled" : "disabled");
     if (params.preferVrrRenderer && !enableVrr) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "VRR renderer policy active for probe; VRR presentation disabled");
+                    "Vulkan-capable renderer preferred; VRR presentation disabled");
     }
 
 #ifdef HAVE_SLVIDEO
@@ -646,7 +646,8 @@ bool Session::populateDecoderProperties(SDL_Window* window)
                        m_StreamConfig.fps,
                        false, false, true, decoder,
                        false,
-                       m_PresentationSettings.enableVrr,
+                       m_PresentationSettings.enableVrr ||
+                           m_PresentationSettings.smoothPrefersVulkan,
                        m_PresentationSettings.fsr1Upscaling,
                        m_PresentationSettings.fsr1RcasSharpness,
                        m_PresentationSettings.ls1Upscaling,
@@ -777,6 +778,19 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     if (m_PresentationSettings.vsyncMode == StreamingPreferences::VSM_SMOOTH) {
         m_PresentationSettings.enableFramePacing = true;
     }
+#ifdef Q_OS_LINUX
+    // Gamescope offers no V-sync wakeup. Smooth instead follows the refresh
+    // times Gamescope reports for the Vulkan renderer's presents.
+    m_PresentationSettings.smoothPrefersVulkan =
+        m_PresentationSettings.vsyncMode == StreamingPreferences::VSM_SMOOTH &&
+        (!qEnvironmentVariableIsEmpty("GAMESCOPE_WAYLAND_DISPLAY") ||
+         !qEnvironmentVariableIsEmpty("GAMESCOPE_XWAYLAND_DISPLAY") ||
+         qgetenv("SDL_VIDEODRIVER") == "gamescope");
+    if (m_PresentationSettings.smoothPrefersVulkan) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Smooth V-Sync under Gamescope: preferring the Vulkan renderer for reported refresh times");
+    }
+#endif
     m_PresentationSettings.enableVrr = false;
     m_PresentationSettings.vrrLatencyMode = m_Preferences->vrrLatencyMode;
     m_PresentationSettings.gamescopeRepaint = false; // Retired repaint experiment.
@@ -2959,7 +2973,8 @@ void Session::exec()
                                false,
                                s_ActiveSession->m_VideoDecoder,
                                m_PresentationSettings.enableVrr,
-                               m_PresentationSettings.enableVrr,
+                               m_PresentationSettings.enableVrr ||
+                                   m_PresentationSettings.smoothPrefersVulkan,
                                m_PresentationSettings.fsr1Upscaling,
                                m_PresentationSettings.fsr1RcasSharpness,
                                m_PresentationSettings.ls1Upscaling,

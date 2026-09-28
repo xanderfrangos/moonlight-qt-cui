@@ -27,9 +27,11 @@ Steam's frame limiter. Not yet built or measured on hardware.
 Smooth V-Sync mode (2026-09-28, `vsyncmode` = 2, CLI `--vsync-mode smooth`):
 a third fixed V-Sync mode that schedules frames onto refreshes from host RTP
 timestamps. It is legacy-Pacer only and bypassed by the VRR checkbox like
-Mailbox. It needs the Pacer's V-sync source (`DxVsyncSource` on Windows,
-`WaylandVsyncSource` on Wayland), so the session turns Frame pacing on for it;
-platforms without a source (X11, KMSDRM, macOS) log a warning and run Default.
+Mailbox. It needs a refresh clock: the Pacer's V-sync source (`DxVsyncSource`
+on Windows, `WaylandVsyncSource` on Wayland) or, under Gamescope, reported
+refresh times (below). The session turns Frame pacing on for it; platforms
+with neither (plain X11, KMSDRM, macOS, Gamescope with a non-Vulkan renderer)
+log a warning and run Default.
 [fixedvsyncsmoother.h](app/streaming/video/ffmpeg-renderers/pacer/fixedvsyncsmoother.h)
 is pure, deterministic logic. At admission (decoder thread, under the queue
 lock) it fits the 90 kHz stamps to the host's measured frame interval (snapping
@@ -70,6 +72,44 @@ win at 60 FPS on 120 Hz (uneven presented spacing from ~39% of frames to ~1-2%),
 fewer missed refreshes than Default at 60 on 60 with heavy arrival jitter at
 about 11 ms more delay, and parity with light jitter.
 
+Smooth under Gamescope (2026-09-28, not yet run on hardware). Gamescope's X11
+gives SDL no V-sync wakeup, but its WSI layer reports each present's display
+time through `VK_GOOGLE_display_timing` (the refresh Gamescope scheduled it
+for). When Smooth is selected and `GAMESCOPE_WAYLAND_DISPLAY`,
+`GAMESCOPE_XWAYLAND_DISPLAY` or `SDL_VIDEODRIVER=gamescope` is set, the session
+prefers the Vulkan frontend for probe and playback (`smoothPrefersVulkan`, so
+the negotiated color range matches), and `PlVkRenderer` enables the existing
+`VulkanTiming` bridge for ordinary FIFO presents (no `ENABLE_GAMESCOPE_WSI`
+requirement; the extension check decides). The Pacer registers as its
+`IPresentTimingSink`; after each present the renderer forwards accepted
+display times (same validation and rejection counters as VRR diagnostics).
+[presenttimingvsyncsource.cpp](app/streaming/video/ffmpeg-renderers/pacer/presenttimingvsyncsource.cpp)
+is a synchronous V-sync source that wakes the Pacer at refreshes predicted by
+`RefreshClock` ([refreshclock.h](app/streaming/video/ffmpeg-renderers/pacer/refreshclock.h)):
+a grid anchored on the newest report, period corrected from the error over up
+to 240 refreshes (reports can be sparse; VRR runs saw 0.64% coverage) and
+clamped to +-2% of the SDL rate, one off-grid report (over 1/8 refresh)
+ignored and three in a row rephasing. Without reports it runs freely at the
+SDL rate and logs a warning at teardown. It waits with the VRR worker's
+`VrrTargetWaiter` (coarse sleep, short yielding tail, learned scheduler lateness
+up to 0.5 ms). The `.vsync` CSV adds `refresh` rows per accepted report. A
+display refresh-rate change mid-stream is not followed until reconnect (the
+Pacer's display rate is also fixed at start). Gamescope's own composition
+still owns the final latch, and Steam's frame limiter can still interfere.
+
+Smooth hand-over lead (2026-09-28): the lead that was a fixed 3 ms
+(`TIMER_SLACK_MS`, both in the due time and the late-frame deadline) is now
+learned by `RenderLeadEstimator`: p95 of the last 128 spans from the later of
+hand-over and render-thread readiness until `renderFrame()` returned (thread
+wakeup plus CPU render and submit; swapchain-image waits excluded), plus a
+margin (2 ms, 2.5 ms on the Gamescope clock) for unmeasured GPU and compositor
+time. It is updated every 16 frames, grows by at most 0.5 ms and shrinks by at
+most 0.1 ms per update, ignores spans over 100 ms, and stays between 3 ms (the
+old value, so a fast machine is unchanged) and half a refresh. Changes go to
+the scheduler through `setRenderLeadUs()` and appear as `lead` rows in the
+`.vsync` CSV. Lowering the floor would need GPU completion or present feedback
+to prove frames still make their refresh.
+
 Steam Deck captures (2026-09-28, SteamOS game mode, 90 Hz panel, 90 FPS
 requested, game capped at 59/60, one capture per V-Sync mode). Moonlight runs
 on X11 under Gamescope there, so the Pacer has no V-sync source: Smooth logged
@@ -107,7 +147,9 @@ it with one `tick` row per refresh and, in Smooth, one `admit` row per frame
 (schema in the file header). It is not part of the `.vrrtrace` schema and
 `vrrreplay` does not read it. `tst_fixedvsyncsmoother` covers ideal cadence,
 stamp jitter, 60-on-120 rhythm, 59.94/60 drift, offset slew and cap, host
-stalls and RTP wraparound.
+stalls and RTP wraparound, plus the refresh clock (sparse 59.94 Hz reports
+against a 60 Hz nominal rate, outliers, rephase, free running) and the
+hand-over lead (floor, bounded growth, slow release, stall rejection, cap).
 
 Original Moonlight `master` merge (2026-09-25, `032529d7`): D3D11VA now
 logs the adapter driver version and uses upstream's vendor and driver checks

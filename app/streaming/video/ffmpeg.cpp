@@ -527,6 +527,8 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
                                     "Upscaling requested: preferring Vulkan frontend on Linux" :
                                 params->enableVrr ?
                                     "VRR requested: preferring Vulkan frontend on Linux" :
+                                params->vsyncMode == StreamingPreferences::VSM_SMOOTH ?
+                                    "Smooth V-Sync: preferring Vulkan frontend on Linux for reported refresh times" :
                                     "VRR renderer policy: preferring Vulkan frontend on Linux without enabling VRR presentation");
                 }
                 m_FrontendRenderer = new PlVkRenderer(AV_HWDEVICE_TYPE_NONE, m_BackendRenderer);
@@ -576,6 +578,8 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
                                     "Upscaling requested: preferring Vulkan frontend on Linux" :
                                 params->enableVrr ?
                                     "VRR requested: preferring Vulkan frontend on Linux" :
+                                params->vsyncMode == StreamingPreferences::VSM_SMOOTH ?
+                                    "Smooth V-Sync: preferring Vulkan frontend on Linux for reported refresh times" :
                                     "VRR renderer policy: preferring Vulkan frontend on Linux without enabling VRR presentation");
                 }
                 m_FrontendRenderer = new PlVkRenderer(AV_HWDEVICE_TYPE_NONE, m_BackendRenderer);

@@ -90,6 +90,13 @@ public:
         reset();
     }
 
+    // The Pacer learns the lead while streaming. A change only moves due
+    // times of later frames; the refresh chain absorbs small steps.
+    void setRenderLeadUs(int64_t renderLeadUs)
+    {
+        m_RenderLeadUs = renderLeadUs;
+    }
+
     // Forget all timing state, for example after a long stall
     void reset()
     {

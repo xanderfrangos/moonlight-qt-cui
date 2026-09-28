@@ -21,10 +21,16 @@ public:
     bool initialize(VkDevice device);
     void begin(uint64_t id) { m_ArmedId = id; m_AcceptedId = 0; }
     void finish(VrrPresentFeedback& feedback);
+    // Fixed V-Sync presents (Smooth on Gamescope): after the present armed
+    // with begin(), collect whatever records Gamescope returned. Accepted
+    // display times are then read with takeDisplayTime().
+    void finishFixed();
+    bool takeDisplayTime(uint64_t& timeUs, uint64_t& uncertaintyUs);
     void reset();
     const Statistics& statistics() const { return m_Statistics; }
 private:
-    // Cumulative across swapchain resets; observation only, never pacing input.
+    // Cumulative across swapchain resets. Observation only on the VRR path;
+    // Smooth V-Sync uses the display times as its refresh clock.
     Statistics m_Statistics;
     struct Pending { uint32_t token = 0; uint64_t id = 0, submitted = 0; };
     struct Completed { uint64_t id = 0, time = 0, uncertainty = 0; };

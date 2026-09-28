@@ -142,6 +142,14 @@ private:
 
 class IVrrFramePresenter;
 class IPyroWaveSurfacePool;
+
+// Receives the refresh times a compositor reports for presented frames, on
+// the LiGetMicroseconds() clock. Called on the render thread.
+class IPresentTimingSink {
+public:
+    virtual ~IPresentTimingSink() {}
+    virtual void onRefreshReported(uint64_t refreshUs, uint64_t uncertaintyUs) = 0;
+};
 class IPyroWaveVulkanPool;
 
 class GpuTrace;
@@ -290,6 +298,13 @@ public:
     // renderFrame() exactly as before.
     virtual IVrrFramePresenter* getVrrFramePresenter() {
         return nullptr;
+    }
+
+    // Fixed V-Sync without a V-sync wakeup (Gamescope): a renderer that can
+    // report when its ordinary presents were shown accepts a sink and returns
+    // true. Set before the render thread starts; null detaches it.
+    virtual bool setPresentTimingSink(IPresentTimingSink*) {
+        return false;
     }
 
     // Renderers that can display PyroWave frames expose the surface pool the
