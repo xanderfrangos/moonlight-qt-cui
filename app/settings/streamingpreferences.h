@@ -82,7 +82,10 @@ public:
         VSM_DEFAULT = 0,
         // Only the newest decoded frame waits for display; older ones are
         // replaced, and swapchains use a non-queuing mode where available.
-        VSM_MAILBOX = 1
+        VSM_MAILBOX = 1,
+        // Frames are scheduled onto refreshes from host timestamps through a
+        // small adaptive buffer. Requires a V-sync source (Frame pacing).
+        VSM_SMOOTH = 2
     };
     Q_ENUM(VsyncMode)
 

@@ -1084,7 +1084,7 @@ void PlVkRenderer::selectLegacyPresentMode(PDECODER_PARAMETERS params)
         // Mailbox V-Sync trades FIFO's in-order delivery for latency: the
         // newest submitted image replaces any image still waiting for the
         // next refresh. The session never requests it together with VRR.
-        if (params->vsyncMailbox && !params->enableVrr) {
+        if (params->vsyncMode == StreamingPreferences::VSM_MAILBOX && !params->enableVrr) {
             if (isPresentModeSupportedByPhysicalDevice(m_Vulkan->phys_device,
                                                        VK_PRESENT_MODE_MAILBOX_KHR)) {
                 SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,

@@ -265,7 +265,7 @@ private:
                        bool gamescopeMailbox = false, int vrrLatencyMode = 0,
                        bool gamescopeRepaint = false, int ditheringMode = 0,
                        bool temporalDithering = false, int debandMode = 0,
-                       bool vsyncMailbox = false);
+                       int vsyncMode = 0);
 
     static
     void clStageStarting(int stage);
@@ -327,8 +327,9 @@ private:
     struct PresentationSettings {
         bool effectiveVsync = false;
         bool enableFramePacing = false;
-        // Newest-frame-wins fixed V-Sync. Never set while VRR is requested.
-        bool vsyncMailbox = false;
+        // StreamingPreferences::VsyncMode for fixed V-Sync. Always Default
+        // while VRR is requested.
+        int vsyncMode = 0;
         bool enableVrr = false;
         int vrrLatencyMode = 0;
         bool gamescopeMailbox = false;

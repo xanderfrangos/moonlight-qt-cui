@@ -353,6 +353,7 @@ StreamCommandLineParser::StreamCommandLineParser()
     m_VsyncModeMap = {
         {"default", StreamingPreferences::VSM_DEFAULT},
         {"mailbox", StreamingPreferences::VSM_MAILBOX},
+        {"smooth",  StreamingPreferences::VSM_SMOOTH},
     };
     m_DebandModeMap = {
         {"off",    StreamingPreferences::DB_OFF},

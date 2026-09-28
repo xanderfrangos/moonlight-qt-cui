@@ -22,6 +22,26 @@ struct PacerTelemetrySnapshot {
     uint64_t totalQueuePacingTimeUs = 0;
     uint64_t totalRenderingTimeUs = 0;
 
+    // Fixed V-Sync refresh accounting, recorded only where a V-sync source
+    // drives the Pacer (Frame pacing on). -1 when not recording.
+    int fixedVsyncMode = -1;
+    // Refreshes observed by the Pacer's V-sync thread
+    uint64_t fixedVsyncTicks = 0;
+    // Refreshes where no new frame was sent, so the previous one stayed up.
+    // Normal when the stream rate is below the refresh rate.
+    uint64_t fixedVsyncRepeats = 0;
+    // Frames discarded at a refresh because a newer one was shown instead
+    uint64_t fixedVsyncSkips = 0;
+    // A repeated refresh followed by a skip on the next refresh: a frame
+    // missed its refresh and was then doubled up. This is the visible hitch.
+    uint64_t fixedVsyncMissedSlots = 0;
+    // Smooth only: frames shown after the refresh they were assigned to
+    uint64_t fixedVsyncLateFrames = 0;
+    // Smooth only: latest playout offset (host time to local due time)
+    int64_t fixedVsyncOffsetUs = 0;
+    // Smooth only: latest buffer above the fastest recent arrival
+    int64_t fixedVsyncBufferUs = 0;
+
     bool vrrActive = false;
     uint64_t vrrPacingDroppedFrames = 0;
     uint64_t vrrEligibleFrames = 0;
@@ -173,6 +193,32 @@ public:
     {
         QMutexLocker lock(&m_Lock);
         m_Snapshot.vrrActive = true;
+        touchLocked();
+    }
+
+    void beginFixedVsync(int mode)
+    {
+        QMutexLocker lock(&m_Lock);
+        m_Snapshot.fixedVsyncMode = mode;
+        touchLocked();
+    }
+
+    // One call per refresh on the V-sync thread. skipped frames are also
+    // counted as pacer drops.
+    void recordFixedVsyncTick(bool sent, uint32_t skipped, bool missedSlot, bool late,
+                              bool smoothState, int64_t offsetUs, int64_t bufferUs)
+    {
+        QMutexLocker lock(&m_Lock);
+        ++m_Snapshot.fixedVsyncTicks;
+        m_Snapshot.fixedVsyncRepeats += !sent;
+        m_Snapshot.fixedVsyncSkips += skipped;
+        m_Snapshot.pacerDroppedFrames += skipped;
+        m_Snapshot.fixedVsyncMissedSlots += missedSlot;
+        m_Snapshot.fixedVsyncLateFrames += late;
+        if (smoothState) {
+            m_Snapshot.fixedVsyncOffsetUs = offsetUs;
+            m_Snapshot.fixedVsyncBufferUs = bufferUs;
+        }
         touchLocked();
     }
 

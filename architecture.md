@@ -24,6 +24,48 @@ Under Gamescope the Pacer mailbox keeps stale frames from reaching the
 compositor; the Vulkan Mailbox request can still be overridden to FIFO by
 Steam's frame limiter. Not yet built or measured on hardware.
 
+Smooth V-Sync mode (2026-09-28, `vsyncmode` = 2, CLI `--vsync-mode smooth`):
+a third fixed V-Sync mode that schedules frames onto refreshes from host RTP
+timestamps. It is legacy-Pacer only and bypassed by the VRR checkbox like
+Mailbox. It needs the Pacer's V-sync source (`DxVsyncSource` on Windows,
+`WaylandVsyncSource` on Wayland), so the session turns Frame pacing on for it;
+platforms without a source (X11, KMSDRM, macOS) log a warning and run Default.
+[fixedvsyncsmoother.h](app/streaming/video/ffmpeg-renderers/pacer/fixedvsyncsmoother.h)
+is pure, deterministic logic. At admission (decoder thread, under the queue
+lock) it fits the 90 kHz stamps to the host's measured frame interval (snapping
+to the raw stamp when they disagree by more than half an interval), adds a
+playout offset that follows the p99 of recent (arrival - smoothed host time)
+plus 0.5 ms and the 3 ms render lead, slews it at +250/-40 us per frame, and
+caps it at two source frames above the fastest arrival in a two-second window.
+There is no first-frame anchor; the rolling window also absorbs host/client
+clock drift. The frame is then chained to the refresh after the previous
+frame's, re-aligning only when drift leaves a -1 ms / +1.25 refresh band, so
+due-time jitter cannot flip frames between neighbouring refreshes. The assigned
+refresh travels in `AVFrame::best_effort_timestamp`, which the renderers do not
+read. At each refresh the V-sync thread shows the newest frame assigned to the
+coming refresh or earlier, waits (until 3 ms before it) for one to arrive, and
+otherwise leaves the previous frame up. A target more than 250 ms ahead resets
+the scheduler. A synthetic simulation (not live evidence) showed the intended
+win at 60 FPS on 120 Hz (uneven presented spacing from ~39% of frames to ~1-2%),
+fewer missed refreshes than Default at 60 on 60 with heavy arrival jitter at
+about 11 ms more delay, and parity with light jitter.
+
+Fixed V-Sync measurements apply to Default, Mailbox and Smooth whenever the
+Pacer has a V-sync source. Per refresh the Pacer counts repeats (nothing new
+sent, normal when the stream rate is below the refresh), skips (frames
+discarded at or since that refresh, including Mailbox replacement and full-queue
+drops, all counted as pacer drops) and missed refreshes: a repeat followed by a
+refresh that had to skip, the visible hitch. Smooth adds late frames (shown
+after their assigned refresh) and its current buffer. The text overlay shows
+"V-Sync (<mode>) missed refreshes" (and a Smooth buffer line); the session-end
+log includes them. When `MOONLIGHT_VRR_TRACE` is set (Settings trace checkbox or
+the tracing launchers) the Pacer writes `<trace>.vsync-<pid>-<ms>.csv` beside
+it with one `tick` row per refresh and, in Smooth, one `admit` row per frame
+(schema in the file header). It is not part of the `.vrrtrace` schema and
+`vrrreplay` does not read it. `tst_fixedvsyncsmoother` covers ideal cadence,
+stamp jitter, 60-on-120 rhythm, 59.94/60 drift, offset slew and cap, host
+stalls and RTP wraparound.
+
 Original Moonlight `master` merge (2026-09-25, `032529d7`): D3D11VA now
 logs the adapter driver version and uses upstream's vendor and driver checks
 when choosing separate decode and render devices. This fork's texture bind

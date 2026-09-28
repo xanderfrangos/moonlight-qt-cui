@@ -3,15 +3,18 @@
 #include "../../decoder.h"
 #include "../renderer.h"
 #include "pacertelemetry.h"
+#include "fixedvsyncsmoother.h"
 #include "vrr/vrrtypes.h"
 
 #include <QQueue>
 #include <QMutex>
 #include <QWaitCondition>
 
+#include <atomic>
 #include <memory>
 
 class VrrPacingWorker;
+class FixedVsyncTrace;
 
 // The maximum number of frames pacer will ever hold is:
 // - 3 frames in the pacing queue
@@ -73,9 +76,11 @@ public:
                     bool smoothVrrFrameTiming = true,
                     const QString& calibrationKey = QString(),
                     int vrrLatencyMode = 0,
-                    bool vsyncMailbox = false);
+                    int vsyncMode = 0);
 
-    bool isMailboxActive() const;
+    // The StreamingPreferences::VsyncMode actually running, or -1 while VRR
+    // is active. Smooth falls back to Default without a V-sync source.
+    int fixedVsyncMode() const;
 
     void notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info);
 
@@ -90,11 +95,30 @@ private:
 
     void handleVsync(int timeUntilNextVsyncMillis);
 
+    // Smooth V-Sync: show the newest frame whose assigned refresh is due
+    void handleSmoothVsync(uint64_t tickUs);
+
+    // Refresh accounting shared by every fixed V-Sync mode with a V-sync source
+    // Copied from a frame before it is handed to the renderer, which may
+    // free it at any time afterwards
+    struct ShownFrameInfo {
+        int64_t rtp = -1;
+        uint64_t arrivalUs = 0;
+        uint64_t slotUs = 0;
+
+        explicit ShownFrameInfo(const AVFrame* frame);
+    };
+    void recordVsyncTick(uint64_t tickUs, bool sent, uint32_t skipped,
+                         int queueBefore, int queueAfter, const ShownFrameInfo* shown,
+                         bool late);
     void enqueueFrameForRenderingAndUnlock(AVFrame* frame);
 
     void renderFrame(AVFrame* frame);
 
     void dropFrameForEnqueue(QQueue<AVFrame*>& queue);
+
+    // Smooth: assign the frame its refresh. Called with the queue lock held.
+    void admitSmoothFrameLocked(AVFrame* frame);
 
     // Mailbox: discard every frame still waiting in the queue so the one
     // about to be enqueued is the only candidate. Called with the lock held;
@@ -120,8 +144,19 @@ private:
     int m_MaxVideoFps;
     int m_DisplayFps;
     int m_RendererAttributes;
-    // Newest-frame-wins fixed V-Sync. Never set while the VRR worker runs.
+    // StreamingPreferences::VsyncMode in effect. Never Mailbox or Smooth
+    // while the VRR worker runs.
+    int m_VsyncMode;
     bool m_Mailbox;
+    bool m_Smooth;
+    // Guarded by m_FrameQueueLock
+    FixedVsyncSmoother m_Smoother;
+    // Frames discarded between refreshes (Mailbox replacement), reported
+    // with the next refresh
+    std::atomic<uint32_t> m_SkipsSinceTick;
+    // V-sync thread only
+    bool m_PrevTickRepeated;
+    std::unique_ptr<FixedVsyncTrace> m_Trace;
     PacerTelemetry m_Telemetry;
     std::unique_ptr<VrrPacingWorker> m_VrrWorker;
 };

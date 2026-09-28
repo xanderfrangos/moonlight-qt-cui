@@ -9,6 +9,9 @@ SUBDIRS += dxgipresent
 presentationclock.file = $$PWD/presentationclock.pro
 SUBDIRS += presentationclock
 
+fixedvsyncsmoother.file = $$PWD/fixedvsyncsmoother.pro
+SUBDIRS += fixedvsyncsmoother
+
 win32 {
     compositionprobe.file = $$PWD/compositionprobe.pro
     SUBDIRS += compositionprobe

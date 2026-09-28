@@ -23,6 +23,17 @@ typedef struct _VIDEO_STATS {
     // Pacer telemetry is merged into decoder-owned windows from coherent
     // cumulative snapshots. These remain zero on non-VRR pacing paths.
     bool vrrTelemetryActive;
+    // Fixed V-Sync refresh accounting (see PacerTelemetrySnapshot), valid
+    // only when the Pacer records it.
+    bool fixedVsyncActive;
+    int fixedVsyncMode;
+    uint64_t fixedVsyncTicks;
+    uint64_t fixedVsyncRepeats;
+    uint64_t fixedVsyncSkips;
+    uint64_t fixedVsyncMissedSlots;
+    uint64_t fixedVsyncLateFrames;
+    int64_t fixedVsyncOffsetUs;
+    int64_t fixedVsyncBufferUs;
     uint64_t vrrPacingDroppedFrames;
     uint64_t vrrEligibleFrames;
     uint64_t vrrPrepareLateFrames;
@@ -94,9 +105,10 @@ typedef struct _DECODER_PARAMETERS {
     int frameRate;
     bool enableVsync;
     bool enableFramePacing;
-    // Fixed V-Sync only: keep just the newest decoded frame waiting for
-    // display and prefer non-queuing swapchain modes. Always false with VRR.
-    bool vsyncMailbox = false;
+    // StreamingPreferences::VsyncMode for fixed V-Sync. Always Default with
+    // VRR. Mailbox keeps just the newest frame waiting and prefers
+    // non-queuing swapchains; Smooth schedules frames from host timestamps.
+    int vsyncMode = 0;
     // VRR is an opt-in, session-snapshotted third pacing mode.
     bool enableVrr;
     // Select the VRR-capable renderer without activating VRR presentation.

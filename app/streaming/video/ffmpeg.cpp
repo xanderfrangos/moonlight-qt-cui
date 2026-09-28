@@ -679,14 +679,17 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
                                      .arg(m_FrontendRenderer->getCalibrationIdentity())
                                      .arg(decoder != nullptr ? decoder->name : "pyrowave"),
                                  params->vrrLatencyMode,
-                                 params->vsyncMailbox)) {
+                                 params->vsyncMode)) {
             return false;
         }
 
         // VRR can fall back to fixed V-sync, so ask the pacer what it chose
         // rather than trusting the request
         m_StatsGraphSyncMode = m_Pacer->isVrrActive() ? Overlay::StatsGraphSyncMode::Vrr :
-                               m_Pacer->isMailboxActive() ? Overlay::StatsGraphSyncMode::VSyncMailbox :
+                               m_Pacer->fixedVsyncMode() == StreamingPreferences::VSM_MAILBOX ?
+                                   Overlay::StatsGraphSyncMode::VSyncMailbox :
+                               m_Pacer->fixedVsyncMode() == StreamingPreferences::VSM_SMOOTH ?
+                                   Overlay::StatsGraphSyncMode::VSyncSmooth :
                                params->enableVsync ? Overlay::StatsGraphSyncMode::VSync :
                                                      Overlay::StatsGraphSyncMode::Off;
     }
@@ -1003,6 +1006,17 @@ void FFmpegVideoDecoder::addVideoStats(VIDEO_STATS& src, VIDEO_STATS& dst)
         dst.incomingTimingVarianceTicksSquared = src.incomingTimingVarianceTicksSquared;
         dst.incomingTimingValid = src.incomingTimingValid;
     }
+    if (src.fixedVsyncActive) {
+        dst.fixedVsyncActive = true;
+        dst.fixedVsyncMode = src.fixedVsyncMode;
+        dst.fixedVsyncOffsetUs = src.fixedVsyncOffsetUs;
+        dst.fixedVsyncBufferUs = src.fixedVsyncBufferUs;
+    }
+    dst.fixedVsyncTicks += src.fixedVsyncTicks;
+    dst.fixedVsyncRepeats += src.fixedVsyncRepeats;
+    dst.fixedVsyncSkips += src.fixedVsyncSkips;
+    dst.fixedVsyncMissedSlots += src.fixedVsyncMissedSlots;
+    dst.fixedVsyncLateFrames += src.fixedVsyncLateFrames;
     dst.vrrPacingDroppedFrames += src.vrrPacingDroppedFrames;
     dst.vrrEligibleFrames += src.vrrEligibleFrames;
     dst.vrrPrepareLateFrames += src.vrrPrepareLateFrames;
@@ -1273,6 +1287,23 @@ void FFmpegVideoDecoder::syncPacerTelemetry()
     m_ActiveWndVideoStats.totalRenderingTimeUs +=
         delta(snapshot.totalRenderingTimeUs,
               m_LastPacerTelemetry.totalRenderingTimeUs);
+
+    if (snapshot.fixedVsyncMode >= 0) {
+        m_ActiveWndVideoStats.fixedVsyncActive = true;
+        m_ActiveWndVideoStats.fixedVsyncMode = snapshot.fixedVsyncMode;
+        m_ActiveWndVideoStats.fixedVsyncOffsetUs = snapshot.fixedVsyncOffsetUs;
+        m_ActiveWndVideoStats.fixedVsyncBufferUs = snapshot.fixedVsyncBufferUs;
+    }
+    m_ActiveWndVideoStats.fixedVsyncTicks +=
+        delta(snapshot.fixedVsyncTicks, m_LastPacerTelemetry.fixedVsyncTicks);
+    m_ActiveWndVideoStats.fixedVsyncRepeats +=
+        delta(snapshot.fixedVsyncRepeats, m_LastPacerTelemetry.fixedVsyncRepeats);
+    m_ActiveWndVideoStats.fixedVsyncSkips +=
+        delta(snapshot.fixedVsyncSkips, m_LastPacerTelemetry.fixedVsyncSkips);
+    m_ActiveWndVideoStats.fixedVsyncMissedSlots +=
+        delta(snapshot.fixedVsyncMissedSlots, m_LastPacerTelemetry.fixedVsyncMissedSlots);
+    m_ActiveWndVideoStats.fixedVsyncLateFrames +=
+        delta(snapshot.fixedVsyncLateFrames, m_LastPacerTelemetry.fixedVsyncLateFrames);
 
     m_ActiveWndVideoStats.vrrTelemetryActive =
         m_ActiveWndVideoStats.vrrTelemetryActive || snapshot.vrrActive;
@@ -1607,6 +1638,31 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
         return;
     }
     offset += ret;
+
+    if (stats.fixedVsyncActive && stats.fixedVsyncTicks != 0) {
+        const char* modeName =
+            stats.fixedVsyncMode == StreamingPreferences::VSM_MAILBOX ? "Mailbox" :
+            stats.fixedVsyncMode == StreamingPreferences::VSM_SMOOTH ? "Smooth" : "FIFO";
+        // Missed refreshes are the visible hitches: a frame missed its
+        // refresh, the previous frame stayed up, then two frames competed.
+        ret = snprintf(&output[offset], length - offset,
+                       "V-Sync (%s) missed refreshes: %.2f%% (repeated %.1f%%, skipped frames %.2f%%)\n",
+                       modeName,
+                       100.0 * stats.fixedVsyncMissedSlots / stats.fixedVsyncTicks,
+                       100.0 * stats.fixedVsyncRepeats / stats.fixedVsyncTicks,
+                       100.0 * stats.fixedVsyncSkips / stats.fixedVsyncTicks);
+        if (ret < 0 || ret >= length - offset) { SDL_assert(false); return; }
+        offset += ret;
+
+        if (stats.fixedVsyncMode == StreamingPreferences::VSM_SMOOTH) {
+            ret = snprintf(&output[offset], length - offset,
+                           "Smooth V-Sync buffer: %.2f ms (late frames %.2f%%)\n",
+                           stats.fixedVsyncBufferUs / 1000.0,
+                           100.0 * stats.fixedVsyncLateFrames / stats.fixedVsyncTicks);
+            if (ret < 0 || ret >= length - offset) { SDL_assert(false); return; }
+            offset += ret;
+        }
+    }
 
     if (stats.vrrTelemetryActive || stats.vrrEligibleFrames != 0 ||
             stats.vrrPacingDroppedFrames != 0 ||

@@ -202,7 +202,7 @@ void StreamingPreferences::reload()
     if (settings.contains(SER_VSYNCMODE)) {
         bool validMode = false;
         const int savedMode = settings.value(SER_VSYNCMODE).toInt(&validMode);
-        if (validMode && savedMode >= VSM_DEFAULT && savedMode <= VSM_MAILBOX) {
+        if (validMode && savedMode >= VSM_DEFAULT && savedMode <= VSM_SMOOTH) {
             vsyncMode = savedMode;
         }
     }

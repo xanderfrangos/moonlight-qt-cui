@@ -1709,6 +1709,10 @@ Flickable {
                                 text: qsTr("Mailbox")
                                 val: StreamingPreferences.VSM_MAILBOX
                             }
+                            ListElement {
+                                text: qsTr("Smooth")
+                                val: StreamingPreferences.VSM_SMOOTH
+                            }
                         }
                         currentIndex: {
                             for (var i = 0; i < vsyncModeListModel.count; i++) {
@@ -1729,8 +1733,8 @@ Flickable {
                         ToolTip.delay: 1000
                         ToolTip.timeout: 10000
                         ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                        ToolTip.text: qsTr("Default shows frames in the order they arrive. Mailbox always shows the newest frame and skips older ones that are still waiting, which lowers latency but can occasionally skip a frame.") + "\n\n" +
-                                      qsTr("Works with or without Frame pacing. Not used while VRR is enabled.")
+                        ToolTip.text: qsTr("Default shows frames in the order they arrive. Mailbox always shows the newest frame and skips older ones that are still waiting, which lowers latency but can occasionally skip a frame. Smooth uses the host's frame timestamps to place each frame on the right refresh, holding a small, self-adjusting buffer.") + "\n\n" +
+                                      qsTr("Smooth always uses Frame pacing. Not used while VRR is enabled.")
                     }
 
                     Label {
@@ -1738,7 +1742,9 @@ Flickable {
                         wrapMode: Text.Wrap
                         text: StreamingPreferences.vsyncMode === StreamingPreferences.VSM_MAILBOX ?
                                   qsTr("Always shows the newest frame. Lower latency, but a late frame may be skipped.") :
-                                  qsTr("Shows every frame in order. Smoothest, but frames can wait in line during spikes.")
+                              StreamingPreferences.vsyncMode === StreamingPreferences.VSM_SMOOTH ?
+                                  qsTr("Keeps the host's frame timing, most useful when your refresh rate is a multiple of the stream's (for example 60 FPS on 120 Hz). Adds a small buffer that grows only when frames arrive unevenly. Turns on Frame pacing.") :
+                                  qsTr("Shows every frame in order. Frames can wait in line during spikes.")
                     }
                 }
 

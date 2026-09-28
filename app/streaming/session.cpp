@@ -299,7 +299,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             [[maybe_unused]] bool* effectiveVrr, bool smoothVrrFrameTiming,
                             bool gamescopeMailbox, int vrrLatencyMode, bool gamescopeRepaint,
                             int ditheringMode, bool temporalDithering, int debandMode,
-                            bool vsyncMailbox)
+                            int vsyncMode)
 {
     DECODER_PARAMETERS params = {};
 
@@ -316,7 +316,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.window = window;
     params.enableVsync = enableVsync;
     params.enableFramePacing = enableFramePacing;
-    params.vsyncMailbox = enableVsync && !enableVrr && vsyncMailbox;
+    params.vsyncMode = enableVsync && !enableVrr ? vsyncMode : StreamingPreferences::VSM_DEFAULT;
     params.enableVrr = enableVrr;
     // Playback already sets enableVrr; the probe uses preferVrrRenderer alone so
     // it can match that renderer/color policy without starting VRR presentation.
@@ -770,9 +770,13 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
                                                m_Preferences->framePacing;
     // The VRR checkbox bypasses the fixed V-Sync mode entirely, including
     // when VRR is later rejected and falls back to fixed pacing.
-    m_PresentationSettings.vsyncMailbox = m_PresentationSettings.effectiveVsync &&
-                                          !requestedVrr &&
-                                          m_Preferences->vsyncMode == StreamingPreferences::VSM_MAILBOX;
+    m_PresentationSettings.vsyncMode = m_PresentationSettings.effectiveVsync && !requestedVrr ?
+                                       m_Preferences->vsyncMode : StreamingPreferences::VSM_DEFAULT;
+    // Smooth schedules against the refresh clock, which only the Frame
+    // pacing path has, so it turns pacing on for this session.
+    if (m_PresentationSettings.vsyncMode == StreamingPreferences::VSM_SMOOTH) {
+        m_PresentationSettings.enableFramePacing = true;
+    }
     m_PresentationSettings.enableVrr = false;
     m_PresentationSettings.vrrLatencyMode = m_Preferences->vrrLatencyMode;
     m_PresentationSettings.gamescopeRepaint = false; // Retired repaint experiment.
@@ -831,7 +835,8 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "Presentation snapshot: V-sync %s, V-sync mode %s, VRR requested %s, VRR enabled %s, refresh %d Hz, window mode %d",
                 m_PresentationSettings.effectiveVsync ? "enabled" : "disabled",
-                m_PresentationSettings.vsyncMailbox ? "mailbox" : "default",
+                m_PresentationSettings.vsyncMode == StreamingPreferences::VSM_MAILBOX ? "mailbox" :
+                m_PresentationSettings.vsyncMode == StreamingPreferences::VSM_SMOOTH ? "smooth" : "default",
                 requestedVrr ? "yes" : "no",
                 m_PresentationSettings.enableVrr ? "yes" : "no",
                 m_PresentationSettings.refreshRate,
@@ -2384,7 +2389,9 @@ void Session::start()
             {"vrr_qualified", m_PresentationSettings.enableVrr},
             {"display_refresh_hz", m_PresentationSettings.refreshRate},
             {"latency_mode", m_PresentationSettings.vrrLatencyMode},
-            {"reduce_judder", m_PresentationSettings.smoothVrrFrameTiming}
+            {"reduce_judder", m_PresentationSettings.smoothVrrFrameTiming},
+            {"vsync_mode", m_PresentationSettings.vsyncMode},
+            {"frame_pacing", m_PresentationSettings.enableFramePacing}
         };
         QString error;
         m_DiagnosticCapture = DiagnosticCapture::begin(DiagnosticCapture::rootDirectory(), metadata, error);
@@ -2966,7 +2973,7 @@ void Session::exec()
                                m_PresentationSettings.ditheringMode,
                                m_PresentationSettings.temporalDithering,
                                m_PresentationSettings.debandMode,
-                               m_PresentationSettings.vsyncMailbox)) {
+                               m_PresentationSettings.vsyncMode)) {
                 SDL_UnlockMutex(m_DecoderLock);
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                              "Failed to recreate decoder after reset");

@@ -263,11 +263,12 @@ vrr\release\tst_vrrpacingworker.exe
 vrr\release\tst_vrrreplayconfig.exe
 vrr\release\tst_vrrrenderpolicy.exe
 vrr\release\tst_d3d11bindpolicy.exe
+vrr\release\tst_fixedvsyncsmoother.exe
 vrr\release\vrrreplay.exe --help
 ```
 
 Finish all pacing, controller, replay, and test-source edits before this build.
-If any such source is edited afterward, run `nmake` again and rerun all seven
+If any such source is edited afterward, run `nmake` again and rerun all eight
 checks. Do not assume a successful application build rebuilt the diagnostics.
 
 The test executables need the deployed runtime DLLs and Qt on `PATH`. Run them
@@ -286,7 +287,8 @@ $tests = @(
     "tst_vrrpacingworker.exe",
     "tst_vrrreplayconfig.exe",
     "tst_vrrrenderpolicy.exe",
-    "tst_d3d11bindpolicy.exe"
+    "tst_d3d11bindpolicy.exe",
+    "tst_fixedvsyncsmoother.exe"
 )
 foreach ($test in $tests) {
     & ".\build\tests-vrr\vrr\release\$test"
@@ -415,7 +417,7 @@ JSON summary.
 
 Invoke replay directly from PowerShell with an argument array or individual
 arguments. Do not use C-style `\"` quoting in PowerShell: backslash is not its
-escape character. Do not combine the four deterministic tests, `--help`, the
+escape character. Do not combine the deterministic tests, `--help`, the
 exact gate, and simulations into one opaque command whose last failure hides
 which earlier checks passed.
 

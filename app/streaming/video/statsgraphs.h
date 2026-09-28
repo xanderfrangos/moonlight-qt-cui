@@ -44,6 +44,7 @@ enum class StatsGraphSyncMode {
     Off,
     VSync,
     VSyncMailbox,
+    VSyncSmooth,
     Vrr,
 };
 

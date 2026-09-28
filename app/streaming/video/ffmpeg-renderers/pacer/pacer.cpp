@@ -1,6 +1,8 @@
 #include "pacer.h"
+#include "fixedvsynctrace.h"
 #include "path.h"
 #include <QCryptographicHash>
+#include <QVarLengthArray>
 #include "vrrpacingworker.h"
 #include "../ivrrframepresenter.h"
 #include "streaming/streamutils.h"
@@ -47,7 +49,11 @@ Pacer::Pacer(IFFmpegRenderer* renderer) :
     m_MaxVideoFps(0),
     m_DisplayFps(0),
     m_RendererAttributes(0),
-    m_Mailbox(false)
+    m_VsyncMode(StreamingPreferences::VSM_DEFAULT),
+    m_Mailbox(false),
+    m_Smooth(false),
+    m_SkipsSinceTick(0),
+    m_PrevTickRepeated(false)
 {
 
 }
@@ -105,6 +111,9 @@ void Pacer::shutdown()
         av_frame_free(&frame);
     }
     av_frame_free(&m_DeferredFreeFrame);
+
+    // Producers have stopped; flush the diagnostics file
+    m_Trace.reset();
 }
 
 PacerTelemetrySnapshot Pacer::telemetrySnapshot() const
@@ -268,7 +277,15 @@ void Pacer::handleVsync(int timeUntilNextVsyncMillis)
     // Make sure initialize() has been called
     SDL_assert(m_MaxVideoFps != 0);
 
+    const uint64_t tickUs = LiGetMicroseconds();
+    if (m_Smooth) {
+        handleSmoothVsync(tickUs);
+        return;
+    }
+
     m_FrameQueueLock.lock();
+    const int queueBefore = m_PacingQueue.count();
+    uint32_t skipped = 0;
 
     // If the queue length history entries are large, be strict
     // about dropping excess frames.
@@ -296,48 +313,178 @@ void Pacer::handleVsync(int timeUntilNextVsyncMillis)
         m_PacingQueueHistory.enqueue(m_PacingQueue.count());
     }
 
-    // Catch up if we're several frames ahead
+    // Catch up if we're several frames ahead. These drops are reported with
+    // this refresh.
     while (m_PacingQueue.count() > frameDropTarget) {
         AVFrame* frame = m_PacingQueue.dequeue();
+        skipped++;
 
         // Drop the lock while we call av_frame_free()
         m_FrameQueueLock.unlock();
-        m_Telemetry.recordLegacyDrop();
         av_frame_free(&frame);
         m_FrameQueueLock.lock();
     }
 
     if (m_PacingQueue.isEmpty()) {
         // Wait for a frame to arrive or our V-sync timeout to expire
-        if (!m_PacingQueueNotEmpty.wait(&m_FrameQueueLock, SDL_max(timeUntilNextVsyncMillis, TIMER_SLACK_MS) - TIMER_SLACK_MS)) {
-            // Wait timed out - unlock and bail
+        if (!m_PacingQueueNotEmpty.wait(&m_FrameQueueLock, SDL_max(timeUntilNextVsyncMillis, TIMER_SLACK_MS) - TIMER_SLACK_MS) ||
+                m_Stopping || m_PacingQueue.isEmpty()) {
+            // Wait timed out - unlock and bail. The previous frame stays up.
             m_FrameQueueLock.unlock();
-            return;
-        }
-
-        if (m_Stopping) {
-            m_FrameQueueLock.unlock();
+            recordVsyncTick(tickUs, false, skipped, queueBefore, 0, nullptr, false);
             return;
         }
     }
 
     // Place the first frame on the render queue
-    enqueueFrameForRenderingAndUnlock(m_PacingQueue.dequeue());
+    AVFrame* frame = m_PacingQueue.dequeue();
+    const int queueAfter = m_PacingQueue.count();
+    const ShownFrameInfo shownInfo(frame);
+    enqueueFrameForRenderingAndUnlock(frame);
+
+    recordVsyncTick(tickUs, true, skipped, queueBefore, queueAfter, &shownInfo, false);
+}
+
+Pacer::ShownFrameInfo::ShownFrameInfo(const AVFrame* frame)
+    : rtp(frame->pts == AV_NOPTS_VALUE ? -1 : frame->pts),
+      arrivalUs(frame->pkt_dts > 0 ? static_cast<uint64_t>(frame->pkt_dts) : 0),
+      slotUs(frame->best_effort_timestamp > 0 ? static_cast<uint64_t>(frame->best_effort_timestamp) : 0)
+{
+}
+
+void Pacer::handleSmoothVsync(uint64_t tickUs)
+{
+    m_FrameQueueLock.lock();
+
+    m_Smoother.observeVsync(tickUs);
+    const uint64_t periodUs = m_Smoother.displayPeriodUs();
+    // This decision is shown on the next refresh. Frames must reach the
+    // renderer TIMER_SLACK_MS before it, like the default path.
+    const uint64_t showUs = tickUs + periodUs;
+    const uint64_t renderLeadUs = SDL_min((uint64_t)TIMER_SLACK_MS * 1000, periodUs / 2);
+    const uint64_t deadlineUs = showUs - renderLeadUs;
+    const int queueBefore = m_PacingQueue.count();
+
+    int chosen = -1;
+    for (;;) {
+        // Newest frame whose assigned refresh is this one or earlier. A frame
+        // without a usable target (0) is always eligible.
+        for (int i = 0; i < m_PacingQueue.count(); i++) {
+            const uint64_t target = static_cast<uint64_t>(m_PacingQueue.at(i)->best_effort_timestamp);
+            if (target <= showUs + periodUs / 2) {
+                chosen = i;
+            }
+        }
+
+        // A target far in the future means the timeline jumped (for example
+        // the host clock reset). Start over rather than stall the stream.
+        if (chosen < 0 && !m_PacingQueue.isEmpty() &&
+                static_cast<uint64_t>(m_PacingQueue.head()->best_effort_timestamp) > showUs + 250000) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Smooth V-Sync: frame scheduled too far ahead; resetting timeline");
+            m_Smoother.reset();
+            chosen = m_PacingQueue.count() - 1;
+        }
+
+        if (chosen >= 0 || m_Stopping) {
+            break;
+        }
+
+        const uint64_t nowUs = LiGetMicroseconds();
+        if (nowUs + 500 >= deadlineUs) {
+            break;
+        }
+        m_PacingQueueNotEmpty.wait(&m_FrameQueueLock,
+                                   (unsigned long)SDL_max((deadlineUs - nowUs) / 1000, (uint64_t)1));
+    }
+
+    if (chosen < 0 || m_Stopping) {
+        m_FrameQueueLock.unlock();
+        recordVsyncTick(tickUs, false, 0, queueBefore, queueBefore, nullptr, false);
+        return;
+    }
+
+    // Older eligible frames missed their refresh; the newest one wins
+    QVarLengthArray<AVFrame*, MAX_QUEUED_FRAMES> skippedFrames;
+    for (int i = 0; i < chosen; i++) {
+        skippedFrames.append(m_PacingQueue.dequeue());
+    }
+    AVFrame* frame = m_PacingQueue.dequeue();
+    const int queueAfter = m_PacingQueue.count();
+
+    const ShownFrameInfo shownInfo(frame);
+    const bool late = shownInfo.slotUs != 0 && shownInfo.slotUs + periodUs / 2 < showUs;
+
+    enqueueFrameForRenderingAndUnlock(frame);
+
+    for (AVFrame* skippedFrame : skippedFrames) {
+        av_frame_free(&skippedFrame);
+    }
+
+    recordVsyncTick(tickUs, true, (uint32_t)skippedFrames.size(),
+                    queueBefore, queueAfter, &shownInfo, late);
+}
+
+void Pacer::recordVsyncTick(uint64_t tickUs, bool sent, uint32_t skipped,
+                            int queueBefore, int queueAfter, const ShownFrameInfo* shown,
+                            bool late)
+{
+    skipped += m_SkipsSinceTick.exchange(0);
+
+    // The visible hitch: a refresh with nothing new, then a refresh that had
+    // to discard a frame because two were ready.
+    const bool missedSlot = m_PrevTickRepeated && sent && skipped != 0;
+    m_PrevTickRepeated = !sent;
+
+    int64_t offsetUs = 0;
+    int64_t bufferUs = 0;
+    uint64_t periodUs = 0;
+    if (m_Smooth) {
+        QMutexLocker lock(&m_FrameQueueLock);
+        offsetUs = m_Smoother.offsetUs();
+        bufferUs = m_Smoother.bufferUs();
+        periodUs = m_Smoother.displayPeriodUs();
+    }
+
+    m_Telemetry.recordFixedVsyncTick(sent, skipped, missedSlot, late,
+                                     m_Smooth, offsetUs, bufferUs);
+
+    if (m_Trace != nullptr) {
+        FixedVsyncTrace::Row row;
+        row.event = "tick";
+        row.timeUs = tickUs;
+        if (shown != nullptr) {
+            row.rtp = shown->rtp;
+            row.arrivalUs = shown->arrivalUs;
+            // Only Smooth stores a refresh in best_effort_timestamp
+            row.slotUs = m_Smooth ? shown->slotUs : 0;
+        }
+        row.a = sent;
+        row.b = skipped;
+        row.c = queueBefore;
+        row.d = queueAfter;
+        row.e = missedSlot;
+        row.f = late;
+        row.offsetUs = offsetUs;
+        row.displayPeriodUs = periodUs;
+        m_Trace->record(row);
+    }
 }
 
 bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                        bool enablePacing, bool enableVsync,
                        bool enableVrr, int vrrDisplayRefreshHz,
                        bool smoothVrrFrameTiming, const QString& calibrationKey,
-                       int vrrLatencyMode, bool vsyncMailbox)
+                       int vrrLatencyMode, int vsyncMode)
 {
     m_MaxVideoFps = maxVideoFps;
     m_RendererAttributes = m_VsyncRenderer->getRendererAttributes();
 
     // VRR has its own queue and stale-frame policy. The session never asks
-    // for both, but keep Mailbox out of the VRR path (and its fallback)
-    // even if a caller does.
-    m_Mailbox = vsyncMailbox && enableVsync && !enableVrr;
+    // for both, but keep the fixed V-Sync modes out of the VRR path (and its
+    // fallback) even if a caller does.
+    m_VsyncMode = enableVsync && !enableVrr ? vsyncMode : StreamingPreferences::VSM_DEFAULT;
+    m_Mailbox = m_VsyncMode == StreamingPreferences::VSM_MAILBOX;
 
     // VRR is deliberately a third pacing mode. It is selected once, before
     // any legacy V-sync source or render thread can be created, and every
@@ -468,6 +615,11 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                     "V-Sync mode: Mailbox (newest decoded frame replaces any frame still waiting)");
     }
 
+    // Smooth needs the refresh clock only the Frame pacing path has
+    if (m_VsyncMode == StreamingPreferences::VSM_SMOOTH) {
+        enablePacing = true;
+    }
+
     if (enablePacing) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Frame pacing: target %d Hz with %d FPS stream",
@@ -516,7 +668,25 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                     m_DisplayFps, m_MaxVideoFps);
     }
 
+    if (m_VsyncMode == StreamingPreferences::VSM_SMOOTH) {
+        if (m_VsyncSource != nullptr) {
+            m_Smooth = true;
+            m_Smoother.configure(m_MaxVideoFps, m_DisplayFps,
+                                 (int64_t)TIMER_SLACK_MS * 1000);
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "V-Sync mode: Smooth (frames scheduled onto refreshes from host timestamps)");
+        }
+        else {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Smooth V-Sync needs a V-sync source, which this platform lacks; using Default");
+            m_VsyncMode = StreamingPreferences::VSM_DEFAULT;
+        }
+    }
+
+    // Refresh accounting and the diagnostics trace need the V-sync thread
     if (m_VsyncSource != nullptr) {
+        m_Telemetry.beginFixedVsync(m_VsyncMode);
+        m_Trace = FixedVsyncTrace::create(m_VsyncMode, m_MaxVideoFps, m_DisplayFps);
         m_VsyncThread = SDL_CreateThread(Pacer::vsyncThread, "PacerVsync", this);
     }
 
@@ -618,6 +788,10 @@ void Pacer::dropFrameForEnqueue(QQueue<AVFrame*>& queue)
     if (queue.size() == MAX_QUEUED_FRAMES) {
         AVFrame* frame = queue.dequeue();
         av_frame_free(&frame);
+        if (m_VsyncSource != nullptr) {
+            // Reported, and counted as a drop, with the next refresh
+            m_SkipsSinceTick.fetch_add(1);
+        }
     }
 }
 
@@ -628,7 +802,13 @@ void Pacer::replaceQueuedFramesForMailbox(QQueue<AVFrame*>& queue)
 
         // Drop the lock while we call av_frame_free()
         m_FrameQueueLock.unlock();
-        m_Telemetry.recordLegacyDrop();
+        if (m_VsyncSource != nullptr) {
+            // Reported, and counted as a drop, with the next refresh
+            m_SkipsSinceTick.fetch_add(1);
+        }
+        else {
+            m_Telemetry.recordLegacyDrop();
+        }
         av_frame_free(&frame);
         m_FrameQueueLock.lock();
     }
@@ -644,6 +824,9 @@ void Pacer::submitFrame(AVFrame* frame)
     if (m_VsyncSource != nullptr) {
         if (m_Mailbox) {
             replaceQueuedFramesForMailbox(m_PacingQueue);
+        }
+        if (m_Smooth) {
+            admitSmoothFrameLocked(frame);
         }
         dropFrameForEnqueue(m_PacingQueue);
         m_PacingQueue.enqueue(frame);
@@ -670,7 +853,41 @@ bool Pacer::isVrrActive() const
     return m_VrrWorker != nullptr;
 }
 
-bool Pacer::isMailboxActive() const
+int Pacer::fixedVsyncMode() const
 {
-    return m_Mailbox && m_VrrWorker == nullptr;
+    return m_VrrWorker != nullptr ? -1 : m_VsyncMode;
+}
+
+void Pacer::admitSmoothFrameLocked(AVFrame* frame)
+{
+    // best_effort_timestamp is unused by the renderers. Smooth mode keeps
+    // the frame's assigned refresh there; 0 means "show when possible".
+    frame->best_effort_timestamp = 0;
+    if (frame->pts == AV_NOPTS_VALUE || frame->pkt_dts <= 0) {
+        return;
+    }
+
+    const FixedVsyncSmoother::Decision d =
+        m_Smoother.admit(static_cast<uint32_t>(frame->pts),
+                         static_cast<uint64_t>(frame->pkt_dts));
+    frame->best_effort_timestamp = static_cast<int64_t>(d.slotUs != 0 ? d.slotUs : d.dueUs);
+
+    if (m_Trace != nullptr) {
+        FixedVsyncTrace::Row row;
+        row.event = "admit";
+        row.timeUs = LiGetMicroseconds();
+        row.rtp = frame->pts;
+        row.arrivalUs = static_cast<uint64_t>(frame->pkt_dts);
+        row.dueUs = d.dueUs;
+        row.slotUs = d.slotUs;
+        row.a = d.hostUs;
+        row.b = d.smoothedHostUs;
+        row.c = d.transitUs;
+        row.d = d.desiredOffsetUs;
+        row.e = d.resynced;
+        row.f = d.rephased;
+        row.offsetUs = d.offsetUs;
+        row.displayPeriodUs = m_Smoother.displayPeriodUs();
+        m_Trace->record(row);
+    }
 }
