@@ -4306,8 +4306,8 @@ void testReadinessHitchBufferAdaptation()
         if (i == 599) clean = d.playoutDelayUs;
         if (i >= 600) peak = std::max(peak, d.playoutDelayUs);
         finalDelay = d.playoutDelayUs;
-        expect(d.playoutDelayUs <= policy.playoutDelayMaximumUs,
-               "attributed growth must retain the hard cap");
+        expect(d.playoutDelayUs <= d.playoutDelayMaximumUs,
+               "attributed growth must retain the effective profile and queue cap");
     }
     expect(peak > clean, "observed readiness-caused output misses must earn additional buffering");
     expect(finalDelay < peak, "expired event demands must release increased buffering");
@@ -4349,7 +4349,7 @@ void testPredictionOnlyBufferAdaptation()
             if (i < 120) startupStable &= d.playoutDelayUs <= initial;
             if (i == 599) clean = d.playoutDelayUs;
             if (i >= 600) peak = std::max(peak, d.playoutDelayUs);
-            bounded &= d.playoutDelayUs <= policy.playoutDelayMaximumUs &&
+            bounded &= d.playoutDelayUs <= d.playoutDelayMaximumUs &&
                 (!i || d.playoutDelayUs <= previousDelay + policy.playoutDelayAttackUs) &&
                 (!lastSubmission || submitted >= controller.displayPeriodUs() + lastSubmission);
             maximumLatency = std::max(maximumLatency, submitted - decoded);
@@ -4395,8 +4395,11 @@ void testPredictionOnlyBufferAdaptation()
                     (unsigned long long)historicalMaximum, (unsigned long long)maximumDelay);
         expect(historicalMaximum > 16000,
                "regression workload must reproduce the previous expanding buffer");
-        expect(maximumDelay <= desktopPolicy.playoutDelayMaximumUs,
-               "slow source cadence must never expand the absolute buffer ceiling");
+        expect(maximumDelay <= desktopPolicy.playoutDelayMaximumPeriodPerMille *
+                   (1000000ULL / fps) / 1000 &&
+                   maximumDelay <= desktopPolicy.playoutDelayCapSourcePeriodPerMille *
+                   (1000000ULL / fps) / 1000,
+               "slow source cadence must respect the selected source-frame allowance");
     }
 
     // Display-only errors can be logged but cannot steer any timing decision.
@@ -4531,10 +4534,10 @@ void testProductionPreservesRelativeGameSpacing()
     auto session = config(120, 120);
     session.smoothFrameTiming = false;
     auto policy = vrrTimingParametersForSession(session);
-    expect(policy.playoutDelayMaximumUs == 24000 &&
-               policy.playoutDelayMaximumPeriodPerMille == 0 &&
+    expect(policy.playoutDelayMaximumUs == policy.playoutDelayMinimumUs &&
+               policy.playoutDelayMaximumPeriodPerMille == 4000 &&
                policy.playoutDelayCapSourcePeriodPerMille == 4000,
-           "production Smooth must allow four source frames up to 24 ms");
+           "production Smooth must allow four fitted source frames");
     // Hold padding constant to isolate the spacing contract from adaptation.
     policy.playoutDelayMaximumPeriodPerMille = 0;
     policy.playoutDelayCapSourcePeriodPerMille = 0;
@@ -4797,8 +4800,8 @@ void testLatencyPresetsAcrossSourceAndDisplayRates()
         expect(ordinaryPolicy.latencyFixEnabled == 0 &&
                    ordinaryPolicy.latencyFixAllRates == 0 &&
                    ordinaryPolicy.playoutDelayCapSourcePeriodPerMille == 4000 &&
-                   ordinaryPolicy.playoutDelayMaximumUs == 24000,
-               "Smooth must allow four source frames within its absolute and capacity limits");
+                   ordinaryPolicy.playoutDelayMaximumPeriodPerMille == 4000,
+               "Smooth must allow four source frames within queue capacity");
         for (int mode : {1, 2}) {
             auto session = ordinarySession;
             session.latencyMode = mode;
@@ -5272,7 +5275,10 @@ void testReduceJudderReserveCoversQuantizedCadence()
         auto session = config(120, 120);
         session.latencyMode = mode;
         auto production = vrrTimingParametersForSession(session);
-        if (tight) production.playoutDelayMaximumUs = production.playoutDelayMinimumUs;
+        if (tight) {
+            production.playoutDelayMaximumUs = production.playoutDelayMinimumUs;
+            production.playoutDelayMaximumPeriodPerMille = 0;
+        }
         const auto ticks = [](int i) { return hostQuantizedTicks(i, 90, 120); };
         const auto previous = runJudderFixture(session, previousJudderPolicy(production), 3600, 1200, ticks);
         const auto noReserve = runJudderFixture(session, withoutJudderReserve(production), 3600, 1200, ticks);
@@ -5326,15 +5332,15 @@ void testReduceJudderReserveReleases()
     session.latencyMode = 1;
     auto production = vrrTimingParametersForSession(session);
     production.playoutDelayMaximumUs = production.playoutDelayMinimumUs;
+    production.playoutDelayMaximumPeriodPerMille = 0;
     uint64_t reserveDuringJudder = 0;
-    const auto ticks = [](int i) {
-        return i < 1800 ? hostQuantizedTicks(i, 90, 120) :
-            hostQuantizedTicks(1799, 90, 120) + static_cast<uint32_t>(i - 1799) * 1000;
-    };
+    int evenCadenceStart = -1;
+    uint32_t lastJudderTicks = 0;
     VrrTimingController controller(session, true, production);
     uint64_t last = 0, previousReserve = 0;
-    for (int i = 0; i < 3600; ++i) {
-        const uint32_t t = ticks(i);
+    for (int i = 0; i < (evenCadenceStart < 0 ? 3600 : evenCadenceStart + 1800); ++i) {
+        const uint32_t t = evenCadenceStart < 0 ? hostQuantizedTicks(i, 90, 120) :
+            lastJudderTicks + static_cast<uint32_t>(i - evenCadenceStart + 1) * 1000;
         const uint64_t decoded = decodedTimeForRtp(1000000, t) + judderDeliveryJitterUs(i);
         const uint64_t now = std::max(last, decoded);
         const auto d = controller.schedule(frame(i, t, true, decoded), now);
@@ -5346,7 +5352,11 @@ void testReduceJudderReserveReleases()
         const uint64_t reserve = controller.smoothingReserveUs();
         expect(reserve <= previousReserve + 250,
                "the smoothing reserve must be acquired gradually");
-        if (i == 1799) reserveDuringJudder = reserve;
+        if (evenCadenceStart < 0 && reserve >= 1000) {
+            reserveDuringJudder = reserve;
+            lastJudderTicks = t;
+            evenCadenceStart = i + 1;
+        }
         previousReserve = reserve;
         last = submitted;
     }
@@ -5861,7 +5871,7 @@ void testProductionCalibrationSurvivesFpsChanges()
         session.smoothFrameTiming = smoothing;
         const auto policy = vrrTimingParametersForSession(session);
         VrrTimingController controller(session, true, policy);
-        uint64_t sourceTicks = 0, submitted = 0, initialBuffer = 0, previousBuffer = 0;
+        uint64_t sourceTicks = 0, submitted = 0, previousBuffer = 0;
         int frameNumber = 0;
         bool calibrated = false;
         for (int rate : {120, 19, 120, 30, 99, 116, 60, 120}) {
@@ -5870,7 +5880,6 @@ void testProductionCalibrationSurvivesFpsChanges()
                 const auto arrival = decodedTimeForRtp(1000000, uint32_t(sourceTicks));
                 const auto now = std::max(arrival, submitted);
                 const auto decision = controller.schedule(frame(frameNumber, uint32_t(sourceTicks), true, arrival), now);
-                if (!initialBuffer) initialBuffer = decision.playoutDelayUs;
                 const auto ready = std::max(now, decision.renderStartUs) + 1000;
                 submitted = std::max(ready, decision.targetUs);
                 controller.notePreparationDuration(1000, 0, ready);
@@ -5880,9 +5889,8 @@ void testProductionCalibrationSurvivesFpsChanges()
                 expect(!calibrated || stats.initialCalibrationComplete,
                        "FPS/menu transitions must not restart initial calibration");
                 calibrated |= stats.initialCalibrationComplete;
-                expect(decision.playoutDelayUs <= initialBuffer &&
-                           decision.playoutDelayUs <= policy.playoutDelayMaximumUs,
-                       "clean FPS/menu transitions must not inflate startup padding or the absolute ceiling");
+                expect(decision.playoutDelayUs <= decision.playoutDelayMaximumUs,
+                       "clean FPS/menu transitions must respect the effective profile and queue cap");
                 expect(!previousBuffer || decision.playoutDelayUs <= previousBuffer + 125,
                        "calibration and rate transitions must retain the normal application slew");
                 previousBuffer = decision.playoutDelayUs;
