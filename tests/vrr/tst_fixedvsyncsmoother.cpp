@@ -137,8 +137,22 @@ int main()
     }
 
     {
+        // A slow stream on a fast display: the buffer is bounded by the
+        // refresh, not by two (much longer) source frames
+        // (compared with the same stream arriving without late frames)
+        const Result clean = run(30, 30.0, 90.0, 900, none, [](int) { return 5000.0; });
+        const Result r = run(30, 30.0, 90.0, 900, none,
+                             [](int i) { return (i % 3 == 0) ? 45000.0 : 5000.0; });
+        int64_t worst = 0;
+        for (size_t i = 60; i < r.decisions.size(); i++) {
+            worst = std::max(worst, r.decisions[i].offsetUs - clean.decisions[i].offsetUs);
+        }
+        expect(worst <= 11111 + 50, "30 FPS on 90 Hz buffers at most one refresh");
+    }
+
+    {
         // A burst of late frames grows the offset within the slew limit and
-        // never past two source frames above the fastest arrival.
+        // never past one refresh above the fastest arrival.
         const Result r = run(60, 60.0, 60.0, 600, none,
                              [](int i) { return (i >= 300 && i < 330) ? 25000.0 : 5000.0; });
         bool slew = true;
@@ -150,10 +164,10 @@ int main()
             const int64_t change = r.decisions[i].offsetUs - r.decisions[i - 1].offsetUs;
             slew = slew && change <= FixedVsyncSmoother::kOffsetGrowUsPerFrame &&
                    change >= -FixedVsyncSmoother::kOffsetShrinkUsPerFrame;
-            bounded = bounded && r.decisions[i].offsetUs <= settled + 2 * 16667 + 50;
+            bounded = bounded && r.decisions[i].offsetUs <= settled + 16667 + 50;
         }
         expect(slew, "offset changes stay within the slew limits");
-        expect(bounded, "offset stays within two source frames of the fastest arrival");
+        expect(bounded, "offset stays within one refresh of the fastest arrival");
         expect(r.decisions[329].offsetUs > r.decisions[299].offsetUs + 3000,
                "offset grows during a burst of late frames");
     }

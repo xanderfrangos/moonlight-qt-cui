@@ -24,7 +24,8 @@
 //      percentile of recent (arrival - smoothed host time), so almost every
 //      frame has arrived by its due time. It moves slowly, which also absorbs
 //      drift between the host clock and the local display clock, and it never
-//      buffers more than two source frames beyond the fastest recent arrival.
+//      buffers more than one refresh (or two source frames, if shorter)
+//      beyond the fastest recent arrival.
 //
 // Each frame is then assigned a refresh: the one after the previous frame's,
 // advanced by the rounded number of refreshes between their due times. That
@@ -182,15 +183,21 @@ public:
         m_TransitCount = std::min(m_TransitCount + 1, m_WindowSize);
 
         // The offset is chosen so the readiness percentile of recent frames
-        // arrived by their due time, but never more than one source frame
-        // later than the fastest recent arrival.
+        // arrived by their due time, but never more than one refresh (or two
+        // source frames, if shorter) later than the fastest recent arrival.
+        // Waiting longer than a refresh only moves a frame that would
+        // otherwise be late onto a later refresh, at a latency cost to every
+        // frame: replaying Windows (110 and 120 FPS on 120 Hz) and Steam Deck
+        // (30-90 FPS on 90 Hz) captures, a one-refresh cap matched or
+        // improved spacing and cut median delay 2-4 ms (up to 11 ms at the
+        // 95th percentile) against two source frames.
         // Until the ring wraps, its samples are the first m_TransitCount slots
         m_Scratch.assign(m_Transit.begin(), m_Transit.begin() + m_TransitCount);
         const size_t rank = (static_cast<size_t>(m_TransitCount) * kReadinessPercentile + 99) / 100 - 1;
         std::nth_element(m_Scratch.begin(), m_Scratch.begin() + rank, m_Scratch.end());
         const int64_t percentile = m_Scratch[rank];
         const int64_t fastest = *std::min_element(m_Scratch.begin(), m_Scratch.end());
-        const int64_t maxBufferUs = static_cast<int64_t>(2 * m_HostPeriodUs);
+        const int64_t maxBufferUs = static_cast<int64_t>(std::min(2 * m_HostPeriodUs, m_DisplayPeriodUs));
         const int64_t desired = std::min(percentile + kMarginUs, fastest + maxBufferUs);
 
         // A resync only snaps the smoothed time to the raw stamp. Both stay

@@ -37,8 +37,9 @@ is pure, deterministic logic. At admission (decoder thread, under the queue
 lock) it fits the 90 kHz stamps to the host's measured frame interval (snapping
 to the raw stamp when they disagree by more than half an interval), adds a
 playout offset that follows the p99 of recent (arrival - smoothed host time)
-plus 0.5 ms and the 3 ms render lead, slews it at +250/-40 us per frame, and
-caps it at two source frames above the fastest arrival in a two-second window.
+plus 0.5 ms and the render lead, slews it at +250/-40 us per frame, and
+caps it at one refresh (or two source frames, if shorter) above the fastest
+arrival in a two-second window.
 There is no first-frame anchor; the rolling window also absorbs host/client
 clock drift. The frame is then chained to the refresh after the previous
 frame's, re-aligning when the chain is more than 1 ms from the first refresh at
@@ -96,6 +97,34 @@ up to 0.5 ms). The `.vsync` CSV adds `refresh` rows per accepted report. A
 display refresh-rate change mid-stream is not followed until reconnect (the
 Pacer's display rate is also fixed at start). Gamescope's own composition
 still owns the final latch, and Steam's frame limiter can still interfere.
+
+First Gamescope Smooth capture (2026-09-28 05:02, Steam Deck, 90 Hz, host
+caps 30-91 FPS, Vulkan/VAAPI). Gamescope reported display times for 18,580 of
+18,603 presents; none were off-grid and the fitted period was 11,110.7 us.
+Matching each sent refresh to the next report, 99.9% of frames were shown on
+exactly the refresh after their tick, so frames make their latch and the
+upstream deferred-acquire change is not needed for this path. The learned lead
+settled near 4.5 ms (p95 render span ~2 ms). Host stamps were very regular
+(99.9%) and arrival spread was ~4 ms, so Smooth could not improve on
+showing each frame at the first refresh after arrival; it added 2-20 ms. The
+buffer cap was then reduced from two source frames to one refresh. Replaying
+the admitted frames through the smoother against the reported refresh grid
+(reproducing the live Smooth delay within about 1 ms) and the three Windows
+120 Hz captures against their V-sync grid, with a present every refresh,
+the one-refresh cap gave:
+
+| Capture | Median / p95 delay, 2 frames -> 1 refresh | Frames off host spacing by > half a refresh |
+| --- | --- | --- |
+| Windows 110 FPS (03:57, jittery) | 14.5 / 27.6 -> 10.1 / 15.7 ms | 12.7% -> 9.8% (on-arrival model 14.7%) |
+| Windows 110 FPS (04:17) | 11.6 / 18.8 -> 10.0 / 15.1 ms | 12.1% -> 12.0% |
+| Windows 120 FPS (04:22) | 16.8 / 26.2 -> 14.1 / 22.2 ms | 3.7% -> 3.9% |
+| Deck 30-91 FPS | 20.6 / 36.2 -> 16.7 / 30.4 ms | 4.0% -> 4.1% |
+
+Frames not shown changed by at most +0.4 points on the Windows captures and
+fell on the Deck (4.5% -> 0.4%, mostly rate transitions). A further trim
+of the time frames wait in the queue for their refresh saved another 1-5 ms
+but made the jittery Windows capture less even (10.9% vs 9.8%), so it was not
+adopted. These are replays, not live results.
 
 Smooth hand-over lead (2026-09-28): the lead that was a fixed 3 ms
 (`TIMER_SLACK_MS`, both in the due time and the late-frame deadline) is now
