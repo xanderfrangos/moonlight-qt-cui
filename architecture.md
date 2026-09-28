@@ -39,8 +39,9 @@ plus 0.5 ms and the 3 ms render lead, slews it at +250/-40 us per frame, and
 caps it at two source frames above the fastest arrival in a two-second window.
 There is no first-frame anchor; the rolling window also absorbs host/client
 clock drift. The frame is then chained to the refresh after the previous
-frame's, re-aligning only when drift leaves a -1 ms / +1.25 refresh band, so
-due-time jitter cannot flip frames between neighbouring refreshes. The assigned
+frame's, re-aligning when the chain is more than 1 ms from the first refresh at
+or after the due time, so due-time jitter cannot flip frames between
+neighbouring refreshes at integer ratios. The assigned
 refresh travels in `AVFrame::best_effort_timestamp`, which the renderers do not
 read. At each refresh the V-sync thread shows the newest frame assigned to the
 coming refresh or earlier, waits (until 3 ms before it) for one to arrive, and
@@ -49,6 +50,29 @@ the scheduler. A synthetic simulation (not live evidence) showed the intended
 win at 60 FPS on 120 Hz (uneven presented spacing from ~39% of frames to ~1-2%),
 fewer missed refreshes than Default at 60 on 60 with heavy arrival jitter at
 about 11 ms more delay, and parity with light jitter.
+
+Steam Deck captures (2026-09-28, SteamOS game mode, 90 Hz panel, 90 FPS
+requested, game capped at 59/60, one capture per V-Sync mode). Moonlight runs
+on X11 under Gamescope there, so the Pacer has no V-sync source: Smooth logged
+its fallback and ran Default, and no `.vsync` CSV or refresh counters were
+produced. Only decoder-side GPU rows exist. Their host stamps alternate
+15.9 / 18.2 ms, with occasional 5-9 ms bursts and brief stretches above 90 FPS.
+Replaying (rtp, decoder output) offline through the scheduler exposed three
+defects, now fixed: the host interval was clamped to +-5% of the requested
+stream rate (90 FPS, so 11.1 ms against ~16.9 ms content) and is now a trimmed
+mean of the last 64 observed intervals; a single off-cadence stamp resynced
+(a burst frame then shared a refresh) and now only three in a row, or a stall,
+resync; and the refresh chain used a +1.25 refresh band that drifts at uneven
+ratios (60 on 90) and is now +-1 ms around the first refresh at or after the
+due time. While the host interval is at least 0.9 refresh, two frames never
+share a refresh. After the fixes, on that data Smooth has ~0 missed refreshes
+but no spacing benefit over on-arrival FIFO (mean spacing error ~5.3 ms for
+both, which is the inherent 1/2-refresh alternation of 60 on 90) at ~8 ms more
+median delay. Arrival jitter there was small (p95 5-8 ms above the fastest), so
+there was little for Smooth to absorb. Mailbox selected Vulkan Mailbox under
+Gamescope X11. Its run showed 5.88 ms queue + 2.59 ms rendering against Default's
+7.35 + 3.28 ms, from single one-minute runs with a varying cap, so this is not
+a controlled comparison.
 
 Fixed V-Sync measurements apply to Default, Mailbox and Smooth whenever the
 Pacer has a V-sync source. Per refresh the Pacer counts repeats (nothing new

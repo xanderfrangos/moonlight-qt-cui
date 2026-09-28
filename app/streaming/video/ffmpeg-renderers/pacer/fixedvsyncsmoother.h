@@ -16,9 +16,10 @@
 // The due time is built from two parts:
 //   1. A smoothed host time. The raw RTP stamps jitter by a few milliseconds,
 //      so they are fitted to the host's measured frame interval and only
-//      nudged toward each raw stamp. A gap of several frames (host stall or
-//      game running below the stream rate) advances by whole intervals, and a
-//      stamp that disagrees by more than half an interval resynchronizes.
+//      nudged toward each raw stamp. A gap of several frames advances by
+//      whole intervals. A single stamp off the cadence by more than half an
+//      interval (a capture burst) is kept on the cadence; three in a row, or
+//      a long stall, resynchronize to the raw stamps.
 //   2. A playout offset mapping host time to local time. It follows a high
 //      percentile of recent (arrival - smoothed host time), so almost every
 //      frame has arrived by its due time. It moves slowly, which also absorbs
@@ -29,7 +30,7 @@
 // advanced by the rounded number of refreshes between their due times. That
 // chain keeps small due-time jitter from flipping a frame between two
 // neighbouring refreshes, and re-aligns only when drift moves it more than a
-// small tolerance before or a quarter refresh after the due time.
+// millisecond from the first refresh at or after the due time.
 //
 // There is no single first-frame anchor: the first frames after connecting or
 // after a keyframe are often late or bursty, so the offset always comes from a
@@ -71,6 +72,11 @@ public:
     // How far before its due time a frame may be shown to keep its refresh
     // chain, before the chain re-aligns.
     static constexpr double kEarlyToleranceUs = 1000;
+    // Consecutive stamps off the cadence by more than half an interval
+    // before the smoothed host time snaps to the raw stamps
+    static constexpr int kResyncAfterFrames = 3;
+    // Recent host intervals used to measure the real frame interval
+    static constexpr int kIntervalWindow = 64;
 
     // renderLeadUs is how long before a refresh a frame must be handed to
     // the renderer to be shown on it.
@@ -89,6 +95,9 @@ public:
     {
         m_HaveFrame = false;
         m_HostPeriodUs = m_NominalSourcePeriodUs;
+        m_Intervals.clear();
+        m_IntervalNext = 0;
+        m_DisagreeingFrames = 0;
         m_DisplayPeriodUs = m_NominalDisplayPeriodUs;
         m_LastVsyncUs = 0;
         m_LastSlotUs = 0;
@@ -126,25 +135,33 @@ public:
                 d.resynced = true;
             }
             else {
+                observeHostInterval(deltaUs);
                 const double intervals = std::max(1.0, std::round(deltaUs / m_HostPeriodUs));
                 const double predicted = m_SmoothedHostUs + intervals * m_HostPeriodUs;
                 const double error = hostUs - predicted;
-                if (std::fabs(error) > m_HostPeriodUs / 2 || intervals > 30) {
+                if (intervals > 30) {
+                    // A long stall. Predicting through it means nothing.
                     m_SmoothedHostUs = hostUs;
+                    m_DisagreeingFrames = 0;
                     d.resynced = true;
                 }
-                else {
-                    m_SmoothedHostUs = predicted + error / 16.0;
+                else if (std::fabs(error) > m_HostPeriodUs / 2) {
+                    // One stamp far off the cadence is usually a capture
+                    // burst (two frames a few ms apart). Keep it on the
+                    // cadence so it does not share a refresh with its
+                    // neighbour; only a persistent change resynchronizes.
+                    if (++m_DisagreeingFrames >= kResyncAfterFrames) {
+                        m_SmoothedHostUs = hostUs;
+                        m_DisagreeingFrames = 0;
+                        d.resynced = true;
+                    }
+                    else {
+                        m_SmoothedHostUs = predicted;
+                    }
                 }
-
-                // Track the host's real frame interval (e.g. 59.94 Hz) from
-                // single-interval steps close to the nominal rate.
-                if (intervals == 1 &&
-                        std::fabs(deltaUs - m_NominalSourcePeriodUs) < m_NominalSourcePeriodUs * 0.25) {
-                    m_HostPeriodUs += (deltaUs - m_HostPeriodUs) / 256.0;
-                    m_HostPeriodUs = std::clamp(m_HostPeriodUs,
-                                                m_NominalSourcePeriodUs * 0.95,
-                                                m_NominalSourcePeriodUs * 1.05);
+                else {
+                    m_DisagreeingFrames = 0;
+                    m_SmoothedHostUs = predicted + error / 16.0;
                 }
             }
             m_LastHostUs = hostUs;
@@ -232,19 +249,65 @@ public:
         else {
             const double steps = std::round((due - m_LastSlotDueUs) / period);
             slot = m_LastSlotUs + steps * period;
-            // Showing a frame slightly before its due time only eats into
-            // the readiness margin, and showing it up to a quarter refresh
-            // late costs that much latency. Beyond either, re-align.
+            // Keep the chain only while it agrees, within a small tolerance,
+            // with the first refresh at or after the due time. That holds
+            // frames steady near a refresh boundary when the stream rate
+            // divides the refresh rate (60 on 60 or 120), and falls back to
+            // the plain rule for uneven ratios such as 60 on 90, where the
+            // rounded step would otherwise drift.
             const double lead = slot - due;
-            if (lead < -kEarlyToleranceUs || lead >= 1.25 * period) {
+            if (lead < -kEarlyToleranceUs || lead >= period + kEarlyToleranceUs) {
                 slot = ceilToGrid(due);
                 d.rephased = true;
+            }
+        }
+
+        // While the host sends frames no faster than the display refreshes,
+        // two frames must never share a refresh: that would skip one for no
+        // reason (for example after a resync moves the due time back). Hold
+        // such a frame to the next refresh instead, unless the chain has
+        // fallen several refreshes behind its due times.
+        if (m_LastSlotUs != 0 && m_HostPeriodUs >= 0.9 * period &&
+                slot < m_LastSlotUs + period - 1) {
+            const double held = m_LastSlotUs + period;
+            if (held - due < 3 * period) {
+                slot = held;
             }
         }
 
         m_LastSlotUs = slot;
         m_LastSlotDueUs = due;
         d.slotUs = static_cast<uint64_t>(std::llround(slot));
+    }
+
+    // The host's real frame interval, measured rather than taken from the
+    // requested stream rate: a 90 FPS stream of a game capped at 60 sends a
+    // frame every ~16.7 ms, not 11.1 ms. A trimmed mean of recent intervals
+    // is used because host stamps are often bimodal (e.g. 15.9 / 18.2 ms for
+    // a 59 FPS game), where a median would pick one of the two modes.
+    void observeHostInterval(double deltaUs)
+    {
+        if (deltaUs < 2000 || deltaUs > 200000) {
+            return;
+        }
+        if (static_cast<int>(m_Intervals.size()) < kIntervalWindow) {
+            m_Intervals.push_back(deltaUs);
+        }
+        else {
+            m_Intervals[m_IntervalNext] = deltaUs;
+            m_IntervalNext = (m_IntervalNext + 1) % kIntervalWindow;
+        }
+        if (m_Intervals.size() < 8) {
+            return;
+        }
+        m_IntervalScratch = m_Intervals;
+        std::sort(m_IntervalScratch.begin(), m_IntervalScratch.end());
+        const size_t trim = m_IntervalScratch.size() / 10;
+        double sum = 0;
+        for (size_t i = trim; i < m_IntervalScratch.size() - trim; i++) {
+            sum += m_IntervalScratch[i];
+        }
+        m_HostPeriodUs = sum / (m_IntervalScratch.size() - 2 * trim);
     }
 
     int64_t offsetUs() const { return m_OffsetUs; }
@@ -271,6 +334,10 @@ private:
     int64_t m_LastRtpTicks = 0;
     double m_LastHostUs = 0;
     double m_SmoothedHostUs = 0;
+    int m_DisagreeingFrames = 0;
+    std::vector<double> m_Intervals;
+    std::vector<double> m_IntervalScratch;
+    int m_IntervalNext = 0;
 
     int m_WindowSize = 120;
     std::vector<int64_t> m_Transit;

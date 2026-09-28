@@ -183,6 +183,60 @@ int main()
         expect(allOne, "RTP wraparound keeps consecutive refreshes");
     }
 
+    {
+        // A 90 FPS stream of a game capped near 60 (the Steam Deck captures of
+        // 2026-09-28): host stamps alternate 15.9 / 18.2 ms. The measured
+        // interval must follow the content, not the requested stream rate.
+        FixedVsyncSmoother smoother;
+        smoother.configure(90, 90, 3000);
+        uint64_t vsync = 1000000;
+        uint32_t rtp = 1000;
+        uint64_t host = 0;
+        std::vector<FixedVsyncSmoother::Decision> decisions;
+        for (int i = 0; i < 600; i++) {
+            host += (i % 2) ? 18200 : 15900;
+            const uint64_t arrival = 1000000 + host + 5000 + (i % 5) * 700;
+            while (vsync <= arrival) {
+                smoother.observeVsync(vsync);
+                vsync += 11111;
+            }
+            rtp = 1000 + static_cast<uint32_t>(host * 9 / 100);
+            decisions.push_back(smoother.admit(rtp, arrival));
+        }
+        expect(smoother.hostPeriodUs() > 16500 && smoother.hostPeriodUs() < 17600,
+               "host interval is measured from the content, not the requested rate");
+        size_t shared = 0;
+        size_t resyncs = 0;
+        for (size_t i = 60; i < decisions.size(); i++) {
+            shared += decisions[i].slotUs <= decisions[i - 1].slotUs;
+            resyncs += decisions[i].resynced;
+        }
+        expect(shared == 0, "59 FPS content on 90 Hz never puts two frames on one refresh");
+        expect(resyncs == 0, "bimodal host stamps do not resynchronize");
+    }
+
+    {
+        // A capture burst: one frame stamped 7 ms after its predecessor in an
+        // otherwise steady 60 FPS stream. It keeps its own refresh.
+        FixedVsyncSmoother smoother;
+        smoother.configure(60, 60, 3000);
+        uint64_t vsync = 1000000;
+        std::vector<FixedVsyncSmoother::Decision> decisions;
+        for (int i = 0; i < 300; i++) {
+            const uint64_t host = static_cast<uint64_t>(i) * 16667 - (i == 200 ? 9667 : 0);
+            const uint64_t arrival = 1000000 + static_cast<uint64_t>(i) * 16667 + 5000;
+            while (vsync <= arrival) {
+                smoother.observeVsync(vsync);
+                vsync += 16667;
+            }
+            decisions.push_back(smoother.admit(1000 + static_cast<uint32_t>(host * 9 / 100), arrival));
+        }
+        expect(!decisions[200].resynced, "a single early stamp does not resynchronize");
+        expect(decisions[200].slotUs > decisions[199].slotUs &&
+               decisions[201].slotUs > decisions[200].slotUs,
+               "a burst frame keeps its own refresh");
+    }
+
     if (failures == 0) {
         std::printf("tst_fixedvsyncsmoother: all checks passed\n");
     }
