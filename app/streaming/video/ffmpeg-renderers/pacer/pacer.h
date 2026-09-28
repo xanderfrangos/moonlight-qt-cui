@@ -98,6 +98,14 @@ private:
     // Smooth V-Sync: show the newest frame whose assigned refresh is due
     void handleSmoothVsync(uint64_t tickUs);
 
+    // Smooth: the newest queued frame eligible for the refresh at showUs,
+    // or -1. Called with the queue lock held.
+    int findSmoothFrameLocked(uint64_t showUs) const;
+    // Smooth: hand the chosen frame to the renderer for the refresh the
+    // tick at tickUs decided, and record that tick. Unlocks the queue.
+    void sendSmoothFrameAndUnlock(int chosen, uint64_t tickUs, uint64_t showUs,
+                                  int queueBefore);
+
     // Refresh accounting shared by every fixed V-Sync mode with a V-sync source
     // Copied from a frame before it is handed to the renderer, which may
     // free it at any time afterwards
@@ -108,6 +116,8 @@ private:
 
         explicit ShownFrameInfo(const AVFrame* frame);
     };
+    // Smooth calls this with the queue lock held, from the V-sync thread or
+    // (for a frame that arrived after its tick) the decoder thread
     void recordVsyncTick(uint64_t tickUs, bool sent, uint32_t skipped,
                          int queueBefore, int queueAfter, const ShownFrameInfo* shown,
                          bool late);
@@ -154,8 +164,19 @@ private:
     // Frames discarded between refreshes (Mailbox replacement), reported
     // with the next refresh
     std::atomic<uint32_t> m_SkipsSinceTick;
-    // V-sync thread only
+    // V-sync thread only, or guarded by m_FrameQueueLock under Smooth
     bool m_PrevTickRepeated;
+    // Smooth: a refresh whose frame had not arrived at its tick. The frame
+    // is handed over as soon as it arrives, until the deadline, so the
+    // V-sync thread never blocks waiting for it (a blocked wait can sleep
+    // through the next V-sync). Guarded by m_FrameQueueLock.
+    struct PendingSmoothTick {
+        uint64_t tickUs = 0;
+        uint64_t showUs = 0;
+        uint64_t deadlineUs = 0;
+        int queueBefore = 0;
+    };
+    PendingSmoothTick m_PendingSmoothTick;
     std::unique_ptr<FixedVsyncTrace> m_Trace;
     PacerTelemetry m_Telemetry;
     std::unique_ptr<VrrPacingWorker> m_VrrWorker;

@@ -356,73 +356,88 @@ void Pacer::handleSmoothVsync(uint64_t tickUs)
 {
     m_FrameQueueLock.lock();
 
+    // The previous refresh's frame never arrived in time: it was a repeat
+    if (m_PendingSmoothTick.showUs != 0) {
+        const PendingSmoothTick pending = m_PendingSmoothTick;
+        m_PendingSmoothTick = PendingSmoothTick();
+        recordVsyncTick(pending.tickUs, false, 0, pending.queueBefore,
+                        m_PacingQueue.count(), nullptr, false);
+    }
+
     m_Smoother.observeVsync(tickUs);
     const uint64_t periodUs = m_Smoother.displayPeriodUs();
     // This decision is shown on the next refresh. Frames must reach the
     // renderer TIMER_SLACK_MS before it, like the default path.
     const uint64_t showUs = tickUs + periodUs;
     const uint64_t renderLeadUs = SDL_min((uint64_t)TIMER_SLACK_MS * 1000, periodUs / 2);
-    const uint64_t deadlineUs = showUs - renderLeadUs;
     const int queueBefore = m_PacingQueue.count();
 
-    int chosen = -1;
-    for (;;) {
-        // Newest frame whose assigned refresh is this one or earlier. A frame
-        // without a usable target (0) is always eligible.
-        for (int i = 0; i < m_PacingQueue.count(); i++) {
-            const uint64_t target = static_cast<uint64_t>(m_PacingQueue.at(i)->best_effort_timestamp);
-            if (target <= showUs + periodUs / 2) {
-                chosen = i;
-            }
-        }
+    int chosen = findSmoothFrameLocked(showUs);
 
-        // A target far in the future means the timeline jumped (for example
-        // the host clock reset). Start over rather than stall the stream.
-        if (chosen < 0 && !m_PacingQueue.isEmpty() &&
-                static_cast<uint64_t>(m_PacingQueue.head()->best_effort_timestamp) > showUs + 250000) {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "Smooth V-Sync: frame scheduled too far ahead; resetting timeline");
-            m_Smoother.reset();
-            chosen = m_PacingQueue.count() - 1;
-        }
-
-        if (chosen >= 0 || m_Stopping) {
-            break;
-        }
-
-        const uint64_t nowUs = LiGetMicroseconds();
-        if (nowUs + 500 >= deadlineUs) {
-            break;
-        }
-        m_PacingQueueNotEmpty.wait(&m_FrameQueueLock,
-                                   (unsigned long)SDL_max((deadlineUs - nowUs) / 1000, (uint64_t)1));
+    // A target far in the future means the timeline jumped (for example
+    // the host clock reset). Start over rather than stall the stream.
+    if (chosen < 0 && !m_PacingQueue.isEmpty() &&
+            static_cast<uint64_t>(m_PacingQueue.head()->best_effort_timestamp) > showUs + 250000) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Smooth V-Sync: frame scheduled too far ahead; resetting timeline");
+        m_Smoother.reset();
+        chosen = m_PacingQueue.count() - 1;
     }
 
-    if (chosen < 0 || m_Stopping) {
-        m_FrameQueueLock.unlock();
-        recordVsyncTick(tickUs, false, 0, queueBefore, queueBefore, nullptr, false);
+    if (chosen >= 0) {
+        sendSmoothFrameAndUnlock(chosen, tickUs, showUs, queueBefore);
         return;
     }
 
+    if (m_Stopping) {
+        recordVsyncTick(tickUs, false, 0, queueBefore, queueBefore, nullptr, false);
+    }
+    else {
+        // submitFrame() sends the frame if it arrives before the deadline
+        m_PendingSmoothTick.tickUs = tickUs;
+        m_PendingSmoothTick.showUs = showUs;
+        m_PendingSmoothTick.deadlineUs = showUs - renderLeadUs;
+        m_PendingSmoothTick.queueBefore = queueBefore;
+    }
+    m_FrameQueueLock.unlock();
+}
+
+int Pacer::findSmoothFrameLocked(uint64_t showUs) const
+{
+    // Newest frame whose assigned refresh is this one or earlier. A frame
+    // without a usable target (0) is always eligible.
+    const uint64_t halfPeriodUs = m_Smoother.displayPeriodUs() / 2;
+    int chosen = -1;
+    for (int i = 0; i < m_PacingQueue.count(); i++) {
+        const uint64_t target = static_cast<uint64_t>(m_PacingQueue.at(i)->best_effort_timestamp);
+        if (target <= showUs + halfPeriodUs) {
+            chosen = i;
+        }
+    }
+    return chosen;
+}
+
+void Pacer::sendSmoothFrameAndUnlock(int chosen, uint64_t tickUs, uint64_t showUs,
+                                     int queueBefore)
+{
     // Older eligible frames missed their refresh; the newest one wins
     QVarLengthArray<AVFrame*, MAX_QUEUED_FRAMES> skippedFrames;
     for (int i = 0; i < chosen; i++) {
         skippedFrames.append(m_PacingQueue.dequeue());
     }
     AVFrame* frame = m_PacingQueue.dequeue();
-    const int queueAfter = m_PacingQueue.count();
 
     const ShownFrameInfo shownInfo(frame);
-    const bool late = shownInfo.slotUs != 0 && shownInfo.slotUs + periodUs / 2 < showUs;
+    const bool late = shownInfo.slotUs != 0 &&
+            shownInfo.slotUs + m_Smoother.displayPeriodUs() / 2 < showUs;
+    recordVsyncTick(tickUs, true, (uint32_t)skippedFrames.size(),
+                    queueBefore, m_PacingQueue.count(), &shownInfo, late);
 
     enqueueFrameForRenderingAndUnlock(frame);
 
     for (AVFrame* skippedFrame : skippedFrames) {
         av_frame_free(&skippedFrame);
     }
-
-    recordVsyncTick(tickUs, true, (uint32_t)skippedFrames.size(),
-                    queueBefore, queueAfter, &shownInfo, late);
 }
 
 void Pacer::recordVsyncTick(uint64_t tickUs, bool sent, uint32_t skipped,
@@ -440,7 +455,6 @@ void Pacer::recordVsyncTick(uint64_t tickUs, bool sent, uint32_t skipped,
     int64_t bufferUs = 0;
     uint64_t periodUs = 0;
     if (m_Smooth) {
-        QMutexLocker lock(&m_FrameQueueLock);
         offsetUs = m_Smoother.offsetUs();
         bufferUs = m_Smoother.bufferUs();
         periodUs = m_Smoother.displayPeriodUs();
@@ -830,6 +844,17 @@ void Pacer::submitFrame(AVFrame* frame)
         }
         dropFrameForEnqueue(m_PacingQueue);
         m_PacingQueue.enqueue(frame);
+        if (m_Smooth && !m_Stopping && m_PendingSmoothTick.showUs != 0) {
+            // The last refresh is still waiting for its frame
+            const PendingSmoothTick pending = m_PendingSmoothTick;
+            const int chosen = findSmoothFrameLocked(pending.showUs);
+            if (chosen >= 0 && LiGetMicroseconds() + 500 < pending.deadlineUs) {
+                m_PendingSmoothTick = PendingSmoothTick();
+                sendSmoothFrameAndUnlock(chosen, pending.tickUs, pending.showUs,
+                                         pending.queueBefore);
+                return;
+            }
+        }
         m_FrameQueueLock.unlock();
         m_PacingQueueNotEmpty.wakeOne();
     }

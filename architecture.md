@@ -44,8 +44,15 @@ or after the due time, so due-time jitter cannot flip frames between
 neighbouring refreshes at integer ratios. The assigned
 refresh travels in `AVFrame::best_effort_timestamp`, which the renderers do not
 read. At each refresh the V-sync thread shows the newest frame assigned to the
-coming refresh or earlier, waits (until 3 ms before it) for one to arrive, and
-otherwise leaves the previous frame up. A target more than 250 ms ahead resets
+coming refresh or earlier. It never blocks: if that frame has not arrived, the
+refresh is left pending and `submitFrame()` hands the frame over when it
+arrives, until 3 ms before the refresh; otherwise the previous frame stays up.
+(A first version waited on the V-sync thread. On a Windows 120 Hz capture,
+110 FPS stream of ~55-60 FPS content, that wait slept through the next V-sync
+on 17% of waiting refreshes, 7% of all refreshes, so 7.9% of frames were shown
+one refresh late and the next one refresh early: 8.3/25 ms pairs on a steady
+60 FPS host cadence. Replaying the same arrivals, only 1.1% of frames arrive
+after the handoff deadline.) A target more than 250 ms ahead resets
 the scheduler. A synthetic simulation (not live evidence) showed the intended
 win at 60 FPS on 120 Hz (uneven presented spacing from ~39% of frames to ~1-2%),
 fewer missed refreshes than Default at 60 on 60 with heavy arrival jitter at
