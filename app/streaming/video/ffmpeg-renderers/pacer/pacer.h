@@ -72,7 +72,10 @@ public:
                     bool enableVrr, int vrrDisplayRefreshHz,
                     bool smoothVrrFrameTiming = true,
                     const QString& calibrationKey = QString(),
-                    int vrrLatencyMode = 0);
+                    int vrrLatencyMode = 0,
+                    bool vsyncMailbox = false);
+
+    bool isMailboxActive() const;
 
     void notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info);
 
@@ -93,6 +96,11 @@ private:
 
     void dropFrameForEnqueue(QQueue<AVFrame*>& queue);
 
+    // Mailbox: discard every frame still waiting in the queue so the one
+    // about to be enqueued is the only candidate. Called with the lock held;
+    // it is dropped while freeing frames.
+    void replaceQueuedFramesForMailbox(QQueue<AVFrame*>& queue);
+
     QQueue<AVFrame*> m_RenderQueue;
     QQueue<AVFrame*> m_PacingQueue;
     QQueue<int> m_PacingQueueHistory;
@@ -112,6 +120,8 @@ private:
     int m_MaxVideoFps;
     int m_DisplayFps;
     int m_RendererAttributes;
+    // Newest-frame-wins fixed V-Sync. Never set while the VRR worker runs.
+    bool m_Mailbox;
     PacerTelemetry m_Telemetry;
     std::unique_ptr<VrrPacingWorker> m_VrrWorker;
 };

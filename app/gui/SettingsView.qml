@@ -1684,6 +1684,67 @@ Flickable {
                 Column {
                     width: parent.width
                     spacing: 5
+                    // VRR has its own presentation policy and bypasses this.
+                    visible: StreamingPreferences.enableVsync && !StreamingPreferences.enableVrr
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("V-Sync mode")
+                        topPadding: 8
+                        font.pointSize: 14
+                        wrapMode: Text.Wrap
+                    }
+
+                    AutoResizingComboBox {
+                        id: vsyncModeComboBox
+                        textRole: "text"
+                        hoverEnabled: !SystemProperties.hoverEffectsDisabled
+                        model: ListModel {
+                            id: vsyncModeListModel
+                            ListElement {
+                                text: qsTr("Default")
+                                val: StreamingPreferences.VSM_DEFAULT
+                            }
+                            ListElement {
+                                text: qsTr("Mailbox")
+                                val: StreamingPreferences.VSM_MAILBOX
+                            }
+                        }
+                        currentIndex: {
+                            for (var i = 0; i < vsyncModeListModel.count; i++) {
+                                if (vsyncModeListModel.get(i).val === StreamingPreferences.vsyncMode) {
+                                    return i
+                                }
+                            }
+                            return 0
+                        }
+                        onActivated: {
+                            StreamingPreferences.vsyncMode = vsyncModeListModel.get(currentIndex).val
+                        }
+                        Component.onCompleted: {
+                            recalculateWidth()
+                            languageChanged.connect(recalculateWidth)
+                        }
+
+                        ToolTip.delay: 1000
+                        ToolTip.timeout: 10000
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                        ToolTip.text: qsTr("Default shows frames in the order they arrive. Mailbox always shows the newest frame and skips older ones that are still waiting, which lowers latency but can occasionally skip a frame.") + "\n\n" +
+                                      qsTr("Works with or without Frame pacing. Not used while VRR is enabled.")
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: StreamingPreferences.vsyncMode === StreamingPreferences.VSM_MAILBOX ?
+                                  qsTr("Always shows the newest frame. Lower latency, but a late frame may be skipped.") :
+                                  qsTr("Shows every frame in order. Smoothest, but frames can wait in line during spikes.")
+                    }
+                }
+
+                Column {
+                    width: parent.width
+                    spacing: 5
                     visible: StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
 
                     Label {

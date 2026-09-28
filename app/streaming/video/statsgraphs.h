@@ -43,6 +43,7 @@ struct StatsGraphAccumulator {
 enum class StatsGraphSyncMode {
     Off,
     VSync,
+    VSyncMailbox,
     Vrr,
 };
 

@@ -678,13 +678,15 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
                                      .arg(params->width).arg(params->height).arg(params->videoFormat)
                                      .arg(m_FrontendRenderer->getCalibrationIdentity())
                                      .arg(decoder != nullptr ? decoder->name : "pyrowave"),
-                                 params->vrrLatencyMode)) {
+                                 params->vrrLatencyMode,
+                                 params->vsyncMailbox)) {
             return false;
         }
 
         // VRR can fall back to fixed V-sync, so ask the pacer what it chose
         // rather than trusting the request
         m_StatsGraphSyncMode = m_Pacer->isVrrActive() ? Overlay::StatsGraphSyncMode::Vrr :
+                               m_Pacer->isMailboxActive() ? Overlay::StatsGraphSyncMode::VSyncMailbox :
                                params->enableVsync ? Overlay::StatsGraphSyncMode::VSync :
                                                      Overlay::StatsGraphSyncMode::Off;
     }

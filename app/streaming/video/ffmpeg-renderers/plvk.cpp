@@ -1081,6 +1081,24 @@ void PlVkRenderer::updateUpscalingNeeded()
 void PlVkRenderer::selectLegacyPresentMode(PDECODER_PARAMETERS params)
 {
     if (params->enableVsync) {
+        // Mailbox V-Sync trades FIFO's in-order delivery for latency: the
+        // newest submitted image replaces any image still waiting for the
+        // next refresh. The session never requests it together with VRR.
+        if (params->vsyncMailbox && !params->enableVrr) {
+            if (isPresentModeSupportedByPhysicalDevice(m_Vulkan->phys_device,
+                                                       VK_PRESENT_MODE_MAILBOX_KHR)) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "Using Mailbox present mode with V-Sync (Mailbox)");
+                m_VkPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+                return;
+            }
+
+            // FIFO is the only mode Vulkan guarantees. Pacer still keeps just
+            // the newest frame waiting, so most of the latency benefit remains.
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Mailbox present mode is not supported by the Vulkan driver. Using FIFO with newest-frame pacing.");
+        }
+
         // FIFO mode improves frame pacing compared with Mailbox, especially for
         // platforms like X11 that lack a VSyncSource implementation for Pacer.
         m_VkPresentMode = VK_PRESENT_MODE_FIFO_KHR;

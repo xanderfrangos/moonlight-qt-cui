@@ -671,6 +671,9 @@ QStringList streamInfoChips(const StatsGraphStreamInfo& info)
     else if (info.syncMode == StatsGraphSyncMode::VSync) {
         chips.append(QStringLiteral("V-Sync"));
     }
+    else if (info.syncMode == StatsGraphSyncMode::VSyncMailbox) {
+        chips.append(QStringLiteral("V-Sync Mailbox"));
+    }
     if (info.videoFormat != 0) {
         chips.append(QString::fromUtf8(codecName(info.videoFormat)));
         if (info.videoFormat & VIDEO_FORMAT_MASK_10BIT) {

@@ -94,6 +94,9 @@ typedef struct _DECODER_PARAMETERS {
     int frameRate;
     bool enableVsync;
     bool enableFramePacing;
+    // Fixed V-Sync only: keep just the newest decoded frame waiting for
+    // display and prefer non-queuing swapchain modes. Always false with VRR.
+    bool vsyncMailbox = false;
     // VRR is an opt-in, session-snapshotted third pacing mode.
     bool enableVrr;
     // Select the VRR-capable renderer without activating VRR presentation.

@@ -74,6 +74,7 @@ private:
     QMap<QString, StreamingPreferences::CaptureSysKeysMode> m_CaptureSysKeysModeMap;
     QMap<QString, StreamingPreferences::DitheringMode> m_DitheringModeMap;
     QMap<QString, StreamingPreferences::DebandMode> m_DebandModeMap;
+    QMap<QString, StreamingPreferences::VsyncMode> m_VsyncModeMap;
 };
 
 class ListCommandLineParser

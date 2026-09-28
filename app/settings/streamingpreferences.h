@@ -74,6 +74,18 @@ public:
     };
     Q_ENUM(VrrLatencyMode)
 
+    // Fixed-refresh V-Sync presentation. Ignored while VRR is requested,
+    // which owns its own queue and presentation policy.
+    enum VsyncMode
+    {
+        // Every paced frame is queued and shown in order.
+        VSM_DEFAULT = 0,
+        // Only the newest decoded frame waits for display; older ones are
+        // replaced, and swapchains use a non-queuing mode where available.
+        VSM_MAILBOX = 1
+    };
+    Q_ENUM(VsyncMode)
+
     // Mac only (for now)
     enum RendererSelection
     {
@@ -278,6 +290,7 @@ public:
     Q_PROPERTY(bool unlockBitrate MEMBER unlockBitrate NOTIFY unlockBitrateChanged)
     Q_PROPERTY(bool autoAdjustBitrate MEMBER autoAdjustBitrate NOTIFY autoAdjustBitrateChanged)
     Q_PROPERTY(bool enableVsync MEMBER enableVsync NOTIFY enableVsyncChanged)
+    Q_PROPERTY(int vsyncMode MEMBER vsyncMode NOTIFY vsyncModeChanged)
     Q_PROPERTY(bool enableVrr MEMBER enableVrr NOTIFY enableVrrChanged)
     Q_PROPERTY(int vrrLatencyMode MEMBER vrrLatencyMode NOTIFY vrrLatencyModeChanged)
     Q_PROPERTY(bool smoothVrrFrameTiming MEMBER smoothVrrFrameTiming NOTIFY smoothVrrFrameTimingChanged)
@@ -356,6 +369,7 @@ public:
     bool unlockBitrate;
     bool autoAdjustBitrate;
     bool enableVsync;
+    int vsyncMode;
     bool enableVrr;
     int vrrLatencyMode;
     // Re-present the last frame inside a host gap longer than the panel's
@@ -456,6 +470,7 @@ signals:
     void unlockBitrateChanged();
     void autoAdjustBitrateChanged();
     void enableVsyncChanged();
+    void vsyncModeChanged();
     void enableVrrChanged();
     void vrrLatencyModeChanged();
     void smoothVrrFrameTimingChanged();

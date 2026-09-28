@@ -1,5 +1,25 @@
 # Streaming, VRR, and timing architecture
 
+Fixed V-Sync Mailbox mode (2026-09-28): a new `vsyncmode` preference
+(Default = 0, Mailbox = 1; CLI `--vsync-mode default|mailbox`) selects
+newest-frame-wins presentation for fixed V-Sync, with or without Frame pacing.
+The session resolves `vsyncMailbox` only when effective V-Sync is on and the
+VRR checkbox is off; a requested VRR session ignores it even when VRR is
+rejected and falls back to fixed pacing, so the VRR worker, its queue and its
+fallback are unchanged. Mailbox is implemented once, in the legacy `Pacer`:
+each enqueue into the pacing queue (Frame pacing on) or render queue replaces
+every frame still waiting there, the pacing-history leniency is skipped, and
+replaced frames count as legacy pacer drops. Renderer changes are limited to
+backends with a real non-queuing mode: the libplacebo Vulkan renderer requests
+`VK_PRESENT_MODE_MAILBOX_KHR` and falls back to FIFO when the driver lacks it.
+D3D11VA already presents with SyncInterval 0 on a flip-discard swapchain,
+which replaces queued images without tearing, so it needs no change; the plan's
+`SetMaximumFrameLatency(1)` suggestion would make those presents block (see the
+comment at its swapchain setup) and was not adopted. DXVA2 (FLIPEX under DWM),
+EGL/OpenGL, SDL, Metal and DRM keep their swap settings and get the Pacer
+behavior only. The overlay shows a "V-Sync Mailbox" chip. Not yet built or
+measured on hardware.
+
 Original Moonlight `master` merge (2026-09-25, `032529d7`): D3D11VA now
 logs the adapter driver version and uses upstream's vendor and driver checks
 when choosing separate decode and render devices. This fork's texture bind
@@ -1720,7 +1740,9 @@ At the inspected revision, V-sync defaults on and VRR defaults off. The VRR
 timing selector defaults to Balanced Target for new users, with the saved-checkbox
 migration described above. Reduce judder defaults on, preserves the saved
 `smoothvrrframetiming` choice, and enables the moderate cadence smoother below.
-Legacy frame pacing defaults off. The default requested stream is 720p60.
+Legacy frame pacing defaults off. The fixed V-Sync mode defaults to Default
+(FIFO order); Mailbox applies only without the VRR checkbox (see the
+2026-09-28 note at the top). The default requested stream is 720p60.
 These are defaults, not evidence of the user's current saved settings.
 
 The FPS picker is advisory. Fixed 30 and 60 FPS remain available. When V-sync
@@ -1977,7 +1999,8 @@ while that lock is held, with refresh recovery after recreation. The FFmpeg
 pull path is the important steady-state path for this fork.
 
 Legacy Pacer queues drop old frames at their bounds and move frames according
-to the V-sync/render path. They defer freeing a rendered frame to protect GPU
+to the V-sync/render path. In fixed V-Sync Mailbox mode each enqueue replaces
+every frame still waiting in that queue, so at most one frame waits. They defer freeing a rendered frame to protect GPU
 use. VRR replaces that pacing mechanism with its worker and explicit presenter
 contract; it does not replace network assembly or codec reference handling.
 

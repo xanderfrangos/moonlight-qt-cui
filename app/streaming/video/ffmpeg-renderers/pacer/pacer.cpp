@@ -45,7 +45,9 @@ Pacer::Pacer(IFFmpegRenderer* renderer) :
     m_VsyncSource(nullptr),
     m_VsyncRenderer(renderer),
     m_MaxVideoFps(0),
-    m_DisplayFps(0)
+    m_DisplayFps(0),
+    m_RendererAttributes(0),
+    m_Mailbox(false)
 {
 
 }
@@ -238,6 +240,9 @@ int Pacer::renderThread(void* context)
 
 void Pacer::enqueueFrameForRenderingAndUnlock(AVFrame *frame)
 {
+    if (m_Mailbox) {
+        replaceQueuedFramesForMailbox(m_RenderQueue);
+    }
     dropFrameForEnqueue(m_RenderQueue);
     m_RenderQueue.enqueue(frame);
 
@@ -271,8 +276,9 @@ void Pacer::handleVsync(int timeUntilNextVsyncMillis)
 
     // If we may get more frames per second than we can display, use
     // frame history to drop frames only if consistently above the
-    // one queued frame mark.
-    if (m_MaxVideoFps >= m_DisplayFps) {
+    // one queued frame mark. Mailbox never tolerates a backlog: only
+    // the newest frame is eligible at each V-sync.
+    if (!m_Mailbox && m_MaxVideoFps >= m_DisplayFps) {
         for (int queueHistoryEntry : std::as_const(m_PacingQueueHistory)) {
             if (queueHistoryEntry <= 1) {
                 // Be lenient as long as the queue length
@@ -323,10 +329,15 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                        bool enablePacing, bool enableVsync,
                        bool enableVrr, int vrrDisplayRefreshHz,
                        bool smoothVrrFrameTiming, const QString& calibrationKey,
-                       int vrrLatencyMode)
+                       int vrrLatencyMode, bool vsyncMailbox)
 {
     m_MaxVideoFps = maxVideoFps;
     m_RendererAttributes = m_VsyncRenderer->getRendererAttributes();
+
+    // VRR has its own queue and stale-frame policy. The session never asks
+    // for both, but keep Mailbox out of the VRR path (and its fallback)
+    // even if a caller does.
+    m_Mailbox = vsyncMailbox && enableVsync && !enableVrr;
 
     // VRR is deliberately a third pacing mode. It is selected once, before
     // any legacy V-sync source or render thread can be created, and every
@@ -452,6 +463,11 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
     // cannot invent a 60 Hz value or produce an unrelated warning.
     m_DisplayFps = StreamUtils::getDisplayRefreshRate(window);
 
+    if (m_Mailbox) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "V-Sync mode: Mailbox (newest decoded frame replaces any frame still waiting)");
+    }
+
     if (enablePacing) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Frame pacing: target %d Hz with %d FPS stream",
@@ -553,7 +569,12 @@ void Pacer::renderFrame(AVFrame* frame)
 
     int frameDropTarget;
 
-    if (m_RendererAttributes & RENDERER_ATTRIBUTE_NO_BUFFERING) {
+    if (m_Mailbox) {
+        // Enqueue already replaces waiting frames. Keep the newest one if a
+        // frame arrived while this one was rendering.
+        frameDropTarget = 1;
+    }
+    else if (m_RendererAttributes & RENDERER_ATTRIBUTE_NO_BUFFERING) {
         // Renderers that don't buffer any frames but don't support waitToRender() need us to buffer
         // an extra frame to ensure they don't starve while waiting to present.
         frameDropTarget = 1;
@@ -600,6 +621,19 @@ void Pacer::dropFrameForEnqueue(QQueue<AVFrame*>& queue)
     }
 }
 
+void Pacer::replaceQueuedFramesForMailbox(QQueue<AVFrame*>& queue)
+{
+    while (!queue.isEmpty()) {
+        AVFrame* frame = queue.dequeue();
+
+        // Drop the lock while we call av_frame_free()
+        m_FrameQueueLock.unlock();
+        m_Telemetry.recordLegacyDrop();
+        av_frame_free(&frame);
+        m_FrameQueueLock.lock();
+    }
+}
+
 void Pacer::submitFrame(AVFrame* frame)
 {
     // Make sure initialize() has been called
@@ -608,6 +642,9 @@ void Pacer::submitFrame(AVFrame* frame)
     // Queue the frame and possibly wake up the render thread
     m_FrameQueueLock.lock();
     if (m_VsyncSource != nullptr) {
+        if (m_Mailbox) {
+            replaceQueuedFramesForMailbox(m_PacingQueue);
+        }
         dropFrameForEnqueue(m_PacingQueue);
         m_PacingQueue.enqueue(frame);
         m_FrameQueueLock.unlock();
@@ -631,4 +668,9 @@ void Pacer::submitFrame(PacedFrame&& frame)
 bool Pacer::isVrrActive() const
 {
     return m_VrrWorker != nullptr;
+}
+
+bool Pacer::isMailboxActive() const
+{
+    return m_Mailbox && m_VrrWorker == nullptr;
 }

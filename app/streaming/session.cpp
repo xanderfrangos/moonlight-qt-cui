@@ -298,7 +298,8 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             int vrrDisplayRefreshHz,
                             [[maybe_unused]] bool* effectiveVrr, bool smoothVrrFrameTiming,
                             bool gamescopeMailbox, int vrrLatencyMode, bool gamescopeRepaint,
-                            int ditheringMode, bool temporalDithering, int debandMode)
+                            int ditheringMode, bool temporalDithering, int debandMode,
+                            bool vsyncMailbox)
 {
     DECODER_PARAMETERS params = {};
 
@@ -315,6 +316,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.window = window;
     params.enableVsync = enableVsync;
     params.enableFramePacing = enableFramePacing;
+    params.vsyncMailbox = enableVsync && !enableVrr && vsyncMailbox;
     params.enableVrr = enableVrr;
     // Playback already sets enableVrr; the probe uses preferVrrRenderer alone so
     // it can match that renderer/color policy without starting VRR presentation.
@@ -766,6 +768,11 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
 
     m_PresentationSettings.enableFramePacing = m_PresentationSettings.effectiveVsync &&
                                                m_Preferences->framePacing;
+    // The VRR checkbox bypasses the fixed V-Sync mode entirely, including
+    // when VRR is later rejected and falls back to fixed pacing.
+    m_PresentationSettings.vsyncMailbox = m_PresentationSettings.effectiveVsync &&
+                                          !requestedVrr &&
+                                          m_Preferences->vsyncMode == StreamingPreferences::VSM_MAILBOX;
     m_PresentationSettings.enableVrr = false;
     m_PresentationSettings.vrrLatencyMode = m_Preferences->vrrLatencyMode;
     m_PresentationSettings.gamescopeRepaint = false; // Retired repaint experiment.
@@ -822,8 +829,9 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
                      !WMUtils::isRunningDesktopEnvironment();
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "Presentation snapshot: V-sync %s, VRR requested %s, VRR enabled %s, refresh %d Hz, window mode %d",
+                "Presentation snapshot: V-sync %s, V-sync mode %s, VRR requested %s, VRR enabled %s, refresh %d Hz, window mode %d",
                 m_PresentationSettings.effectiveVsync ? "enabled" : "disabled",
+                m_PresentationSettings.vsyncMailbox ? "mailbox" : "default",
                 requestedVrr ? "yes" : "no",
                 m_PresentationSettings.enableVrr ? "yes" : "no",
                 m_PresentationSettings.refreshRate,
@@ -2957,7 +2965,8 @@ void Session::exec()
                                m_PresentationSettings.gamescopeRepaint,
                                m_PresentationSettings.ditheringMode,
                                m_PresentationSettings.temporalDithering,
-                               m_PresentationSettings.debandMode)) {
+                               m_PresentationSettings.debandMode,
+                               m_PresentationSettings.vsyncMailbox)) {
                 SDL_UnlockMutex(m_DecoderLock);
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                              "Failed to recreate decoder after reset");

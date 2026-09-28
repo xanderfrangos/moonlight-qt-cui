@@ -350,6 +350,10 @@ StreamCommandLineParser::StreamCommandLineParser()
         {"high",     StreamingPreferences::DM_ERROR_DIFFUSION},
         {"highest",  StreamingPreferences::DM_ERROR_DIFFUSION_HQ},
     };
+    m_VsyncModeMap = {
+        {"default", StreamingPreferences::VSM_DEFAULT},
+        {"mailbox", StreamingPreferences::VSM_MAILBOX},
+    };
     m_DebandModeMap = {
         {"off",    StreamingPreferences::DB_OFF},
         {"grain",  StreamingPreferences::DB_GRAIN_ONLY},
@@ -383,6 +387,7 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     parser.addFlagOption("4K", "3840x2160 resolution");
     parser.addValueOption("resolution", "custom <width>x<height> resolution");
     parser.addToggleOption("vsync", "V-Sync");
+    parser.addChoiceOption("vsync-mode", "V-Sync presentation mode (ignored with VRR)", m_VsyncModeMap.keys());
     parser.addToggleOption("vrr", "VRR");
     parser.addToggleOption("vrr-smooth-frame-timing", "VRR frame timing smoothing");
     parser.addValueOption("fps", "FPS");
@@ -485,6 +490,11 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
 
     // Resolve --vsync and --no-vsync options
     preferences->enableVsync = parser.getToggleOptionValue("vsync", preferences->enableVsync);
+
+    // Resolve --vsync-mode option
+    if (parser.isSet("vsync-mode")) {
+        preferences->vsyncMode = mapValue(m_VsyncModeMap, parser.getChoiceOptionValue("vsync-mode"));
+    }
 
     // This is intentionally an in-memory override, like the other stream
     // command-line settings.  It must not persist a CLI choice back to the

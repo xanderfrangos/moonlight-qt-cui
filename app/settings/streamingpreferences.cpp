@@ -34,6 +34,7 @@
 #define SER_ENABLEVRR "enablevrr"
 #define SER_VRRLATENCYFIX "vrrlatencyfix"
 #define SER_VRRLATENCYMODE "vrrlatencymode"
+#define SER_VSYNCMODE "vsyncmode"
 #define SER_SMOOTHVRRFRAMETIMING "smoothvrrframetiming"
 #define SER_TRACEVRRFRAMES "tracevrrframes"
 #define SER_GAMEOPTS "gameopts"
@@ -197,6 +198,14 @@ void StreamingPreferences::reload()
     unlockBitrate = settings.value(SER_UNLOCK_BITRATE, false).toBool();
     autoAdjustBitrate = settings.value(SER_AUTOADJUSTBITRATE, true).toBool();
     enableVsync = settings.value(SER_VSYNC, true).toBool();
+    vsyncMode = VSM_DEFAULT;
+    if (settings.contains(SER_VSYNCMODE)) {
+        bool validMode = false;
+        const int savedMode = settings.value(SER_VSYNCMODE).toInt(&validMode);
+        if (validMode && savedMode >= VSM_DEFAULT && savedMode <= VSM_MAILBOX) {
+            vsyncMode = savedMode;
+        }
+    }
     enableVrr = settings.value(SER_ENABLEVRR, false).toBool();
     // VRR adaptive presentation always requires tearing permission. Remove
     // the retired override so stale profiles cannot disable native VRR.
@@ -571,6 +580,7 @@ void StreamingPreferences::save()
     settings.setValue(SER_UNLOCK_BITRATE, unlockBitrate);
     settings.setValue(SER_AUTOADJUSTBITRATE, autoAdjustBitrate);
     settings.setValue(SER_VSYNC, enableVsync);
+    settings.setValue(SER_VSYNCMODE, vsyncMode);
     settings.setValue(SER_ENABLEVRR, enableVrr);
     settings.setValue(SER_VRRLATENCYMODE, vrrLatencyMode);
     settings.remove("vrrlatencyoscillation");
