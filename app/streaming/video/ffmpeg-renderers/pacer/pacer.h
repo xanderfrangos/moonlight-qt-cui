@@ -101,6 +101,13 @@ private:
     // Smooth: the newest queued frame eligible for the refresh at showUs,
     // or -1. Called with the queue lock held.
     int findSmoothFrameLocked(uint64_t showUs) const;
+    // Smooth: the refresh at tick has no new frame. Present the last one
+    // again when the renderer allows it, so the display keeps refreshing.
+    // Displays that refresh on demand (Windows dynamic refresh rate, G-Sync
+    // or FreeSync on a windowed game) otherwise skip the next refresh, and
+    // the two frames due on either side of it then share one. Called with
+    // the queue lock held.
+    void resolveSmoothRepeatLocked(uint64_t tickUs, int queueBefore, bool present);
     // Smooth: hand the chosen frame to the renderer for the refresh the
     // tick at tickUs decided, and record that tick. Unlocks the queue.
     void sendSmoothFrameAndUnlock(int chosen, uint64_t tickUs, uint64_t showUs,
@@ -177,6 +184,10 @@ private:
         int queueBefore = 0;
     };
     PendingSmoothTick m_PendingSmoothTick;
+    // Smooth may ask the render thread to present its last frame again
+    bool m_SmoothRepeat;
+    // Guarded by m_FrameQueueLock
+    bool m_RepeatRequested;
     std::unique_ptr<FixedVsyncTrace> m_Trace;
     PacerTelemetry m_Telemetry;
     std::unique_ptr<VrrPacingWorker> m_VrrWorker;

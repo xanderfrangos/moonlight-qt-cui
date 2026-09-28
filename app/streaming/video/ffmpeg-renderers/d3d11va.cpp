@@ -2274,6 +2274,11 @@ int D3D11VARenderer::getRendererAttributes()
         attributes |= RENDERER_ATTRIBUTE_FORCE_PACING;
     }
 
+    // Rendering a decoded frame again repeats the same fence wait and draw
+    if (!isPyroWave()) {
+        attributes |= RENDERER_ATTRIBUTE_REPEAT_FRAME;
+    }
+
     return attributes;
 }
 

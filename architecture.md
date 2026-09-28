@@ -47,12 +47,24 @@ read. At each refresh the V-sync thread shows the newest frame assigned to the
 coming refresh or earlier. It never blocks: if that frame has not arrived, the
 refresh is left pending and `submitFrame()` hands the frame over when it
 arrives, until 3 ms before the refresh; otherwise the previous frame stays up.
-(A first version waited on the V-sync thread. On a Windows 120 Hz capture,
-110 FPS stream of ~55-60 FPS content, that wait slept through the next V-sync
-on 17% of waiting refreshes, 7% of all refreshes, so 7.9% of frames were shown
-one refresh late and the next one refresh early: 8.3/25 ms pairs on a steady
-60 FPS host cadence. Replaying the same arrivals, only 1.1% of frames arrive
-after the handoff deadline.) A target more than 250 ms ahead resets
+A refresh with no new frame re-presents the last frame
+(`RENDERER_ATTRIBUTE_REPEAT_FRAME`, D3D11 except PyroWave; the render thread
+calls `renderFrame()` again with `m_DeferredFreeFrame`, which is still
+referenced, without telemetry). It is decided at the tick when the next frame
+is already queued for a later refresh, or when that frame arrives before the
+deadline. Reason: Windows 120 Hz captures (2026-09-28, 110 and 120 FPS
+streams, D3D11, VRR off) showed the display refreshing on demand. After a
+refresh with no Present, the next V-sync came two periods later 77% of the
+time (exactly 16.5-17 ms), and after a Present handed over late the next came
+9-10.5 ms later, which a fixed 120 Hz scanout cannot do (Windows dynamic refresh
+rate or driver VRR on a windowed flip-model swapchain). Each skipped V-sync made
+the frames due on either side of it share one refresh: 8.9% skipped frames at
+110 FPS, 2.5% at 120 FPS. Replaying those arrivals with a present on every
+refresh gives 0.5% and 0.04% at unchanged latency. The first Smooth version
+also waited on the V-sync thread for a late frame. It was changed to a
+non-blocking handoff after an earlier 60 FPS capture showed missed V-syncs
+after waiting refreshes. The same display behavior is the more likely cause
+there, but the handoff remains, since it cannot delay the V-sync thread. A target more than 250 ms ahead resets
 the scheduler. A synthetic simulation (not live evidence) showed the intended
 win at 60 FPS on 120 Hz (uneven presented spacing from ~39% of frames to ~1-2%),
 fewer missed refreshes than Default at 60 on 60 with heavy arrival jitter at

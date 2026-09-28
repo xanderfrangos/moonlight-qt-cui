@@ -53,7 +53,9 @@ Pacer::Pacer(IFFmpegRenderer* renderer) :
     m_Mailbox(false),
     m_Smooth(false),
     m_SkipsSinceTick(0),
-    m_PrevTickRepeated(false)
+    m_PrevTickRepeated(false),
+    m_SmoothRepeat(false),
+    m_RepeatRequested(false)
 {
 
 }
@@ -224,7 +226,7 @@ int Pacer::renderThread(void* context)
         me->m_FrameQueueLock.lock();
 
         // Wait for a frame to be ready to render
-        while (!me->m_Stopping && me->m_RenderQueue.isEmpty()) {
+        while (!me->m_Stopping && me->m_RenderQueue.isEmpty() && !me->m_RepeatRequested) {
             me->m_RenderQueueNotEmpty.wait(&me->m_FrameQueueLock);
         }
 
@@ -233,6 +235,19 @@ int Pacer::renderThread(void* context)
             me->m_FrameQueueLock.unlock();
             break;
         }
+
+        if (me->m_RenderQueue.isEmpty()) {
+            // Smooth: present the last frame again. It is only freed by the
+            // next renderFrame() on this thread, so it is still valid.
+            me->m_RepeatRequested = false;
+            me->m_FrameQueueLock.unlock();
+            if (me->m_DeferredFreeFrame != nullptr) {
+                me->m_VsyncRenderer->renderFrame(me->m_DeferredFreeFrame);
+            }
+            continue;
+        }
+        // A new frame replaces any repeat that was still waiting
+        me->m_RepeatRequested = false;
 
         AVFrame* frame = me->m_RenderQueue.dequeue();
         me->m_FrameQueueLock.unlock();
@@ -360,8 +375,7 @@ void Pacer::handleSmoothVsync(uint64_t tickUs)
     if (m_PendingSmoothTick.showUs != 0) {
         const PendingSmoothTick pending = m_PendingSmoothTick;
         m_PendingSmoothTick = PendingSmoothTick();
-        recordVsyncTick(pending.tickUs, false, 0, pending.queueBefore,
-                        m_PacingQueue.count(), nullptr, false);
+        resolveSmoothRepeatLocked(pending.tickUs, pending.queueBefore, false);
     }
 
     m_Smoother.observeVsync(tickUs);
@@ -392,6 +406,10 @@ void Pacer::handleSmoothVsync(uint64_t tickUs)
     if (m_Stopping) {
         recordVsyncTick(tickUs, false, 0, queueBefore, queueBefore, nullptr, false);
     }
+    else if (!m_PacingQueue.isEmpty()) {
+        // The next frame is already here and belongs to a later refresh
+        resolveSmoothRepeatLocked(tickUs, queueBefore, true);
+    }
     else {
         // submitFrame() sends the frame if it arrives before the deadline
         m_PendingSmoothTick.tickUs = tickUs;
@@ -400,6 +418,15 @@ void Pacer::handleSmoothVsync(uint64_t tickUs)
         m_PendingSmoothTick.queueBefore = queueBefore;
     }
     m_FrameQueueLock.unlock();
+}
+
+void Pacer::resolveSmoothRepeatLocked(uint64_t tickUs, int queueBefore, bool present)
+{
+    recordVsyncTick(tickUs, false, 0, queueBefore, m_PacingQueue.count(), nullptr, false);
+    if (present && m_SmoothRepeat) {
+        m_RepeatRequested = true;
+        m_RenderQueueNotEmpty.wakeOne();
+    }
 }
 
 int Pacer::findSmoothFrameLocked(uint64_t showUs) const
@@ -687,8 +714,14 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
             m_Smooth = true;
             m_Smoother.configure(m_MaxVideoFps, m_DisplayFps,
                                  (int64_t)TIMER_SLACK_MS * 1000);
+            // Repeats run on the render thread, which only exists when the
+            // renderer supports it
+            m_SmoothRepeat = (m_RendererAttributes & RENDERER_ATTRIBUTE_REPEAT_FRAME) &&
+                    m_VsyncRenderer->isRenderThreadSupported();
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "V-Sync mode: Smooth (frames scheduled onto refreshes from host timestamps)");
+                        "V-Sync mode: Smooth (frames scheduled onto refreshes from host timestamps; %s)",
+                        m_SmoothRepeat ? "empty refreshes re-present the last frame" :
+                                         "empty refreshes present nothing");
         }
         else {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
@@ -848,11 +881,15 @@ void Pacer::submitFrame(AVFrame* frame)
             // The last refresh is still waiting for its frame
             const PendingSmoothTick pending = m_PendingSmoothTick;
             const int chosen = findSmoothFrameLocked(pending.showUs);
-            if (chosen >= 0 && LiGetMicroseconds() + 500 < pending.deadlineUs) {
+            if (LiGetMicroseconds() + 500 < pending.deadlineUs) {
                 m_PendingSmoothTick = PendingSmoothTick();
-                sendSmoothFrameAndUnlock(chosen, pending.tickUs, pending.showUs,
-                                         pending.queueBefore);
-                return;
+                if (chosen >= 0) {
+                    sendSmoothFrameAndUnlock(chosen, pending.tickUs, pending.showUs,
+                                             pending.queueBefore);
+                    return;
+                }
+                // It belongs to a later refresh: the pending one is a repeat
+                resolveSmoothRepeatLocked(pending.tickUs, pending.queueBefore, true);
             }
         }
         m_FrameQueueLock.unlock();

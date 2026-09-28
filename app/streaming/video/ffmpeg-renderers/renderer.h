@@ -136,6 +136,9 @@ private:
 #define RENDERER_ATTRIBUTE_HDR_SUPPORT 0x04
 #define RENDERER_ATTRIBUTE_NO_BUFFERING 0x08
 #define RENDERER_ATTRIBUTE_FORCE_PACING 0x10
+// renderFrame() may be called again with the frame it last rendered, while
+// that frame is still referenced, to present the same picture once more
+#define RENDERER_ATTRIBUTE_REPEAT_FRAME 0x20
 
 class IVrrFramePresenter;
 class IPyroWaveSurfacePool;
