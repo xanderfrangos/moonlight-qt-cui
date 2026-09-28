@@ -558,7 +558,7 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
     // Smooth V-Sync has no V-sync wakeup under Gamescope; the reported
     // display times of its ordinary presents become its refresh clock.
     const bool smoothRefreshClock = !decoderParams->testOnly && !decoderParams->enableVrr &&
-        decoderParams->enableVsync && decoderParams->vsyncMode == StreamingPreferences::VSM_SMOOTH &&
+        decoderParams->enableVsync && StreamingPreferences::isSmoothVsyncMode(decoderParams->vsyncMode) &&
         isGamescopePresentation(SDL_GetCurrentVideoDriver());
     const bool gamescopeTiming = ((decoderParams->enableVrr && isGamescopeWsiPresentation(SDL_GetCurrentVideoDriver())) ||
                                   smoothRefreshClock) &&
@@ -1092,11 +1092,15 @@ void PlVkRenderer::selectLegacyPresentMode(PDECODER_PARAMETERS params)
         // Mailbox V-Sync trades FIFO's in-order delivery for latency: the
         // newest submitted image replaces any image still waiting for the
         // next refresh. The session never requests it together with VRR.
-        if (params->vsyncMode == StreamingPreferences::VSM_MAILBOX && !params->enableVrr) {
+        // Smooth Mailbox keeps Smooth's scheduling and only changes the
+        // swapchain, so the compositor takes the newest image at its latch.
+        if (StreamingPreferences::usesMailboxSwapchain(params->vsyncMode) && !params->enableVrr) {
             if (isPresentModeSupportedByPhysicalDevice(m_Vulkan->phys_device,
                                                        VK_PRESENT_MODE_MAILBOX_KHR)) {
                 SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                            "Using Mailbox present mode with V-Sync (Mailbox)");
+                            "Using Mailbox present mode with V-Sync (%s)",
+                            params->vsyncMode == StreamingPreferences::VSM_SMOOTH_MAILBOX ?
+                                "Smooth Mailbox" : "Mailbox");
                 m_VkPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
                 return;
             }

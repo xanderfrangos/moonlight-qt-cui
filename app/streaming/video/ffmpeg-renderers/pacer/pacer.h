@@ -173,7 +173,7 @@ private:
     int m_MaxVideoFps;
     int m_DisplayFps;
     int m_RendererAttributes;
-    // StreamingPreferences::VsyncMode in effect. Never Mailbox or Smooth
+    // StreamingPreferences::VsyncMode in effect. Never Mailbox or a Smooth mode
     // while the VRR worker runs.
     int m_VsyncMode;
     bool m_Mailbox;

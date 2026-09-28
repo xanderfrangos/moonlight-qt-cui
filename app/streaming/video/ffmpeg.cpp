@@ -527,7 +527,7 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
                                     "Upscaling requested: preferring Vulkan frontend on Linux" :
                                 params->enableVrr ?
                                     "VRR requested: preferring Vulkan frontend on Linux" :
-                                params->vsyncMode == StreamingPreferences::VSM_SMOOTH ?
+                                StreamingPreferences::isSmoothVsyncMode(params->vsyncMode) ?
                                     "Smooth V-Sync: preferring Vulkan frontend on Linux for reported refresh times" :
                                     "VRR renderer policy: preferring Vulkan frontend on Linux without enabling VRR presentation");
                 }
@@ -578,7 +578,7 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
                                     "Upscaling requested: preferring Vulkan frontend on Linux" :
                                 params->enableVrr ?
                                     "VRR requested: preferring Vulkan frontend on Linux" :
-                                params->vsyncMode == StreamingPreferences::VSM_SMOOTH ?
+                                StreamingPreferences::isSmoothVsyncMode(params->vsyncMode) ?
                                     "Smooth V-Sync: preferring Vulkan frontend on Linux for reported refresh times" :
                                     "VRR renderer policy: preferring Vulkan frontend on Linux without enabling VRR presentation");
                 }
@@ -694,6 +694,8 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
                                    Overlay::StatsGraphSyncMode::VSyncMailbox :
                                m_Pacer->fixedVsyncMode() == StreamingPreferences::VSM_SMOOTH ?
                                    Overlay::StatsGraphSyncMode::VSyncSmooth :
+                               m_Pacer->fixedVsyncMode() == StreamingPreferences::VSM_SMOOTH_MAILBOX ?
+                                   Overlay::StatsGraphSyncMode::VSyncSmoothMailbox :
                                params->enableVsync ? Overlay::StatsGraphSyncMode::VSync :
                                                      Overlay::StatsGraphSyncMode::Off;
     }
@@ -1646,7 +1648,8 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
     if (stats.fixedVsyncActive && stats.fixedVsyncTicks != 0) {
         const char* modeName =
             stats.fixedVsyncMode == StreamingPreferences::VSM_MAILBOX ? "Mailbox" :
-            stats.fixedVsyncMode == StreamingPreferences::VSM_SMOOTH ? "Smooth" : "FIFO";
+            stats.fixedVsyncMode == StreamingPreferences::VSM_SMOOTH ? "Smooth" :
+            stats.fixedVsyncMode == StreamingPreferences::VSM_SMOOTH_MAILBOX ? "Smooth Mailbox" : "FIFO";
         // Missed refreshes are the visible hitches: a frame missed its
         // refresh, the previous frame stayed up, then two frames competed.
         ret = snprintf(&output[offset], length - offset,
@@ -1658,7 +1661,7 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
         if (ret < 0 || ret >= length - offset) { SDL_assert(false); return; }
         offset += ret;
 
-        if (stats.fixedVsyncMode == StreamingPreferences::VSM_SMOOTH) {
+        if (StreamingPreferences::isSmoothVsyncMode(stats.fixedVsyncMode)) {
             ret = snprintf(&output[offset], length - offset,
                            "Smooth V-Sync buffer: %.2f ms (late frames %.2f%%)\n",
                            stats.fixedVsyncBufferUs / 1000.0,

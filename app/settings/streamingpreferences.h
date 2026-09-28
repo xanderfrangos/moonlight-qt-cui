@@ -85,9 +85,24 @@ public:
         VSM_MAILBOX = 1,
         // Frames are scheduled onto refreshes from host timestamps through a
         // small adaptive buffer. Requires a V-sync source (Frame pacing).
-        VSM_SMOOTH = 2
+        VSM_SMOOTH = 2,
+        // Smooth scheduling with a non-queuing (Mailbox) swapchain where the
+        // renderer has one. Experimental, for comparing against Smooth.
+        VSM_SMOOTH_MAILBOX = 3
     };
     Q_ENUM(VsyncMode)
+
+    // Smooth and Smooth Mailbox share the host-timestamp scheduler
+    static bool isSmoothVsyncMode(int mode)
+    {
+        return mode == VSM_SMOOTH || mode == VSM_SMOOTH_MAILBOX;
+    }
+
+    // Modes that ask the renderer for a non-queuing swapchain
+    static bool usesMailboxSwapchain(int mode)
+    {
+        return mode == VSM_MAILBOX || mode == VSM_SMOOTH_MAILBOX;
+    }
 
     // Mac only (for now)
     enum RendererSelection

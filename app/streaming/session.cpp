@@ -775,14 +775,14 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
                                        m_Preferences->vsyncMode : StreamingPreferences::VSM_DEFAULT;
     // Smooth schedules against the refresh clock, which only the Frame
     // pacing path has, so it turns pacing on for this session.
-    if (m_PresentationSettings.vsyncMode == StreamingPreferences::VSM_SMOOTH) {
+    if (StreamingPreferences::isSmoothVsyncMode(m_PresentationSettings.vsyncMode)) {
         m_PresentationSettings.enableFramePacing = true;
     }
 #ifdef Q_OS_LINUX
     // Gamescope offers no V-sync wakeup. Smooth instead follows the refresh
     // times Gamescope reports for the Vulkan renderer's presents.
     m_PresentationSettings.smoothPrefersVulkan =
-        m_PresentationSettings.vsyncMode == StreamingPreferences::VSM_SMOOTH &&
+        StreamingPreferences::isSmoothVsyncMode(m_PresentationSettings.vsyncMode) &&
         (!qEnvironmentVariableIsEmpty("GAMESCOPE_WAYLAND_DISPLAY") ||
          !qEnvironmentVariableIsEmpty("GAMESCOPE_XWAYLAND_DISPLAY") ||
          qgetenv("SDL_VIDEODRIVER") == "gamescope");
@@ -850,7 +850,8 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
                 "Presentation snapshot: V-sync %s, V-sync mode %s, VRR requested %s, VRR enabled %s, refresh %d Hz, window mode %d",
                 m_PresentationSettings.effectiveVsync ? "enabled" : "disabled",
                 m_PresentationSettings.vsyncMode == StreamingPreferences::VSM_MAILBOX ? "mailbox" :
-                m_PresentationSettings.vsyncMode == StreamingPreferences::VSM_SMOOTH ? "smooth" : "default",
+                m_PresentationSettings.vsyncMode == StreamingPreferences::VSM_SMOOTH ? "smooth" :
+                m_PresentationSettings.vsyncMode == StreamingPreferences::VSM_SMOOTH_MAILBOX ? "smooth-mailbox" : "default",
                 requestedVrr ? "yes" : "no",
                 m_PresentationSettings.enableVrr ? "yes" : "no",
                 m_PresentationSettings.refreshRate,

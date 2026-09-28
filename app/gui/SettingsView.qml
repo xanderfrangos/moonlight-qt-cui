@@ -1713,6 +1713,10 @@ Flickable {
                                 text: qsTr("Smooth")
                                 val: StreamingPreferences.VSM_SMOOTH
                             }
+                            ListElement {
+                                text: qsTr("Smooth Mailbox (experimental)")
+                                val: StreamingPreferences.VSM_SMOOTH_MAILBOX
+                            }
                         }
                         currentIndex: {
                             for (var i = 0; i < vsyncModeListModel.count; i++) {
@@ -1734,7 +1738,8 @@ Flickable {
                         ToolTip.timeout: 10000
                         ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                         ToolTip.text: qsTr("Default shows frames in the order they arrive. Mailbox always shows the newest frame and skips older ones that are still waiting, which lowers latency but can occasionally skip a frame. Smooth uses the host's frame timestamps to place each frame on the right refresh, holding a small, self-adjusting buffer.") + "\n\n" +
-                                      qsTr("Smooth always uses Frame pacing. Not used while VRR is enabled.")
+                                      qsTr("Smooth Mailbox schedules frames like Smooth but asks for a non-queuing swapchain, for testing whether that helps on your system.") + "\n\n" +
+                                      qsTr("Smooth modes always use Frame pacing. Not used while VRR is enabled.")
                     }
 
                     Label {
@@ -1744,6 +1749,8 @@ Flickable {
                                   qsTr("Always shows the newest frame. Lower latency, but a late frame may be skipped.") :
                               StreamingPreferences.vsyncMode === StreamingPreferences.VSM_SMOOTH ?
                                   qsTr("Keeps the host's frame timing, most useful when your refresh rate is a multiple of the stream's (for example 60 FPS on 120 Hz). Adds a small buffer that grows only when frames arrive unevenly. Turns on Frame pacing.") :
+                              StreamingPreferences.vsyncMode === StreamingPreferences.VSM_SMOOTH_MAILBOX ?
+                                  qsTr("Experimental: Smooth's timing with a non-queuing swapchain where the renderer supports one (Vulkan). Turns on Frame pacing.") :
                                   qsTr("Shows every frame in order. Frames can wait in line during spikes.")
                     }
                 }

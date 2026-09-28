@@ -126,6 +126,20 @@ of the time frames wait in the queue for their refresh saved another 1-5 ms
 but made the jittery Windows capture less even (10.9% vs 9.8%), so it was not
 adopted. These are replays, not live results.
 
+Smooth Mailbox (2026-09-28, experimental, `vsyncmode` = 3, CLI
+`--vsync-mode smooth-mailbox`): Smooth's scheduler, telemetry and trace with
+the Mailbox swapchain request (`StreamingPreferences::usesMailboxSwapchain()`;
+libplacebo Vulkan asks for `VK_PRESENT_MODE_MAILBOX_KHR`, falling back to FIFO).
+The pacer's Mailbox replacement stays off: Smooth's queue deliberately holds
+frames for later refreshes. `isSmoothVsyncMode()` covers both Smooth modes
+everywhere Smooth is checked (pacing forced on, Gamescope refresh clock and
+Vulkan preference, overlay buffer line). Without a refresh clock it falls back
+to Mailbox. Its purpose is an A/B on the Steam Deck: the 05:25 Smooth capture
+showed frames handed over less than ~6 ms before a refresh mostly missed it,
+and part of that may be Gamescope's FIFO commit scheduling, which a Mailbox
+application swapchain avoids. D3D11 needs no change (it already presents
+without queuing), so on Windows the mode behaves like Smooth.
+
 Smooth hand-over lead (2026-09-28): the lead that was a fixed 3 ms
 (`TIMER_SLACK_MS`, both in the due time and the late-frame deadline) is now
 learned by `RenderLeadEstimator`: p95 of the last 128 spans from the later of

@@ -59,7 +59,7 @@ void FixedVsyncTrace::write(const QString& path, int mode, int sourceFps, int di
                 "Fixed V-Sync trace v1: %s", qPrintable(path));
 
     QByteArray batch = QByteArray("# fixed_vsync_trace_version=1; vsync_mode=") +
-        QByteArray::number(mode) + " (0=default 1=mailbox 2=smooth); stream_fps=" +
+        QByteArray::number(mode) + " (0=default 1=mailbox 2=smooth 3=smooth-mailbox); stream_fps=" +
         QByteArray::number(sourceFps) + "; display_hz=" + QByteArray::number(displayHz) +
         "; times=LiGetMicroseconds; rtp=90 kHz host stamp\n"
         "# tick: a=sent b=skipped c=queue_before d=queue_after e=missed_slot f=late\n"

@@ -675,7 +675,7 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
     }
 
     // Smooth needs the refresh clock only the Frame pacing path has
-    if (m_VsyncMode == StreamingPreferences::VSM_SMOOTH) {
+    if (StreamingPreferences::isSmoothVsyncMode(m_VsyncMode)) {
         enablePacing = true;
     }
 
@@ -715,7 +715,7 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
         // Smooth needs a refresh clock. Where the platform has no V-sync
         // wakeup (Gamescope's X11), one can be kept in phase from the
         // refresh times the compositor reports for presented frames.
-        if (m_VsyncSource == nullptr && m_VsyncMode == StreamingPreferences::VSM_SMOOTH) {
+        if (m_VsyncSource == nullptr && StreamingPreferences::isSmoothVsyncMode(m_VsyncMode)) {
             auto source = new PresentTimingVsyncSource();
             if (m_VsyncRenderer->setPresentTimingSink(this)) {
                 m_VsyncSource = source;
@@ -745,7 +745,7 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                     m_DisplayFps, m_MaxVideoFps);
     }
 
-    if (m_VsyncMode == StreamingPreferences::VSM_SMOOTH) {
+    if (StreamingPreferences::isSmoothVsyncMode(m_VsyncMode)) {
         if (m_VsyncSource != nullptr) {
             m_Smooth = true;
             // The old fixed lead is the floor: the GPU and compositor time
@@ -762,16 +762,26 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
             m_SmoothRepeat = (m_RendererAttributes & RENDERER_ATTRIBUTE_REPEAT_FRAME) &&
                     m_VsyncRenderer->isRenderThreadSupported();
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "V-Sync mode: Smooth (frames scheduled onto refreshes from host timestamps; "
+                        "V-Sync mode: %s (frames scheduled onto refreshes from host timestamps; "
                         "refresh clock: %s; %s)",
+                        m_VsyncMode == StreamingPreferences::VSM_SMOOTH_MAILBOX ? "Smooth Mailbox" : "Smooth",
                         m_PresentTimingSource != nullptr ? "compositor-reported refreshes" : "display V-sync",
                         m_SmoothRepeat ? "empty refreshes re-present the last frame" :
                                          "empty refreshes present nothing");
         }
         else {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "Smooth V-Sync needs a V-sync source or reported refresh times, which this platform and renderer lack; using Default");
-            m_VsyncMode = StreamingPreferences::VSM_DEFAULT;
+                        "Smooth V-Sync needs a V-sync source or reported refresh times, which this platform and renderer lack; using %s",
+                        m_VsyncMode == StreamingPreferences::VSM_SMOOTH_MAILBOX ? "Mailbox" : "Default");
+            // Smooth Mailbox already asked the renderer for a Mailbox
+            // swapchain, so it falls back to Mailbox
+            if (m_VsyncMode == StreamingPreferences::VSM_SMOOTH_MAILBOX) {
+                m_VsyncMode = StreamingPreferences::VSM_MAILBOX;
+                m_Mailbox = true;
+            }
+            else {
+                m_VsyncMode = StreamingPreferences::VSM_DEFAULT;
+            }
         }
     }
 

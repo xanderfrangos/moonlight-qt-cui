@@ -354,6 +354,7 @@ StreamCommandLineParser::StreamCommandLineParser()
         {"default", StreamingPreferences::VSM_DEFAULT},
         {"mailbox", StreamingPreferences::VSM_MAILBOX},
         {"smooth",  StreamingPreferences::VSM_SMOOTH},
+        {"smooth-mailbox", StreamingPreferences::VSM_SMOOTH_MAILBOX},
     };
     m_DebandModeMap = {
         {"off",    StreamingPreferences::DB_OFF},
