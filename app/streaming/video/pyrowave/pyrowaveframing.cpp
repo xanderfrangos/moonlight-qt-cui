@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <utility>
 
 namespace PyroWaveFraming {
 
@@ -32,19 +33,25 @@ class SegmentMap
 {
 public:
     explicit SegmentMap(const std::vector<Segment>& segments)
-        : m_Segments(segments)
+        : m_Segments(segments),
+          m_AnyLost(std::any_of(segments.begin(), segments.end(),
+                               [](const Segment& segment) { return segment.lost; }))
     {
     }
 
     bool anyLost() const
     {
-        return std::any_of(m_Segments.begin(), m_Segments.end(),
-                           [](const Segment& segment) { return segment.lost; });
+        return m_AnyLost;
     }
 
     // Whether any byte of [start, end) was lost
     bool lost(size_t start, size_t end) const
     {
+        // Most frames are intact. Avoid a packet lookup for every record in
+        // that case, while retaining the same record validation below.
+        if (!m_AnyLost) {
+            return false;
+        }
         for (size_t i = indexOf(start); i < m_Segments.size() && m_Segments[i].offset < end; i++) {
             if (m_Segments[i].lost) {
                 return true;
@@ -91,12 +98,31 @@ private:
     // Index of the segment holding pos (segments tile the frame)
     size_t indexOf(size_t pos) const
     {
+        if (m_Segments.empty()) {
+            return 0;
+        }
+        // Record traversal moves forward, often looking up the same packet
+        // several times. Advance once per packet rather than binary-searching
+        // the entire map for each record header and payload.
+        if (pos >= m_Segments[m_Index].offset) {
+            while (m_Index + 1 < m_Segments.size() &&
+                    m_Segments[m_Index + 1].offset <= pos) {
+                ++m_Index;
+            }
+            return m_Index;
+        }
         auto it = std::upper_bound(m_Segments.begin(), m_Segments.end(), pos,
                                    [](size_t value, const Segment& segment) { return value < segment.offset; });
-        return it == m_Segments.begin() ? m_Segments.size() : size_t(it - m_Segments.begin()) - 1;
+        if (it == m_Segments.begin()) {
+            return m_Segments.size();
+        }
+        m_Index = size_t(it - m_Segments.begin()) - 1;
+        return m_Index;
     }
 
     const std::vector<Segment>& m_Segments;
+    const bool m_AnyLost;
+    mutable size_t m_Index = 0;
 };
 
 bool checkSequenceHeader(uint32_t word0, uint32_t word1, const StreamGeometry& geometry,
@@ -252,7 +278,8 @@ bool walkRecordFrame(const uint8_t* data, size_t size, const SegmentMap& segment
         // Only the finer level's ordinary records are packed so that none crosses a
         // packet boundary; its oversized ones come first.
         const bool ordinary = end - pos + k_HeaderBytes <= payloadSize;
-        aligned = ordinary && blockIndex >= coarseBlocks && segments.withinOnePacket(pos, end);
+        aligned = segments.anyLost() && ordinary && blockIndex >= coarseBlocks &&
+                  segments.withinOnePacket(pos, end);
         frame.blockRecords++;
         pos = end;
     }
@@ -362,7 +389,12 @@ bool parse(const uint8_t* data, size_t size, const std::vector<Segment>& segment
 bool parse(const uint8_t* data, size_t size, const std::vector<Segment>& segments,
            size_t criticalPackets, const StreamGeometry& geometry, Frame& frame, std::string& error)
 {
+    // Keep the per-decoder span allocation across frames. All semantic state
+    // is still reset, including after a failed or partial frame.
+    auto spans = std::move(frame.spans);
+    spans.clear();
     frame = Frame();
+    frame.spans = std::move(spans);
 
     if (data == nullptr || size < k_HeaderBytes || (size % 4) != 0) {
         error = "frame is empty or not word aligned";

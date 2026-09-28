@@ -120,7 +120,7 @@ private:
     // PyroWave frames skip FFmpeg: a Vulkan decoder writes into surfaces owned
     // by the renderer, and these two calls stand in for avcodec send/receive.
     bool initializePyroWave(PDECODER_PARAMETERS params);
-    int sendPyroWaveFrame(int length);
+    int sendPyroWaveFrame(int length, uint32_t rtpTimestamp);
     int receiveFrame(AVFrame* frame);
 
     void writeBuffer(PLENTRY entry, int& offset);

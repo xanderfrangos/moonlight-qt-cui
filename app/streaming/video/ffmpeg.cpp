@@ -2517,7 +2517,7 @@ bool FFmpegVideoDecoder::initializePyroWave(PDECODER_PARAMETERS params)
 #endif
 }
 
-int FFmpegVideoDecoder::sendPyroWaveFrame(int length)
+int FFmpegVideoDecoder::sendPyroWaveFrame(int length, uint32_t rtpTimestamp)
 {
 #ifdef HAVE_PYROWAVE
     AVFrame* frame = av_frame_alloc();
@@ -2525,8 +2525,25 @@ int FFmpegVideoDecoder::sendPyroWaveFrame(int length)
         return DR_OK;
     }
 
-    if (!m_PyroWave->decode(reinterpret_cast<const uint8_t*>(m_DecodeBuffer.constData()), length,
-                            m_PyroWavePackets, m_PyroWaveCriticalPackets, frame)) {
+    auto* trace = m_FrontendRenderer->gpuDiagnosticTrace();
+    PyroWaveDecoder::DecodeDiagnostics diagnostics;
+    const auto beginUs = trace ? LiGetMicroseconds() : 0;
+    const bool decoded = m_PyroWave->decode(reinterpret_cast<const uint8_t*>(m_DecodeBuffer.constData()), length,
+                            m_PyroWavePackets, m_PyroWaveCriticalPackets, frame,
+                            trace ? &diagnostics : nullptr);
+    if (trace) {
+        const auto endUs = LiGetMicroseconds();
+        trace->record({"pyrowave_phases", rtpTimestamp, 0, beginUs, endUs, uint64_t(decoded),
+            int64_t(diagnostics.phaseUs[0]), int64_t(diagnostics.phaseUs[1]),
+            int64_t(diagnostics.phaseUs[2]), int64_t(diagnostics.phaseUs[3]),
+            int64_t(diagnostics.phaseUs[4])});
+        trace->record({"pyrowave_payload", rtpTimestamp, 0, beginUs, endUs, uint64_t(length),
+            int64_t(diagnostics.payloadBytes), diagnostics.receivedBlocks,
+            diagnostics.announcedBlocks, diagnostics.paddingBytes, diagnostics.partial});
+        trace->record({"pyrowave_context_wait", rtpTimestamp, 0, beginUs, endUs, uint64_t(decoded),
+            int64_t(diagnostics.contextWaitUs)});
+    }
+    if (!decoded) {
         av_frame_free(&frame);
         m_PyroWaveRejectedFrames++;
 
@@ -2560,6 +2577,7 @@ int FFmpegVideoDecoder::sendPyroWaveFrame(int length)
     return DR_OK;
 #else
     Q_UNUSED(length);
+    Q_UNUSED(rtpTimestamp);
     return DR_OK;
 #endif
 }
@@ -3320,7 +3338,7 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
 
     if (m_PyroWaveActive) {
         const auto queuedBefore = m_PyroWaveOutput.size();
-        sendPyroWaveFrame(offset);
+        sendPyroWaveFrame(offset, du->rtpTimestamp);
         if (gpuTrace) gpuTrace->recordThreadSpan({"packet_send", du->rtpTimestamp, 0,
             decodeSubmitUs, LiGetMicroseconds(), 0, 0}, sendCpu);
         if (m_PyroWaveOutput.size() != queuedBefore) {

@@ -5,6 +5,7 @@
 
 #include <Limelight.h>
 #include <SDL.h>
+#include <chrono>
 
 #ifdef _WIN32
 #include <array>
@@ -14,6 +15,34 @@
 #endif
 
 namespace {
+
+class DecodePhaseTimer {
+public:
+    explicit DecodePhaseTimer(PyroWaveDecoder::DecodeDiagnostics* diagnostics)
+        : m_Diagnostics(diagnostics)
+    {
+        if (m_Diagnostics) {
+            *m_Diagnostics = {};
+            m_Start = Clock::now();
+        }
+    }
+    ~DecodePhaseTimer() { finish(); }
+    void next(unsigned phase) { finish(); m_Phase = phase; }
+private:
+    using Clock = std::chrono::steady_clock;
+    void finish()
+    {
+        if (m_Diagnostics) {
+            const auto now = Clock::now();
+            m_Diagnostics->phaseUs[m_Phase] +=
+                std::chrono::duration_cast<std::chrono::microseconds>(now - m_Start).count();
+            m_Start = now;
+        }
+    }
+    PyroWaveDecoder::DecodeDiagnostics* m_Diagnostics;
+    unsigned m_Phase = 0;
+    Clock::time_point m_Start;
+};
 
 #ifdef _WIN32
 // Returned to the decoder when the last reference to a frame is dropped.
@@ -117,12 +146,21 @@ struct PyroWaveDecoder::Impl {
 #endif
 
     PyroWaveFraming::Frame parsed;
+    bool reportDiagnostics = false;
 
     ~Impl()
     {
         // Destroying the decoder waits for its GPU work to finish.
         if (decoder != nullptr) {
             pyrowave_decoder_destroy(decoder);
+        }
+        // Report before destroying imported Windows images: each image teardown
+        // advances the codec's frame context and would dilute these averages.
+        if (device != nullptr && reportDiagnostics) {
+            pyrowave_device_report_performance_stats(device, [](void*, const char* message) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "PyroWave GPU history (per codec frame context): %s", message);
+            }, nullptr, false);
         }
 #ifdef _WIN32
         for (auto& surface : surfaces) {
@@ -357,6 +395,15 @@ bool PyroWaveDecoder::initialize(const Config& config, IPyroWaveSurfacePool* poo
         return false;
     }
 
+    // Both pools keep their fixed-size output images alive until this decoder
+    // is destroyed. Reuse their Vulkan views instead of creating and retiring
+    // three new views (and associated descriptors) for every frame.
+#ifdef _WIN32
+    pyrowave_decoder_set_output_view_cache(impl->decoder, true);
+#else
+    pyrowave_decoder_set_output_view_cache(impl->decoder, impl->vulkanPool != nullptr);
+#endif
+
 #ifdef _WIN32
     if (!impl->importFence(pool->exportPyroWaveDecodeFence(), impl->decodeSync) ||
             !impl->importFence(pool->exportPyroWaveReleaseFence(), impl->releaseSync)) {
@@ -399,15 +446,25 @@ bool PyroWaveDecoder::initialize(const Config& config, IPyroWaveSurfacePool* poo
 
 bool PyroWaveDecoder::decode(const uint8_t* data, size_t size,
                              const std::vector<PyroWaveFraming::Segment>& packets, size_t criticalPackets,
-                             AVFrame* frame)
+                             AVFrame* frame, DecodeDiagnostics* diagnostics)
 {
     Impl& impl = *m_Impl;
+    DecodePhaseTimer phase(diagnostics);
+    impl.reportDiagnostics |= diagnostics != nullptr;
 
     m_LastFramePartial = false;
     if (!PyroWaveFraming::parse(data, size, packets, criticalPackets, impl.geometry, impl.parsed, m_LastError)) {
         return false;
     }
     m_LastFraming = impl.parsed.framing;
+    if (diagnostics) {
+        diagnostics->receivedBlocks = impl.parsed.blockRecords;
+        diagnostics->announcedBlocks = impl.parsed.announcedBlocks;
+        diagnostics->paddingBytes = impl.parsed.paddingBytes;
+        diagnostics->partial = impl.parsed.partial;
+        for (const auto& span : impl.parsed.spans) diagnostics->payloadBytes += span.size;
+    }
+    phase.next(1);
 
     // Every frame is independent. Clearing first keeps the 3-bit sequence
     // counter from treating a frame after a long drop as stale.
@@ -443,6 +500,7 @@ bool PyroWaveDecoder::decode(const uint8_t* data, size_t size,
         }
     }
     m_LastFramePartial = impl.parsed.partial;
+    phase.next(2);
 
 #ifndef _WIN32
     if (impl.vulkanPool != nullptr) {
@@ -469,8 +527,12 @@ bool PyroWaveDecoder::decode(const uint8_t* data, size_t size,
         pyrowave_gpu_sync_operation release = {};
         release.sync = { surface.done, surface.doneValue };
 
-        const pyrowave_result result = pyrowave_decoder_decode_gpu_buffer(
-            impl.decoder, &acquire, &release, &buffers);
+        phase.next(3);
+        const pyrowave_result result = diagnostics ?
+            pyrowave_decoder_decode_gpu_buffer_with_context_timing(
+                impl.decoder, &acquire, &release, &buffers, &diagnostics->contextWaitUs) :
+            pyrowave_decoder_decode_gpu_buffer(impl.decoder, &acquire, &release, &buffers);
+        phase.next(4);
         if (!impl.vulkanPool->releasePyroWaveSurface(surface, result == PYROWAVE_SUCCESS, frame)) {
             m_LastError = result == PYROWAVE_SUCCESS ?
                 "cannot reference the output surface" :
@@ -509,8 +571,10 @@ bool PyroWaveDecoder::decode(const uint8_t* data, size_t size,
         output.row_stride_in_bytes[plane] = size_t(frame->linesize[plane]);
         output.plane_size_in_bytes[plane] = output.row_stride_in_bytes[plane] * planeHeight;
     }
+    phase.next(3);
     const pyrowave_result result = pyrowave_decoder_decode_cpu_buffer_synchronous(
         impl.decoder, &output);
+    phase.next(4);
     if (result != PYROWAVE_SUCCESS) {
         m_LastError = std::string("GPU decode/readback failed: ") + resultString(result);
         return false;
@@ -551,8 +615,10 @@ bool PyroWaveDecoder::decode(const uint8_t* data, size_t size,
     release.sync.semaphore = pyrowave_sync_object_get_semaphore(impl.decodeSync);
     release.sync.value = decodeValue;
 
+    phase.next(3);
     const pyrowave_result result = pyrowave_decoder_decode_gpu_buffer(
         impl.decoder, &acquire, &release, &impl.surfaces[surface].buffers);
+    phase.next(4);
     if (result != PYROWAVE_SUCCESS) {
         impl.freeList->push(surface, releaseValue);
         m_LastError = std::string("decode submission failed: ") + resultString(result);

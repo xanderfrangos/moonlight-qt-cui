@@ -200,17 +200,49 @@ void checkLinuxClientDecode(const std::vector<uint8_t>& records, const Planes& s
     // the GPU finished, which a one-pixel download waits for.
     constexpr int k_Timed = 20;
     double submitMs = 0, completeMs = 0;
+    // Keep all eight shared surfaces in flight and rotate through them. This
+    // exercises both new output views and cache hits after surface reuse.
+    struct HeldFrames {
+        AVFrame* frames[8] = {};
+        ~HeldFrames() { for (auto*& frame : frames) av_frame_free(&frame); }
+    } held;
     AVFrame* frame = nullptr;
     for (int i = 0; i < 3 + k_Timed; ++i) {
-        av_frame_free(&frame);
-        frame = av_frame_alloc();
+        auto& slot = held.frames[shared ? i % 8 : 0];
+        if (shared && slot) {
+            pl_frame mapped = {};
+            if (!shared->pool->mapFrame(slot, &mapped)) {
+                expect(false, label + ": map recycled surface");
+                return;
+            }
+            // Poison the previous output so a stale descriptor or a skipped
+            // write cannot pass by leaving an earlier identical frame intact.
+            const float clear[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+            for (int plane = 0; plane < 3; ++plane)
+                pl_tex_clear(shared->vulkan->gpu, mapped.planes[plane].texture, clear);
+        }
+        av_frame_free(&slot);
+        frame = slot = av_frame_alloc();
         const auto start = std::chrono::steady_clock::now();
-        const bool decoded = client.decode(records.data(), records.size(), {}, 0, frame);
+        PyroWaveDecoder::DecodeDiagnostics diagnostics;
+        const bool decoded = client.decode(records.data(), records.size(), {}, 0, frame,
+                                            i == k_Timed + 2 ? &diagnostics : nullptr);
         const auto submitted = std::chrono::steady_clock::now();
         if (!decoded) {
             expect(false, label + ": Linux client decode: " + client.lastError());
-            av_frame_free(&frame);
             return;
+        }
+        if (i == k_Timed + 2) {
+            uint64_t attributedUs = 0;
+            for (auto us : diagnostics.phaseUs) attributedUs += us;
+            const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(submitted - start).count();
+            expect(attributedUs <= uint64_t(elapsedUs), label + ": diagnostic phases do not overlap");
+            expect(diagnostics.contextWaitUs <= diagnostics.phaseUs[3],
+                   label + ": frame-context wait is part of decode submission");
+            expect(!diagnostics.partial && diagnostics.receivedBlocks == diagnostics.announcedBlocks,
+                   label + ": diagnostics identify intact payload");
+            expect(diagnostics.payloadBytes > 0 && diagnostics.payloadBytes <= records.size(),
+                   label + ": diagnostic payload byte bounds");
         }
         if (shared) {
             pl_frame mapped = {};
@@ -259,7 +291,30 @@ void checkLinuxClientDecode(const std::vector<uint8_t>& records, const Planes& s
     std::printf("%s: decode call %.2f ms, GPU done %.2f ms, Y/Cb/Cr PSNR %.1f/%.1f/%.1f dB\n",
                 label.c_str(), submitMs / k_Timed, completeMs / k_Timed,
                 quality[0], quality[1], quality[2]);
-    av_frame_free(&frame);
+    if (shared) {
+        // Compare every output byte, including the low bits of R16 planes.
+        // Each held surface decoded the same input through a different view.
+        for (int plane = 0; plane < 3; ++plane) {
+            const int width = plane ? source.chromaWidth() : source.width;
+            const int height = plane ? source.chromaHeight() : source.height;
+            std::vector<uint8_t> reference;
+            for (auto* output : held.frames) {
+                pl_frame mapped = {};
+                if (!shared->pool->mapFrame(output, &mapped)) {
+                    expect(false, label + ": map cached output");
+                    continue;
+                }
+                std::vector<uint8_t> bytes(size_t(width) * height * (tenBit ? 2 : 1));
+                pl_tex_transfer_params transfer = {};
+                transfer.tex = mapped.planes[plane].texture;
+                transfer.row_pitch = size_t(width) * (tenBit ? 2 : 1);
+                transfer.ptr = bytes.data();
+                expect(pl_tex_download(shared->vulkan->gpu, &transfer), label + ": download cached output");
+                if (reference.empty()) reference = bytes;
+                else expect(bytes == reference, label + ": reused output views preserve every sample");
+            }
+        }
+    }
 }
 #endif
 

@@ -36,6 +36,7 @@ EXPORTS
 	pyrowave_encoder_destroy
 	pyrowave_decoder_device_prefers_fragment_path
 	pyrowave_decoder_create
+	pyrowave_decoder_set_output_view_cache
 	pyrowave_decoder_clear
 	pyrowave_decoder_push_packet
 	pyrowave_decoder_decode_is_ready

@@ -38,6 +38,17 @@ public:
 
     bool initialize(const Config& config, IPyroWaveSurfacePool* pool);
 
+    // CPU wall times, not GPU execution times. Submission can wait for older work.
+    struct DecodeDiagnostics {
+        uint64_t phaseUs[5] = {}; // parse, push/validate, acquire, submit, release
+        uint64_t contextWaitUs = 0; // portion of submit inside Granite::next_frame_context
+        uint64_t payloadBytes = 0;
+        uint32_t receivedBlocks = 0;
+        uint32_t announcedBlocks = 0;
+        uint32_t paddingBytes = 0;
+        bool partial = false;
+    };
+
     // Parses and decodes one frame. With shared surfaces the GPU work is only
     // submitted and the renderer orders its reads after it; the readback path
     // waits and returns a planar AVFrame in system memory. Returns false if
@@ -48,7 +59,7 @@ public:
     // criticalPackets packets (0 if it did not).
     bool decode(const uint8_t* data, size_t size,
                 const std::vector<PyroWaveFraming::Segment>& packets, size_t criticalPackets,
-                AVFrame* frame);
+                AVFrame* frame, DecodeDiagnostics* diagnostics = nullptr);
 
     // Why the last call failed, for logging.
     const std::string& lastError() const { return m_LastError; }
