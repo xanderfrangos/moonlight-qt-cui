@@ -14,7 +14,8 @@ bool D3D11Fsr1Upscaler::initialize(ID3D11Device* device, bool tenBit, double sha
             !loadPixelShader(device, "d3d11_fsr1_easu_pq_pixel.fxc", m_EasuPqShader) ||
             !loadPixelShader(device, "d3d11_fsr1_rcas_pixel.fxc", m_RcasShader) ||
             !loadPixelShader(device, "d3d11_fsr1_rcas_pq_pixel.fxc", m_RcasPqShader) ||
-            !loadPixelShader(device, "d3d11_fsr1_rcas_dither_pixel.fxc", m_RcasDitherShader)) {
+            !loadPixelShader(device, "d3d11_fsr1_rcas_dither_pixel.fxc", m_RcasDitherShader) ||
+            !loadPixelShader(device, "d3d11_fsr1_rcas_pq_dither_pixel.fxc", m_RcasPqDitherShader)) {
         return false;
     }
 
@@ -87,7 +88,7 @@ void D3D11Fsr1Upscaler::upscale(ID3D11DeviceContext* context, ID3D11RenderTarget
                                 bool pq, bool dither, float ditherLevels,
                                 const D3D11_VIEWPORT& fullViewport)
 {
-    // The display's depth can change while streaming
+    // The display's depth can change while streaming, and PQ frames use their own
     if (dither && ditherLevels != m_Constants.ditherLevels) {
         m_Constants.ditherLevels = ditherLevels;
         context->UpdateSubresource(m_ConstantBuffer.Get(), 0, nullptr, &m_Constants, 0, 0);
@@ -105,9 +106,8 @@ void D3D11Fsr1Upscaler::upscale(ID3D11DeviceContext* context, ID3D11RenderTarget
     drawQuad(context);
 
     // RCAS: sharpen into the destination rectangle of the back buffer
-    ID3D11PixelShader* rcasShader = pq ? m_RcasPqShader.Get() :
-                                    dither ? m_RcasDitherShader.Get() :
-                                             m_RcasShader.Get();
+    ID3D11PixelShader* rcasShader = pq ? (dither ? m_RcasPqDitherShader.Get() : m_RcasPqShader.Get()) :
+                                         (dither ? m_RcasDitherShader.Get() : m_RcasShader.Get());
     context->OMSetRenderTargets(1, &target, nullptr);
     context->RSSetViewports(1, &m_DestinationViewport);
     context->PSSetShader(rcasShader, nullptr, 0);

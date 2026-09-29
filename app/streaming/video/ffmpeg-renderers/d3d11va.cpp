@@ -57,7 +57,7 @@ typedef struct _CSC_CONST_BUF
     float chromaUVMax[2];
 
     // Quantization levels for the dithering shaders, (2^bits - 1) for the
-    // display we're rendering to. Unread by the non-dithering shaders.
+    // depth this frame is quantized to. Unread by the non-dithering shaders.
     float ditherLevels;
 
     // Padding floats to end on a 16-byte boundary
@@ -73,9 +73,10 @@ static const std::array<const char*, D3D11VARenderer::PixelShaders::_COUNT> k_Vi
     "d3d11_yuv_planar_pixel.fxc",
 };
 
-// The same shaders built with DITHER_OUTPUT. They quantize to the display's
-// bit depth with an ordered dither instead of leaving 10-bit video to be
-// truncated further down the display pipeline.
+// The same shaders built with DITHER_OUTPUT. They quantize to the output bit
+// depth with an ordered dither instead of letting the color conversion's
+// fractional result be rounded (or truncated further down the display
+// pipeline) into bands.
 typedef struct _DITHER_FRAME_CONST_BUF
 {
     // Temporal dithering phase for this frame, in [0, 1)
@@ -89,6 +90,10 @@ static_assert(sizeof(DITHER_FRAME_CONST_BUF) % 16 == 0, "Constant buffer sizes m
 // Advancing the phase by an irrational fraction spreads successive frames
 // evenly over the threshold range instead of cycling through a short pattern.
 static const float k_DitherPhaseStep = 0.6180339887f;
+
+// HDR frames are PQ-encoded into the 10-bit swapchain. The display's HDR
+// pipeline takes it from there, so the swapchain is the depth we quantize to.
+static const float k_PqDitherLevels = 1023.0f;
 
 static const std::array<const char*, 3> k_VideoDitherShaderNames =
 {
@@ -1243,13 +1248,14 @@ void D3D11VARenderer::drawVideoPlanes(AVFrame* frame, ID3D11ShaderResourceView* 
     // the current frame and window sizes.
     bindVideoVertexBuffer(frameChanged, frame);
 
-    // Same rule as bindColorConversion(): PQ output is left to the display
+    // PQ output needs the HDR-capable upscaler paths and its own dither depth
     const bool pq = frame->color_trc == AVCOL_TRC_SMPTE2084;
 
     // The upscaler needs the whole frame in RGB at stream size. LS1 is SDR
     // only, so HDR frames are drawn directly instead.
     const bool upscale = m_Upscaler && m_Upscaler->active() &&
                          (!pq || m_Upscaler->handlesPq());
+    const float ditherLevels = pq ? k_PqDitherLevels : m_DitherLevels;
     m_UpscalerRunning.store(upscale, std::memory_order_relaxed);
     if (upscale) {
         m_Upscaler->beginSourcePass(m_RenderDeviceContext.Get());
@@ -1269,7 +1275,7 @@ void D3D11VARenderer::drawVideoPlanes(AVFrame* frame, ID3D11ShaderResourceView* 
 
     if (upscale) {
         m_Upscaler->upscale(m_RenderDeviceContext.Get(), m_RenderTargetView.Get(),
-                            pq, m_DitherActive && !pq, m_DitherLevels, m_FullViewport);
+                            pq, m_DitherActive, ditherLevels, m_FullViewport);
     }
 }
 
@@ -1333,8 +1339,8 @@ int D3D11VARenderer::queryDisplayBitsPerComponent()
     return (int)outputDesc.BitsPerColor;
 }
 
-// Decides whether the dithering shaders should be bound for the display we're
-// presenting to. Safe to call again whenever that display may have changed.
+// Picks the SDR dithering depth for the display we're presenting to. Safe to
+// call again whenever that display may have changed.
 void D3D11VARenderer::refreshDitherState()
 {
     const int displayBits = queryDisplayBitsPerComponent();
@@ -1345,26 +1351,27 @@ void D3D11VARenderer::refreshDitherState()
         return;
     }
 
-    // An unreadable depth is treated as 8-bit: that's the common case, and the
-    // user asked for dithering rather than for us to guess conservatively.
-    int effectiveBits = displayBits != 0 ? displayBits : 8;
-
-    // A display that can show every bit the stream carries gains nothing from
-    // dithering, so leave those frames alone.
-    const bool active = effectiveBits < 10;
+    // SDR frames are quantized to whichever is shallower: the swapchain or the
+    // display behind it. An unreadable display depth is treated as 8-bit:
+    // that's the common case, and the user asked for dithering rather than for
+    // us to guess conservatively. Even when the display can show every bit the
+    // stream carries, the color conversion produces values between swapchain
+    // levels, so dithering still has rounding error to break up.
+    const int swapchainBits = (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_10BIT) ? 10 : 8;
+    int effectiveBits = std::min(swapchainBits, displayBits != 0 ? displayBits : 8);
 
     // Clamp before shifting so a nonsense value from the driver can't produce
     // a degenerate quantizer.
-    effectiveBits = std::max(4, std::min(effectiveBits, 9));
+    effectiveBits = std::max(4, effectiveBits);
     const float levels = (float)((1 << effectiveBits) - 1);
 
-    if (active != m_DitherActive || levels != m_DitherLevels) {
+    if (!m_DitherActive || levels != m_DitherLevels) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "10-bit video dithering %s (display reports %d bits per component)",
-                    active ? "enabled" : "disabled",
-                    displayBits);
+                    "Video dithering enabled: SDR to %d bits, HDR to 10 bits "
+                    "(display reports %d bits per component)",
+                    effectiveBits, displayBits);
 
-        m_DitherActive = active;
+        m_DitherActive = true;
         m_DitherLevels = levels;
 
         // bindColorConversion() only rebuilds the constant buffer when the
@@ -1377,10 +1384,11 @@ void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame, boo
 {
     bool yuv444 = (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_YUV444);
 
-    // PQ output is quantized by the display's own HDR pipeline, so dither only
-    // the SDR case where we know what the final encoding is. When a later pass
-    // does the dithering, this still keeps its per-frame phase up to date.
-    const bool dither = m_DitherActive && frame->color_trc != AVCOL_TRC_SMPTE2084;
+    // PQ frames are dithered to the 10-bit swapchain; SDR frames to the depth
+    // refreshDitherState() chose. When a later pass does the dithering, this
+    // still keeps its per-frame phase up to date.
+    const bool pq = frame->color_trc == AVCOL_TRC_SMPTE2084;
+    const bool dither = m_DitherActive;
     const auto& videoShaders = dither && allowCscDither ? m_VideoDitherPixelShaders : m_VideoPixelShaders;
 
     if (dither && m_DitherFrameBuffer) {
@@ -1477,7 +1485,7 @@ void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame, boo
     constBuf.chromaUVMax[1] = frame->height != textureHeight ?
                                   ((float)(frame->height - 1) / textureHeight) : 1.0f;
 
-    constBuf.ditherLevels = m_DitherLevels;
+    constBuf.ditherLevels = pq ? k_PqDitherLevels : m_DitherLevels;
 
     D3D11_SUBRESOURCE_DATA constData = {};
     constData.pSysMem = &constBuf;
@@ -3978,15 +3986,13 @@ bool D3D11VARenderer::setupRenderingResources()
         }
     }
 
-    // Load the dithering variants when this session could use them: the option
-    // is on and the stream carries more bits per component than an ordinary
-    // display can show. Whether they actually get bound depends on the display
-    // we end up on, which can change while we're streaming.
+    // Load the dithering variants when the option is on. The depth they
+    // quantize to depends on the frame (SDR or PQ) and on the display we end
+    // up on, which can change while we're streaming.
     //
     // This renderer has one ordered kernel, so every enabled mode maps onto it.
     // Only libplacebo can honor the higher-quality kernels.
-    if (m_DecoderParams.ditheringMode != StreamingPreferences::DM_OFF &&
-            (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_10BIT))
+    if (m_DecoderParams.ditheringMode != StreamingPreferences::DM_OFF)
     {
         if (m_DecoderParams.debandMode != StreamingPreferences::DB_OFF) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -4061,7 +4067,11 @@ bool D3D11VARenderer::setupRenderingResources()
 
     // Upscalers are quality options, so a failure keeps ordinary scaling. The
     // settings make them exclusive; LS1 wins if both are set, as on Linux.
-    const bool tenBit = (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_10BIT) != 0;
+    // When dithering, keep 8-bit streams at 10 bits through the upscaler too.
+    // Otherwise the color conversion would be rounded into an 8-bit
+    // intermediate, and the bands it creates there can't be dithered away later.
+    const bool tenBit = (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_10BIT) != 0 ||
+                        m_VideoDitherPixelShaders[0] != nullptr;
     if (m_DecoderParams.ls1Upscaling) {
         const QString dllPath = D3D11Ls1Upscaler::findLosslessScalingDll();
         if (dllPath.isEmpty()) {

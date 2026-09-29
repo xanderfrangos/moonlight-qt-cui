@@ -103,8 +103,8 @@ typedef struct _DECODER_PARAMETERS {
     bool gamescopeMailbox = false;
     bool gamescopeRepaint = false;
     bool smoothVrrFrameTiming;
-    // StreamingPreferences::DitheringMode. Dithers 10-bit video down to the
-    // output bit depth in the renderer rather than letting it be quantized
+    // StreamingPreferences::DitheringMode. Dithers video (8-bit, 10-bit SDR,
+    // and 10-bit HDR to a 10-bit output) down to the output bit depth in the renderer rather than letting it be quantized
     // without dithering. libplacebo honors the exact kernel; D3D11VA has a
     // single ordered kernel and approximates the rest. Other renderers ignore
     // this entirely.

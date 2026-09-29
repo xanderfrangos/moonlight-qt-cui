@@ -419,7 +419,7 @@ public:
     bool useIntraRefresh;
     bool enableHdr;
     bool enableYUV444;
-    // Dithering kernel used to reduce 10-bit video to the output bit depth in
+    // Dithering kernel used to reduce video to the output bit depth in
     // the renderer instead of letting it be quantized without dithering.
     // Renderers that cannot honor the exact kernel approximate it.
     int ditheringMode;

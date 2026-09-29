@@ -406,7 +406,7 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     parser.addToggleOption("performance-overlay", "show performance overlay");
     parser.addToggleOption("hdr", "HDR streaming");
     parser.addToggleOption("yuv444", "YUV 4:4:4 sampling, if supported");
-    parser.addChoiceOption("dithering", "dithering kernel used when 10-bit video must be reduced for output", m_DitheringModeMap.keys());
+    parser.addChoiceOption("dithering", "dithering kernel used when video is quantized for output", m_DitheringModeMap.keys());
     parser.addToggleOption("temporal-dithering", "a dither pattern that varies each frame");
     parser.addChoiceOption("deband", "debanding strength applied to the decoded frame", m_DebandModeMap.keys());
     parser.addChoiceOption("capture-system-keys", "capture system key combos", m_CaptureSysKeysModeMap.keys());

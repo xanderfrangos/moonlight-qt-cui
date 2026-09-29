@@ -35,6 +35,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_RcasShader;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_RcasPqShader;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_RcasDitherShader;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> m_RcasPqDitherShader;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_ConstantBuffer;
 
     ConstBuf m_Constants = {};

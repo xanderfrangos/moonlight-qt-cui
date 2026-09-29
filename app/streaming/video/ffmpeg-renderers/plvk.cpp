@@ -657,12 +657,12 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
     m_StreamHeight = params->height;
     m_Stream10Bit = (params->videoFormat & VIDEO_FORMAT_MASK_10BIT) != 0;
 
-    // Attach libplacebo's own dithering when the user asked for it and the
-    // stream carries more bits per component than a common display accepts.
+    // Attach libplacebo's own dithering when the user asked for it.
     // pl_render_fast_params leaves dither_params NULL, which disables dithering
     // entirely; combined with disable_10bit_sdr below that means 10-bit SDR is
     // otherwise quantized to an 8-bit backbuffer with nothing to break up the
-    // banding. libplacebo knows the target's bit depth, so there is no display
+    // banding. 8-bit streams benefit too: the color conversion and scaling
+    // produce values between 8-bit levels, which are otherwise just rounded. libplacebo knows the target's bit depth, so there is no display
     // query here and no need to exclude HDR: dithering runs last, after tone
     // mapping, against whatever the swapchain actually is.
     m_RenderParams = pl_render_fast_params;
@@ -673,8 +673,7 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
     // so a change to the upstream preset cannot silently undo it.
     m_RenderParams.force_low_bit_depth_fbos = false;
 
-    if (params->ditheringMode != StreamingPreferences::DM_OFF &&
-            (params->videoFormat & VIDEO_FORMAT_MASK_10BIT)) {
+    if (params->ditheringMode != StreamingPreferences::DM_OFF) {
         const char* kernelName;
 
         m_DitherParams = pl_dither_default_params;

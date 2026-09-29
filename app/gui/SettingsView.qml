@@ -1897,11 +1897,11 @@ Flickable {
                 Column {
                     width: parent.width
                     spacing: 5
-                    visible: SystemProperties.supportsVideoDithering && enableHdr.checked
+                    visible: SystemProperties.supportsVideoDithering
 
                     Label {
                         width: parent.width
-                        text: qsTr("Dither 10-bit video")
+                        text: qsTr("Dither video")
                         topPadding: 8
                         font.pointSize: 14
                         wrapMode: Text.Wrap
@@ -1954,7 +1954,7 @@ Flickable {
                         width: parent.width
                         wrapMode: Text.Wrap
                         text: StreamingPreferences.ditheringMode === StreamingPreferences.DM_OFF ?
-                                  qsTr("10-bit video is reduced to the output depth without dithering, which can show banding in gradients.") :
+                                  qsTr("Video is reduced to the output depth without dithering, which can show banding in gradients.") :
                               StreamingPreferences.ditheringMode === StreamingPreferences.DM_ORDERED ?
                                   qsTr("Cheapest kernel. Breaks up banding with a fixed pattern that can be visible up close.") :
                               StreamingPreferences.ditheringMode === StreamingPreferences.DM_BLUE_NOISE ?
@@ -1985,7 +1985,7 @@ Flickable {
                     Label {
                         width: parent.width
                         wrapMode: Text.Wrap
-                        text: qsTr("Only affects 10-bit SDR streams. Reconnect the stream after changing this setting.")
+                        text: qsTr("Applies to 8-bit, 10-bit SDR, and HDR streams. Reconnect the stream after changing this setting.")
                         bottomPadding: 10
                     }
                 }
