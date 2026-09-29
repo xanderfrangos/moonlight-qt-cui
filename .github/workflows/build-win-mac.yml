@@ -146,8 +146,8 @@ jobs:
         shell: pwsh
         run: |
           foreach ($path in @(
-            'build/tests-vrr/pyrowave/rtpqueue/release/tst_rtpvideoqueue.exe',
-            'build/tests-vrr/pyrowave/udpreceive/release/tst_udpreceive.exe'
+            'build/tests-vrr/pyrowave/release/tst_rtpvideoqueue.exe',
+            'build/tests-vrr/pyrowave/release/tst_udpreceive.exe'
           )) {
             if (!(Test-Path $path)) { throw "Missing $path" }
             & "./$path"

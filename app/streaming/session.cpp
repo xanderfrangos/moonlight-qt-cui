@@ -17,9 +17,11 @@
 
 #include <algorithm>
 
+// Header-only; the reassembly deadline callback is installed for every decoder
+#include "video/ffmpeg-renderers/pacer/vrr/receivedeadline.h"
+
 #ifdef HAVE_FFMPEG
 #include "video/ffmpeg.h"
-#include "video/ffmpeg-renderers/pacer/vrr/receivedeadline.h"
 #endif
 
 #ifdef HAVE_SLVIDEO
