@@ -80,16 +80,7 @@ static const std::array<const char*, D3D11VARenderer::PixelShaders::_COUNT> k_Vi
 // The same shaders built with DITHER_OUTPUT. They quantize to the output bit
 // depth with an ordered dither instead of letting the color conversion's
 // fractional result be rounded (or truncated further down the display
-// pipeline) into bands.
-typedef struct _DITHER_FRAME_CONST_BUF
-{
-    // Temporal dithering phase for this frame, in [0, 1)
-    float ditherPhase;
-
-    // Padding floats to end on a 16-byte boundary
-    float padding[3];
-} DITHER_FRAME_CONST_BUF, *PDITHER_FRAME_CONST_BUF;
-static_assert(sizeof(DITHER_FRAME_CONST_BUF) % 16 == 0, "Constant buffer sizes must be a multiple of 16");
+// pipeline) into bands. Their per-frame state is DITHER_FRAME_CONST_BUF.
 
 // Advancing the phase by an irrational fraction spreads successive frames
 // evenly over the threshold range instead of cycling through a short pattern.
@@ -340,6 +331,8 @@ D3D11VARenderer::D3D11VARenderer(int decoderSelectionPass)
       m_DitherStateChanged(false),
       m_TemporalDither(false),
       m_DitherPhase(0.0f),
+      m_DitherGrain(getDitherGrainPreset(StreamingPreferences::DG_OFF)),
+      m_DitherGrainPeakScale(getDitherGrainPeakScale(0.0f)),
       m_OverlayLock(0),
       m_HwDeviceContext(nullptr)
 {
@@ -371,6 +364,7 @@ D3D11VARenderer::~D3D11VARenderer()
 
     m_DitherFrameBuffer.Reset();
     m_DitherThresholdView.Reset();
+    m_DitherGrainNoiseView.Reset();
 
     for (auto& shader : m_VideoDebandPixelShaders) {
         shader.Reset();
@@ -1331,8 +1325,14 @@ void D3D11VARenderer::drawVideoPlanes(AVFrame* frame, ID3D11ShaderResourceView* 
 
 // Returns the bits per color component of the display we're presenting to, or
 // zero if the display pipeline won't tell us.
-int D3D11VARenderer::queryDisplayBitsPerComponent()
+// Also reports the display's peak brightness in nits when asked, or zero if it
+// doesn't know it.
+int D3D11VARenderer::queryDisplayBitsPerComponent(float* maxLuminance)
 {
+    if (maxLuminance != nullptr) {
+        *maxLuminance = 0.0f;
+    }
+
     if (!m_SwapChain) {
         return 0;
     }
@@ -1384,6 +1384,10 @@ int D3D11VARenderer::queryDisplayBitsPerComponent()
     DXGI_OUTPUT_DESC1 outputDesc;
     if (FAILED(output6->GetDesc1(&outputDesc))) {
         return 0;
+    }
+
+    if (maxLuminance != nullptr) {
+        *maxLuminance = outputDesc.MaxLuminance;
     }
 
     return (int)outputDesc.BitsPerColor;
@@ -1511,9 +1515,10 @@ void D3D11VARenderer::updateDebandConstants(const AVFrame* frame, int textureWid
     m_RenderDeviceContext->PSSetConstantBuffers(3, 1, m_DebandFrameBuffer.GetAddressOf());
 }
 
-// Fills the t3 threshold texture the dithering shaders read. Each entry gets
-// half a step of offset so the pattern is centered on the rounded value.
-bool D3D11VARenderer::createDitherThresholds(bool blueNoise)
+// Fills a threshold texture for the dithering shaders: t3, and t4 for the
+// grain. Each entry gets half a step of offset so the pattern is centered on
+// the rounded value.
+bool D3D11VARenderer::createDitherThresholds(bool blueNoise, ComPtr<ID3D11ShaderResourceView>& view)
 {
     const int size = blueNoise ? k_BlueNoiseSize : k_BayerSize;
     std::vector<float> thresholds(size * size);
@@ -1561,7 +1566,7 @@ bool D3D11VARenderer::createDitherThresholds(bool blueNoise)
         return false;
     }
 
-    hr = m_RenderDevice->CreateShaderResourceView(texture.Get(), nullptr, &m_DitherThresholdView);
+    hr = m_RenderDevice->CreateShaderResourceView(texture.Get(), nullptr, &view);
     if (FAILED(hr)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "ID3D11Device::CreateShaderResourceView() failed for the dither thresholds: %x",
@@ -1576,13 +1581,24 @@ bool D3D11VARenderer::createDitherThresholds(bool blueNoise)
 // call again whenever that display may have changed.
 void D3D11VARenderer::refreshDitherState()
 {
-    const int displayBits = queryDisplayBitsPerComponent();
+    float displayPeakNits;
+    const int displayBits = queryDisplayBitsPerComponent(&displayPeakNits);
     m_OutputBitsPerComponent.store(displayBits, std::memory_order_relaxed);
 
     // Nothing to do if this session never loaded the dithering shaders
     if (!m_VideoDitherPixelShaders[0]) {
         return;
     }
+
+    // HDR grain is measured against the display's own peak brightness.
+    // updateDitherFrameConstants() picks the new scale up on the next frame.
+    const float peakScale = getDitherGrainPeakScale(displayPeakNits);
+    if (m_DitherGrain.hdrHigh > 0.0f && peakScale != m_DitherGrainPeakScale) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Dither grain HDR peak: %.0f nits (display reports %.0f)",
+                    10000.0f / peakScale, displayPeakNits);
+    }
+    m_DitherGrainPeakScale = peakScale;
 
     // SDR frames are quantized to whichever is shallower: the swapchain or the
     // display behind it. An unreadable display depth is treated as 8-bit:
@@ -1613,6 +1629,49 @@ void D3D11VARenderer::refreshDitherState()
     }
 }
 
+// Brings b1 up to date for this frame: the temporal phase, and grain for the
+// frame's transfer function. The upload is skipped when nothing changed,
+// which without temporal dithering is almost every frame.
+void D3D11VARenderer::updateDitherFrameConstants(bool pq)
+{
+    if (m_TemporalDither) {
+        // Rotate the whole threshold set by a new phase each frame. The set
+        // stays uniformly spaced, so every frame remains a valid dither.
+        m_DitherPhase += k_DitherPhaseStep;
+        if (m_DitherPhase >= 1.0f) {
+            m_DitherPhase -= 1.0f;
+        }
+    }
+
+    DITHER_FRAME_CONST_BUF frameBuf = {};
+    frameBuf.ditherPhase = m_DitherPhase;
+    if (pq) {
+        frameBuf.grainHigh = m_DitherGrain.hdrHigh;
+        frameBuf.grainLow = m_DitherGrain.hdrLow;
+        frameBuf.grainLowBelow = m_DitherGrain.hdrLowBelow;
+        frameBuf.grainPq = 1.0f;
+        frameBuf.grainPeakScale = m_DitherGrainPeakScale;
+        frameBuf.grainPanelMax = getDitherGrainPanelMax(m_DitherGrainPeakScale);
+    }
+    else {
+        frameBuf.grainHigh = m_DitherGrain.sdrHigh;
+        frameBuf.grainLow = m_DitherGrain.sdrLow;
+        frameBuf.grainLowBelow = m_DitherGrain.sdrLowBelow;
+    }
+
+    if (memcmp(&frameBuf, &m_DitherFrameConstants, sizeof(frameBuf)) == 0) {
+        return;
+    }
+
+    D3D11_MAPPED_SUBRESOURCE mapping;
+    if (SUCCEEDED(m_RenderDeviceContext->Map(m_DitherFrameBuffer.Get(), 0,
+                                             D3D11_MAP_WRITE_DISCARD, 0, &mapping))) {
+        memcpy(mapping.pData, &frameBuf, sizeof(frameBuf));
+        m_RenderDeviceContext->Unmap(m_DitherFrameBuffer.Get(), 0);
+        m_DitherFrameConstants = frameBuf;
+    }
+}
+
 void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame, bool allowCscDither)
 {
     bool yuv444 = (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_YUV444);
@@ -1631,29 +1690,18 @@ void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame, boo
                                         (cscDither ? m_VideoDitherPixelShaders : m_VideoPixelShaders);
 
     if (dither && m_DitherFrameBuffer) {
-        if (m_TemporalDither) {
-            // Rotate the whole threshold set by a new phase each frame. The set
-            // stays uniformly spaced, so every frame remains a valid dither.
-            m_DitherPhase += k_DitherPhaseStep;
-            if (m_DitherPhase >= 1.0f) {
-                m_DitherPhase -= 1.0f;
-            }
-
-            D3D11_MAPPED_SUBRESOURCE mapping;
-            if (SUCCEEDED(m_RenderDeviceContext->Map(m_DitherFrameBuffer.Get(), 0,
-                                                     D3D11_MAP_WRITE_DISCARD, 0, &mapping))) {
-                DITHER_FRAME_CONST_BUF frameBuf = {};
-                frameBuf.ditherPhase = m_DitherPhase;
-                memcpy(mapping.pData, &frameBuf, sizeof(frameBuf));
-                m_RenderDeviceContext->Unmap(m_DitherFrameBuffer.Get(), 0);
-            }
-        }
+        updateDitherFrameConstants(pq);
 
         m_RenderDeviceContext->PSSetConstantBuffers(1, 1, m_DitherFrameBuffer.GetAddressOf());
 
-        // Rebound every frame like b1. Nothing else uses t3, so it stays put
-        // for the upscaler's final pass too.
-        m_RenderDeviceContext->PSSetShaderResources(3, 1, m_DitherThresholdView.GetAddressOf());
+        // Rebound every frame like b1. Nothing else uses t3 or t4, so they
+        // stay put for the upscaler's final pass too. t4 is only read with
+        // grain on, but binding it regardless keeps the shaders' inputs valid.
+        ID3D11ShaderResourceView* ditherViews[2] = {
+            m_DitherThresholdView.Get(),
+            m_DitherGrainNoiseView ? m_DitherGrainNoiseView.Get() : m_DitherThresholdView.Get(),
+        };
+        m_RenderDeviceContext->PSSetShaderResources(3, 2, ditherViews);
     }
 
     // PyroWave planes are exactly the frame size; D3D11VA surfaces may be padded
@@ -4286,8 +4334,9 @@ bool D3D11VARenderer::setupRenderingResources()
         }
 
         // A dynamic buffer so temporal dithering can rewrite the phase every
-        // frame without recreating it. It stays zero-filled (fixed pattern)
-        // when temporal dithering is off.
+        // frame without recreating it, and grain can follow the frame's
+        // transfer function. It stays zero-filled (fixed pattern, no grain)
+        // when both are off.
         if (m_VideoDitherPixelShaders[0]) {
             m_TemporalDither = m_DecoderParams.temporalDithering;
 
@@ -4319,7 +4368,7 @@ bool D3D11VARenderer::setupRenderingResources()
             }
         }
 
-        if (m_VideoDitherPixelShaders[0] && !createDitherThresholds(blueNoise)) {
+        if (m_VideoDitherPixelShaders[0] && !createDitherThresholds(blueNoise, m_DitherThresholdView)) {
             // The shaders read t3 unconditionally, so drop dithering rather
             // than sample an unbound texture.
             for (auto& shader : m_VideoDitherPixelShaders) {
@@ -4330,6 +4379,29 @@ bool D3D11VARenderer::setupRenderingResources()
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "D3D11 dithering kernel: %s",
                         blueNoise ? "blue noise" : "ordered (Bayer)");
+        }
+
+        // Grain only adds noise ahead of the quantizer set up above, so any
+        // failure here just leaves it off without touching the dithering.
+        if (m_VideoDitherPixelShaders[0] &&
+                m_DecoderParams.ditherGrainMode != StreamingPreferences::DG_OFF) {
+            // Grain is always blue noise. The ordered kernel's Bayer matrix
+            // would print its grid into the picture at grain strength.
+            if (blueNoise) {
+                m_DitherGrainNoiseView = m_DitherThresholdView;
+            }
+            else if (!createDitherThresholds(true, m_DitherGrainNoiseView)) {
+                m_DitherGrainNoiseView.Reset();
+            }
+
+            if (m_DitherGrainNoiseView) {
+                m_DitherGrain = getDitherGrainPreset(m_DecoderParams.ditherGrainMode);
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "Dither grain enabled: %s (SDR %.1f/%.1f steps, HDR %.1f/%.1f display steps)",
+                            m_DitherGrain.name,
+                            m_DitherGrain.sdrHigh, m_DitherGrain.sdrLow,
+                            m_DitherGrain.hdrHigh, m_DitherGrain.hdrLow);
+            }
         }
     }
 

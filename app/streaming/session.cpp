@@ -300,7 +300,8 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             int vrrDisplayRefreshHz,
                             [[maybe_unused]] bool* effectiveVrr, bool smoothVrrFrameTiming,
                             bool gamescopeMailbox, int vrrLatencyMode, bool gamescopeRepaint,
-                            int ditheringMode, bool temporalDithering, int debandMode)
+                            int ditheringMode, bool temporalDithering, int debandMode,
+                            int ditherGrainMode)
 {
     DECODER_PARAMETERS params = {};
 
@@ -327,6 +328,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.smoothVrrFrameTiming = smoothVrrFrameTiming;
     params.ditheringMode = ditheringMode;
     params.temporalDithering = temporalDithering;
+    params.ditherGrainMode = ditherGrainMode;
     params.debandMode = debandMode;
     params.fsr1Upscaling = fsr1Upscaling;
     params.fsr1RcasSharpness = fsr1RcasSharpness;
@@ -775,6 +777,7 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     m_PresentationSettings.smoothVrrFrameTiming = m_Preferences->smoothVrrFrameTiming;
     m_PresentationSettings.ditheringMode = m_Preferences->ditheringMode;
     m_PresentationSettings.temporalDithering = m_Preferences->temporalDithering;
+    m_PresentationSettings.ditherGrainMode = m_Preferences->ditherGrainMode;
     m_PresentationSettings.debandMode = m_Preferences->debandMode;
     m_PresentationSettings.fsr1Upscaling = m_Preferences->fsr1Upscaling;
     m_PresentationSettings.fsr1RcasSharpness = m_Preferences->fsr1RcasSharpness;
@@ -2970,7 +2973,8 @@ void Session::exec()
                                m_PresentationSettings.gamescopeRepaint,
                                m_PresentationSettings.ditheringMode,
                                m_PresentationSettings.temporalDithering,
-                               m_PresentationSettings.debandMode)) {
+                               m_PresentationSettings.debandMode,
+                               m_PresentationSettings.ditherGrainMode)) {
                 SDL_UnlockMutex(m_DecoderLock);
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                              "Failed to recreate decoder after reset");

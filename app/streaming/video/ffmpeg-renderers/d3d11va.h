@@ -22,6 +22,33 @@ extern "C" {
 #include <wrl/client.h>
 #include <wrl/wrappers/corewrappers.h>
 
+#include "streaming/video/dithergrain.h"
+
+// Per-frame dithering state at b1 of every dithering shader. Must match
+// DITHER_FRAME_CONST_BUF in d3d11_dither.hlsli.
+typedef struct _DITHER_FRAME_CONST_BUF
+{
+    // Temporal dithering phase for this frame, in [0, 1)
+    float ditherPhase;
+
+    // Grain amplitudes and the fraction of the range below which the low one
+    // applies. grainHigh is zero when grain is off.
+    float grainHigh;
+    float grainLow;
+    float grainLowBelow;
+
+    // Nonzero for PQ frames, whose grain is measured in the display's gamma
+    float grainPq;
+    // 10000 nits over the display's peak brightness
+    float grainPeakScale;
+    // The display-gamma value of the PQ maximum, in panel steps
+    float grainPanelMax;
+
+    // Padding float to end on a 16-byte boundary
+    float padding;
+} DITHER_FRAME_CONST_BUF, *PDITHER_FRAME_CONST_BUF;
+static_assert(sizeof(DITHER_FRAME_CONST_BUF) % 16 == 0, "Constant buffer sizes must be a multiple of 16");
+
 class D3D11VARenderer : public IFFmpegRenderer, public IVrrFramePresenter
 {
 public:
@@ -108,9 +135,11 @@ private:
     void renderOverlay(Overlay::OverlayType type);
     bool createOverlayVertexBuffer(Overlay::OverlayType type, int width, int height, Microsoft::WRL::ComPtr<ID3D11Buffer>& newVertexBuffer);
     void bindColorConversion(bool frameChanged, AVFrame* frame, bool allowCscDither);
-    int queryDisplayBitsPerComponent();
+    int queryDisplayBitsPerComponent(float* maxLuminance = nullptr);
     void refreshDitherState();
-    bool createDitherThresholds(bool blueNoise);
+    bool createDitherThresholds(bool blueNoise,
+                                Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>& view);
+    void updateDitherFrameConstants(bool pq);
     bool loadDebandShaders();
     void updateDebandConstants(const AVFrame* frame, int textureWidth, int textureHeight);
     void bindVideoVertexBuffer(bool frameChanged, AVFrame* frame);
@@ -297,6 +326,14 @@ private:
     // Tiled per-pixel thresholds read by every dithering shader at t3: blue
     // noise, or a Bayer matrix for the ordered kernel.
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_DitherThresholdView;
+    // Blue noise grain ahead of the quantizer (dithergrain.h). The noise at
+    // t4 is the t3 view itself unless the kernel is ordered. The peak scale
+    // follows the display the window is on.
+    DitherGrainPreset m_DitherGrain;
+    float m_DitherGrainPeakScale;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_DitherGrainNoiseView;
+    // What b1 last held, so it's only rewritten when something changes
+    DITHER_FRAME_CONST_BUF m_DitherFrameConstants = {};
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_VideoVertexBuffer;
     // Covers the whole window. FSR1 narrows the viewport and restores this.
     D3D11_VIEWPORT m_FullViewport = {};

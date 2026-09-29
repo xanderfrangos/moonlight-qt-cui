@@ -264,7 +264,8 @@ private:
                        bool* effectiveVrr = nullptr, bool smoothVrrFrameTiming = true,
                        bool gamescopeMailbox = false, int vrrLatencyMode = 0,
                        bool gamescopeRepaint = false, int ditheringMode = 0,
-                       bool temporalDithering = false, int debandMode = 0);
+                       bool temporalDithering = false, int debandMode = 0,
+                       int ditherGrainMode = 0);
 
     static
     void clStageStarting(int stage);
@@ -333,6 +334,7 @@ private:
         bool smoothVrrFrameTiming = true;
         int ditheringMode = 0;
         bool temporalDithering = false;
+        int ditherGrainMode = 0;
         int debandMode = 0;
         bool fsr1Upscaling = false;
         double fsr1RcasSharpness = 20.0;

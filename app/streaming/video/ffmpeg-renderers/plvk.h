@@ -11,13 +11,15 @@
 #include <libplacebo/log.h>
 #include <libplacebo/renderer.h>
 #include <libplacebo/vulkan.h>
-#ifdef Q_OS_LINUX
 #include <libplacebo/shaders/custom.h>
+#ifdef Q_OS_LINUX
 #include "ls1vulkan.h"
 #endif
 #include "overlaycompletion.h"
 #include "diagnostics/gputrace.h"
+#include "dithergrainhook.h"
 
+#include <array>
 #include <atomic>
 #include <deque>
 #include <mutex>
@@ -118,6 +120,7 @@ private:
     bool renderMappedImage(pl_renderer renderer, const pl_frame& source,
                            pl_frame target, const pl_render_params& params);
     pl_render_params renderParamsForFrame(const AVFrame* frame) const;
+    void buildHookLists();
     void updateUpscalingNeeded();
     std::unique_ptr<GpuTrace> m_GpuTrace;
     int64_t m_GpuTracePts = -1;
@@ -216,6 +219,15 @@ private:
     std::unique_ptr<Ls1VulkanHook> m_Ls1Hook;
     const pl_hook* m_Ls1HookPtr = nullptr;
 #endif
+    // Blue noise grain ahead of libplacebo's dithering, which still runs
+    // unchanged after it. See dithergrainhook.h.
+    std::unique_ptr<DitherGrainHook> m_DitherGrainHook;
+    // Hooks handed to libplacebo for SDR and PQ frames. Fixed once
+    // initialization finishes, so renders on any thread can read them.
+    std::array<const pl_hook*, 2> m_SdrHooks = {};
+    std::array<const pl_hook*, 2> m_PqHooks = {};
+    int m_NumSdrHooks = 0;
+    int m_NumPqHooks = 0;
     // Set once at initialization if an upscaler hook loaded
     const char* m_UpscalerName = nullptr;
     // LS1 leaves HDR frames unscaled

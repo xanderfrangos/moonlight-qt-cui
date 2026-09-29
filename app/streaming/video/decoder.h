@@ -113,6 +113,10 @@ typedef struct _DECODER_PARAMETERS {
     int ditheringMode = 0;
     // Vary the dither pattern per frame. Ignored when ditheringMode is off.
     bool temporalDithering = false;
+    // StreamingPreferences::DitherGrainMode. Blue noise grain added before the
+    // dithering quantizer, which still runs unchanged afterward. Ignored when
+    // ditheringMode is off. See dithergrain.h.
+    int ditherGrainMode = 0;
     // StreamingPreferences::DebandMode. libplacebo implements this, and the
     // D3D11VA renderer has a port of its shader.
     int debandMode = 0;

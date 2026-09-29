@@ -51,6 +51,7 @@
 #define SER_DITHERING "dithering"   // Retired bool, migrated to SER_DITHERINGMODE
 #define SER_DITHERINGMODE "ditheringmode"
 #define SER_TEMPORALDITHERING "temporaldithering"
+#define SER_DITHERGRAINMODE "dithergrainmode"
 #define SER_DEBANDMODE "debandmode"
 #define SER_FSR1UPSCALING "fsr1upscaling"
 #define SER_FSR1RCASSHARPNESS "fsr1rcassharpness"
@@ -181,6 +182,14 @@ void StreamingPreferences::reload()
         ditheringMode = settings.value(SER_DITHERING).toBool() ? DM_BLUE_NOISE : DM_OFF;
     }
     temporalDithering = settings.value(SER_TEMPORALDITHERING, false).toBool();
+    ditherGrainMode = DG_OFF;
+    if (settings.contains(SER_DITHERGRAINMODE)) {
+        bool validMode = false;
+        const int savedMode = settings.value(SER_DITHERGRAINMODE).toInt(&validMode);
+        if (validMode && savedMode >= DG_OFF && savedMode <= DG_STRONG) {
+            ditherGrainMode = savedMode;
+        }
+    }
     debandMode = DB_OFF;
     if (settings.contains(SER_DEBANDMODE)) {
         bool validMode = false;
@@ -611,6 +620,7 @@ void StreamingPreferences::save()
     settings.setValue(SER_YUV444, enableYUV444);
     settings.setValue(SER_DITHERINGMODE, ditheringMode);
     settings.setValue(SER_TEMPORALDITHERING, temporalDithering);
+    settings.setValue(SER_DITHERGRAINMODE, ditherGrainMode);
     settings.setValue(SER_DEBANDMODE, debandMode);
     settings.setValue(SER_FSR1UPSCALING, fsr1Upscaling);
     settings.setValue(SER_FSR1RCASSHARPNESS, fsr1RcasSharpness);

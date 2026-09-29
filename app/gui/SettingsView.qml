@@ -2000,6 +2000,77 @@ Flickable {
                         ToolTip.text: qsTr("Stops the dither pattern from sitting still on screen, which can otherwise look like a faint fixed texture during motion. Some panels show this as flicker, so try it both ways.")
                     }
 
+                    // Grain runs ahead of the dithering above and never
+                    // replaces it, so it's only offered while dithering is on.
+                    Label {
+                        width: parent.width
+                        text: qsTr("Blue noise grain")
+                        topPadding: 8
+                        font.pointSize: 12
+                        wrapMode: Text.Wrap
+                        visible: StreamingPreferences.ditheringMode !== StreamingPreferences.DM_OFF
+                    }
+
+                    AutoResizingComboBox {
+                        id: ditherGrainComboBox
+                        textRole: "text"
+                        visible: StreamingPreferences.ditheringMode !== StreamingPreferences.DM_OFF
+                        model: ListModel {
+                            id: ditherGrainListModel
+                            ListElement {
+                                text: qsTr("Off")
+                                val: StreamingPreferences.DG_OFF
+                            }
+                            ListElement {
+                                text: qsTr("Light")
+                                val: StreamingPreferences.DG_LIGHT
+                            }
+                            ListElement {
+                                text: qsTr("Medium")
+                                val: StreamingPreferences.DG_MEDIUM
+                            }
+                            ListElement {
+                                text: qsTr("Strong")
+                                val: StreamingPreferences.DG_STRONG
+                            }
+                        }
+                        currentIndex: {
+                            for (var i = 0; i < ditherGrainListModel.count; i++) {
+                                if (ditherGrainListModel.get(i).val === StreamingPreferences.ditherGrainMode) {
+                                    return i
+                                }
+                            }
+                            return 0
+                        }
+                        onActivated: {
+                            StreamingPreferences.ditherGrainMode = ditherGrainListModel.get(currentIndex).val
+                        }
+                        Component.onCompleted: {
+                            recalculateWidth()
+                            languageChanged.connect(recalculateWidth)
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        visible: StreamingPreferences.ditheringMode !== StreamingPreferences.DM_OFF
+                        text: StreamingPreferences.ditherGrainMode === StreamingPreferences.DG_OFF ?
+                                  qsTr("Dithering adds only the noise needed to reach the output depth.") :
+                              StreamingPreferences.ditherGrainMode === StreamingPreferences.DG_LIGHT ?
+                                  qsTr("Faint noise that softens mild banding already in the picture.") :
+                              StreamingPreferences.ditherGrainMode === StreamingPreferences.DG_MEDIUM ?
+                                  qsTr("Visible fine grain that hides most banding in dark scenes.") :
+                                  qsTr("Lilium's ReShade defaults. Hides heavy banding behind clearly visible grain.")
+                    }
+
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        visible: StreamingPreferences.ditheringMode !== StreamingPreferences.DM_OFF
+                        text: qsTr("Adds blue noise before dithering, so the reduction to the output depth is unchanged. HDR grain is sized to your display's own brightness steps, and pure black stays black. Stacks with the grain from Reduce banding.")
+                    }
+
                     Label {
                         width: parent.width
                         wrapMode: Text.Wrap

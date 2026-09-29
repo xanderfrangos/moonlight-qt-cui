@@ -345,6 +345,9 @@ PlVkRenderer::~PlVkRenderer()
         if (m_Fsr1HdrHook) pl_mpv_user_shader_destroy(&m_Fsr1HdrHook);
         if (m_Fsr1Hook) pl_mpv_user_shader_destroy(&m_Fsr1Hook);
 #endif
+        m_NumSdrHooks = 0;
+        m_NumPqHooks = 0;
+        m_DitherGrainHook.reset();
         pl_swapchain_destroy(&m_Swapchain);
 #ifdef Q_OS_DARWIN
         m_MetalTextureFactory.reset();
@@ -1031,6 +1034,24 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
     }
 #endif
 
+    // Grain only adds noise ahead of libplacebo's dithering, so it needs that
+    // dithering on, and a failure just leaves it off.
+    if (params->ditheringMode != StreamingPreferences::DM_OFF &&
+            params->ditherGrainMode != StreamingPreferences::DG_OFF) {
+        const DitherGrainPreset preset = getDitherGrainPreset(params->ditherGrainMode);
+        m_DitherGrainHook = DitherGrainHook::create(m_Vulkan->gpu, preset, params->temporalDithering);
+        if (m_DitherGrainHook) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Dither grain enabled: %s (SDR %.1f/%.1f steps, HDR %.1f/%.1f display steps)",
+                        preset.name, preset.sdrHigh, preset.sdrLow, preset.hdrHigh, preset.hdrLow);
+        }
+        else {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "Dither grain initialization failed; dithering without grain");
+        }
+    }
+
+    buildHookLists();
     updateUpscalingNeeded();
     return true;
 }
@@ -2748,20 +2769,35 @@ bool PlVkRenderer::restoreFixedPresentation(VrrFallbackReason reason)
 pl_render_params PlVkRenderer::renderParamsForFrame(const AVFrame* frame) const
 {
     pl_render_params params = m_RenderParams;
+    const bool pq = frame != nullptr && frame->color_trc == AVCOL_TRC_SMPTE2084;
+    if (pq ? m_NumPqHooks : m_NumSdrHooks) {
+        params.hooks = pq ? m_PqHooks.data() : m_SdrHooks.data();
+        params.num_hooks = pq ? m_NumPqHooks : m_NumSdrHooks;
+    }
+    return params;
+}
+
+// Collects the hooks each kind of frame runs, once every hook has loaded.
+// The upscaler scales the image before the grain hook sees the output.
+void PlVkRenderer::buildHookLists()
+{
+    m_NumSdrHooks = 0;
+    m_NumPqHooks = 0;
 #ifdef Q_OS_LINUX
     if (m_Ls1HookPtr != nullptr) {
-        params.hooks = &m_Ls1HookPtr;
-        params.num_hooks = 1;
+        // LS1 checks for SDR itself
+        m_SdrHooks[m_NumSdrHooks++] = m_Ls1HookPtr;
+        m_PqHooks[m_NumPqHooks++] = m_Ls1HookPtr;
     }
     else if (m_Fsr1Hook != nullptr) {
-        const bool pq = frame != nullptr && frame->color_trc == AVCOL_TRC_SMPTE2084;
-        params.hooks = pq && m_Fsr1HdrHook != nullptr ? &m_Fsr1HdrHook : &m_Fsr1Hook;
-        params.num_hooks = 1;
+        m_SdrHooks[m_NumSdrHooks++] = m_Fsr1Hook;
+        m_PqHooks[m_NumPqHooks++] = m_Fsr1HdrHook != nullptr ? m_Fsr1HdrHook : m_Fsr1Hook;
     }
-#else
-    Q_UNUSED(frame)
 #endif
-    return params;
+    if (m_DitherGrainHook) {
+        m_SdrHooks[m_NumSdrHooks++] = m_DitherGrainHook->hook();
+        m_PqHooks[m_NumPqHooks++] = m_DitherGrainHook->hook();
+    }
 }
 
 bool PlVkRenderer::renderMappedImage(pl_renderer renderer, const pl_frame& source,
@@ -2829,6 +2865,13 @@ bool PlVkRenderer::renderMappedImage(pl_renderer renderer, const pl_frame& sourc
 
     targetFrame.num_overlays = int(overlays.size());
     targetFrame.overlays = overlays.data();
+
+    // Renders never overlap (the lock above on Linux, one render thread
+    // elsewhere), so the grain's parameters can't change under one
+    if (m_DitherGrainHook) {
+        m_DitherGrainHook->setTarget(targetFrame);
+    }
+
     return pl_render_image(renderer, &source, &targetFrame, &params);
 }
 

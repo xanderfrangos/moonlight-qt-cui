@@ -30,6 +30,28 @@ live stream):
   an 8x8 Bayer matrix for Fast. Error diffusion is libplacebo-only, so the UI
   hides it unless Vulkan is forced. With dithering on, upscaler intermediates
   stay 10-bit even for 8-bit streams, and FSR1 has a PQ dither RCAS variant.
+- **Blue noise grain (2026-09-29):** the opt-in `ditherGrainMode` (Off/Light/
+  Medium/Strong, `--dither-grain`) adapts Lilium's ReShade
+  `lilium__blue_noise_dithering.fx` (GPL-3.0) as extra blue noise added
+  *ahead of* the dithering quantizer, never in place of it, so it only applies
+  while dithering is on. Presets and the display model are in `dithergrain.h`.
+  Per channel, the noise is clamped so it never leaves [0, 1] (no clipping
+  bias; exact black and white stay put), and channels with zero amplitude pass
+  through unchanged. SDR amplitude is in steps of the quantizer's own depth. PQ
+  amplitude is sized in 10-bit steps of the display's gamma 2.2 response scaled
+  to its peak (D3D11: `DXGI_OUTPUT_DESC1.MaxLuminance`; libplacebo: the
+  target's `hdr.max_luma`; 1000 nits if unknown), then added symmetrically in
+  PQ. D3D11 does this in `addDitherGrain()` in `d3d11_dither.hlsli`, reading
+  b1 (now 32 bytes, rewritten only on change) and blue noise at t4. Vulkan
+  uses `DitherGrainHook`, a native `PL_HOOK_OUTPUT` hook with the
+  `PL_HOOK_SIG_COLOR` signature, so its code is appended to libplacebo's final
+  pass before `pl_shader_dither()`. An mpv-style user shader was tried and
+  rejected: it forces an fp16 intermediate that biased near-white 8-bit
+  output by about -0.13 steps and 10-bit PQ by about -0.5 before dithering. A
+  GPU harness (2026-09-29, one Windows GPU, not a live stream) found D3D11
+  grain-off output bit-identical to the previous shader, and grain-on per-level
+  bias of at most 0.012 steps (SDR) and 0.11 (PQ strong, within sampling noise)
+  in both renderers, including libplacebo upscaling into a letterboxed crop.
 - **Debanding:** `d3d11_deband.hlsli` ports libplacebo's `pl_shader_deband()`
   into `*_deband_pixel` and `*_deband_dither_pixel` variants of the
   4:2:0/AYUV/Y410 shaders (constants at b3, per-frame seed). It debands each

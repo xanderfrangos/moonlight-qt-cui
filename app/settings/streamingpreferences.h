@@ -153,6 +153,18 @@ public:
     };
     Q_ENUM(DitheringMode)
 
+    // Blue noise grain added ahead of the dithering quantizer, after Lilium's
+    // ReShade blue noise dithering. Persisted IDs must stay stable when
+    // changing the user-facing names.
+    enum DitherGrainMode
+    {
+        DG_OFF = 0,
+        DG_LIGHT = 1,
+        DG_MEDIUM = 2,
+        DG_STRONG = 3,
+    };
+    Q_ENUM(DitherGrainMode)
+
     // Debanding strength. Persisted IDs must stay stable when changing the
     // user-facing names.
     enum DebandMode
@@ -315,6 +327,7 @@ public:
     Q_PROPERTY(bool enableYUV444 MEMBER enableYUV444 NOTIFY enableYUV444Changed)
     Q_PROPERTY(int ditheringMode MEMBER ditheringMode NOTIFY ditheringModeChanged)
     Q_PROPERTY(bool temporalDithering MEMBER temporalDithering NOTIFY temporalDitheringChanged)
+    Q_PROPERTY(int ditherGrainMode MEMBER ditherGrainMode NOTIFY ditherGrainModeChanged)
     Q_PROPERTY(int debandMode MEMBER debandMode NOTIFY debandModeChanged)
     Q_PROPERTY(bool fsr1Upscaling MEMBER fsr1Upscaling NOTIFY fsr1UpscalingChanged)
     Q_PROPERTY(double fsr1RcasSharpness MEMBER fsr1RcasSharpness NOTIFY fsr1RcasSharpnessChanged)
@@ -426,6 +439,10 @@ public:
     // Vary the dither pattern per frame so it stops sitting still in screen
     // space. Off by default because it can alias on some LCD panels.
     bool temporalDithering;
+    // DitherGrainMode. Extra blue noise that hides banding already in the
+    // image. It runs ahead of the dithering quantizer and never replaces it,
+    // so it only applies while ditheringMode is on.
+    int ditherGrainMode;
     // Reconstruct banded gradients in the decoded frame before quantization.
     // Unlike dithering this can fix banding that arrived in the stream, at
     // the cost of some fine detail.
@@ -478,6 +495,7 @@ signals:
     void enableYUV444Changed();
     void ditheringModeChanged();
     void temporalDitheringChanged();
+    void ditherGrainModeChanged();
     void debandModeChanged();
     void fsr1UpscalingChanged();
     void fsr1RcasSharpnessChanged();

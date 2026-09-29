@@ -350,6 +350,12 @@ StreamCommandLineParser::StreamCommandLineParser()
         {"high",     StreamingPreferences::DM_ERROR_DIFFUSION},
         {"highest",  StreamingPreferences::DM_ERROR_DIFFUSION_HQ},
     };
+    m_DitherGrainModeMap = {
+        {"off",    StreamingPreferences::DG_OFF},
+        {"light",  StreamingPreferences::DG_LIGHT},
+        {"medium", StreamingPreferences::DG_MEDIUM},
+        {"strong", StreamingPreferences::DG_STRONG},
+    };
     m_DebandModeMap = {
         {"off",    StreamingPreferences::DB_OFF},
         {"grain",  StreamingPreferences::DB_GRAIN_ONLY},
@@ -408,6 +414,7 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     parser.addToggleOption("yuv444", "YUV 4:4:4 sampling, if supported");
     parser.addChoiceOption("dithering", "dithering kernel used when video is quantized for output", m_DitheringModeMap.keys());
     parser.addToggleOption("temporal-dithering", "a dither pattern that varies each frame");
+    parser.addChoiceOption("dither-grain", "blue noise grain added before dithering", m_DitherGrainModeMap.keys());
     parser.addChoiceOption("deband", "debanding strength applied to the decoded frame", m_DebandModeMap.keys());
     parser.addChoiceOption("capture-system-keys", "capture system key combos", m_CaptureSysKeysModeMap.keys());
     parser.addChoiceOption("video-codec", "video codec", m_VideoCodecMap.keys());
@@ -553,6 +560,11 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
 
     // Resolve --temporal-dithering and --no-temporal-dithering options
     preferences->temporalDithering = parser.getToggleOptionValue("temporal-dithering", preferences->temporalDithering);
+
+    // Resolve --dither-grain option
+    if (parser.isSet("dither-grain")) {
+        preferences->ditherGrainMode = mapValue(m_DitherGrainModeMap, parser.getChoiceOptionValue("dither-grain"));
+    }
 
     // Resolve --deband option
     if (parser.isSet("deband")) {

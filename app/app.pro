@@ -273,6 +273,7 @@ HEADERS += \
     gui/computermodel.h \
     gui/appmodel.h \
     streaming/video/debandpresets.h \
+    streaming/video/dithergrain.h \
     streaming/video/decoder.h \
     streaming/vrrratepolicy.h \
     streaming/bandwidth.h \
@@ -418,9 +419,11 @@ libplacebo {
     DEFINES += HAVE_LIBPLACEBO_VULKAN
     SOURCES += \
         streaming/video/ffmpeg-renderers/plvk.cpp \
-        streaming/video/ffmpeg-renderers/plvk_c.c
+        streaming/video/ffmpeg-renderers/plvk_c.c \
+        streaming/video/ffmpeg-renderers/dithergrainhook.cpp
     HEADERS += \
         streaming/video/ffmpeg-renderers/plvk.h \
+        streaming/video/ffmpeg-renderers/dithergrainhook.h \
         streaming/video/ffmpeg-renderers/vrrpreparedframe.h \
         streaming/video/ffmpeg-renderers/plvkpresentation.h \
         streaming/video/ffmpeg-renderers/plvkswapchain.h
