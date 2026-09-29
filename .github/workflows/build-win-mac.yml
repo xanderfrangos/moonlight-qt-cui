@@ -140,6 +140,20 @@ jobs:
           & ./build/tests-vrr/haptics/release/tst_dualsensehaptics.exe
           if ($LASTEXITCODE -ne 0) { throw "DualSense haptics tests failed: $LASTEXITCODE" }
 
+      - name: Test PyroWave packet handling (Windows x64)
+        timeout-minutes: 2
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($path in @(
+            'build/tests-vrr/pyrowave/rtpqueue/release/tst_rtpvideoqueue.exe',
+            'build/tests-vrr/pyrowave/udpreceive/release/tst_udpreceive.exe'
+          )) {
+            if (!(Test-Path $path)) { throw "Missing $path" }
+            & "./$path"
+            if ($LASTEXITCODE -ne 0) { throw "$path failed: $LASTEXITCODE" }
+          }
+
       - name: Stage and smoke-test VRR replay (Windows x64)
         if: runner.os == 'Windows'
         timeout-minutes: 2
@@ -201,6 +215,7 @@ jobs:
           } else {
             bash scripts/generate-dmg.sh Release
           }
+          if ($LASTEXITCODE -ne 0) { throw "Package build failed: $LASTEXITCODE" }
 
       - name: Stage Windows installer bundle
         if: runner.os == 'Windows'

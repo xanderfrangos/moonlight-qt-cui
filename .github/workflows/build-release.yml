@@ -84,15 +84,16 @@ jobs:
           flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
             flatpak-repo "Moonlight-VRR-$CI_VERSION-linux-x86_64.flatpak" \
             com.moonlight_stream.Moonlight master
-      - name: Verify exported source and Gamescope patch
+      - name: Verify release source and Gamescope patch
         run: |
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          manifest = json.loads(Path('flatpak-build/files/manifest.json').read_text())
+          manifest = json.loads(Path('packaging/flatpak/com.moonlight_stream.Moonlight.json').read_text())
           modules = {m['name']: m for m in manifest['modules']}
           assert modules['moonlight']['sources'][0]['commit'] == os.environ['GITHUB_SHA']
           assert any(s['type'] == 'patch' and 'libplacebo-disable-internally-synchronized-queues.patch' in s['path'] for s in modules['libplacebo']['sources'])
+          assert Path('flatpak-build/files/bin/moonlight').is_file()
           PY
       - uses: actions/upload-artifact@v6
         with:
