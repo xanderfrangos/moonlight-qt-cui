@@ -999,6 +999,7 @@ void FFmpegVideoDecoder::addVideoStats(VIDEO_STATS& src, VIDEO_STATS& dst)
     dst.totalFrames += src.totalFrames;
     dst.networkDroppedFrames += src.networkDroppedFrames;
     dst.pacerDroppedFrames += src.pacerDroppedFrames;
+    dst.decoderSkippedFrames += src.decoderSkippedFrames;
     // Keep the latest 30-interval snapshot instead of widening its window when
     // merging the one-second overlay windows or whole-session log statistics.
     // A newer unavailable snapshot must also replace older valid evidence.
@@ -1570,10 +1571,12 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
                        length - offset,
                        "Frames dropped by your network connection: %.2f%%\n"
                        "Frames dropped by client pacing: %.2f%%\n"
+                       "Frames skipped before decoding: %.2f%%\n"
                        "Average network latency: %s\n"
                        "Average decoding time: %.2f ms (waiting for the decoder %.2f ms)\n",
                        (float)stats.networkDroppedFrames / stats.totalFrames * 100,
                        (float)stats.pacerDroppedFrames / stats.decodedFrames * 100,
+                       (float)stats.decoderSkippedFrames / stats.totalFrames * 100,
                        rttString,
                        (double)(stats.totalDecodeTimeUs / 1000.0) / stats.decodedFrames,
                        (double)(stats.totalDecodeQueueTimeUs / 1000.0) / stats.decodedFrames);
@@ -1650,10 +1653,10 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
                 reason = recovery;
                 break;
             case Action::Release:
-                reason = "Shrinking - timing has stayed within the target";
+                reason = "Shrinking - clean playback has earned gradual recovery";
                 break;
             case Action::Minimum:
-                reason = "Minimum - timing is within the target";
+                reason = "Minimum - buffer is at its configured floor";
                 break;
             case Action::NotAbsorbable:
                 reason = "Holding - waiting for a stable workload before adjusting";
@@ -3145,6 +3148,14 @@ void FFmpegVideoDecoder::decoderThreadProc()
                                                        reassembledUs,
                                                        decodeSubmitUs);
                         pacedFrame.setDecodeHoldUs(decodeHoldUs);
+#ifdef HAVE_PYROWAVE
+                        // Shared-surface output (Linux Vulkan, Windows D3D11
+                        // interop) returns at submission, not completion.
+                        if (m_PyroWaveActive) {
+                            pacedFrame.setDecoderOutputComplete(
+                                !m_PyroWave->hasAsynchronousOutput());
+                        }
+#endif
                         const auto handoffBeginUs = gpuTrace ? LiGetMicroseconds() : 0;
                         m_Pacer->submitFrame(std::move(pacedFrame));
                         if (gpuTrace) gpuTrace->record({"decoder_handoff", rtpTimestamp,
@@ -3284,13 +3295,30 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
     m_ActiveWndVideoStats.totalFrames++;
 
     // Every PyroWave frame decodes on its own, so a frame that has waited
-    // more than two frame periods while a newer one is queued is dropped
-    // unopened. Decoding it would cost the GPU time the queue needs to drain,
-    // and it would only be shown late or discarded by the pacer.
+    // more than two source frame periods while a newer one is queued is
+    // dropped unopened. Decoding it would cost the GPU time the queue needs to
+    // drain, and it would only be shown late or discarded by the pacer. Use
+    // the source's actual cadence: below the negotiated rate, one brief decode
+    // stall must not discard frames the pacer can still present.
+    if (m_PyroWaveActive) {
+        if (du->frameNumber == m_PyroWaveLastFrameNumber + 1) {
+            const uint64_t intervalUs =
+                uint64_t(uint32_t(du->rtpTimestamp - m_PyroWaveLastRtp)) * 100 / 9;
+            if (intervalUs > 0 && intervalUs < 100000) {
+                m_PyroWaveSourcePeriodUs = m_PyroWaveSourcePeriodUs == 0 ? intervalUs :
+                    m_PyroWaveSourcePeriodUs - m_PyroWaveSourcePeriodUs / 16 + intervalUs / 16;
+            }
+        }
+        m_PyroWaveLastFrameNumber = du->frameNumber;
+        m_PyroWaveLastRtp = du->rtpTimestamp;
+    }
     if (m_PyroWaveActive && m_FramesIn != 0 && m_StreamFps > 0) {
         const uint64_t waitUs = LiGetMicroseconds() - du->enqueueTimeUs;
-        if (waitUs > 2000000ULL / m_StreamFps && LiGetPendingVideoFrames() > 0) {
+        const uint64_t periodUs = std::max<uint64_t>(1000000ULL / m_StreamFps,
+                                                     m_PyroWaveSourcePeriodUs);
+        if (waitUs > 2 * periodUs && LiGetPendingVideoFrames() > 0) {
             m_PyroWaveStaleSkips++;
+            m_ActiveWndVideoStats.decoderSkippedFrames++;
             if (m_PyroWaveSkipRun++ == 0) m_PyroWaveSkipRunWaitUs = waitUs;
             return DR_OK;
         }

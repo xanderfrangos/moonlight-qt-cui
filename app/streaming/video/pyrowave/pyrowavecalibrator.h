@@ -9,11 +9,12 @@
 #include <atomic>
 #include <memory>
 
+class ComputerManager;
+
 // Finds, for each resolution and PyroWave format at one frame rate, the
 // highest bitrate at which this device decodes and draws 99% of frames within
-// the frame period, capped by its wired link speed, and
-// grades it on the codec author's quality scale. It does not change settings,
-// and it cannot measure the host or LAN.
+// the frame period, capped by a measured host-to-client download and both
+// known wired link speeds. It does not change settings.
 class PyroWaveCalibrator : public QObject
 {
     Q_OBJECT
@@ -34,8 +35,9 @@ public:
     // displayWidth/displayHeight size the render that each test frame goes
     // through, as a stream drawing to that display would. Zero renders at the
     // stream's own resolution.
-    Q_INVOKABLE void start(int fps, int displayWidth = 0, int displayHeight = 0);
-    // Stops after the format being tested; its finished results stay.
+    Q_INVOKABLE void start(ComputerManager* manager, const QString& hostUuid, int fps,
+                           int displayWidth = 0, int displayHeight = 0);
+    // Stops after the current network transfer or format; finished results stay.
     Q_INVOKABLE void cancel();
 
 signals:

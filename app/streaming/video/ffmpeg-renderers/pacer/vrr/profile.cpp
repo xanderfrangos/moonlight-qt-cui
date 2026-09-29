@@ -97,4 +97,53 @@ bool saveProfile(const QString& path, const QString& key, const Reserve& reserve
     QSaveFile file(path);
     return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size() && file.commit();
 }
+
+static QJsonObject readStartDelays(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() > 65536) return {};
+    const auto root = QJsonDocument::fromJson(file.read(65537)).object();
+    if (root.value("version").toInt() != 1) return {};
+    return root.value("entries").toObject();
+}
+
+uint64_t loadStartDelay(const QString& path, const QString& key)
+{
+    if (key.isEmpty()) return 0;
+    const auto entry = readStartDelays(path).value(key).toObject();
+    const auto age = QDateTime::currentSecsSinceEpoch() - entry.value("updated").toInteger();
+    if (age < 0 || age > 14 * 86400) return 0;
+    const auto delay = entry.value("delay_us").toInteger(0);
+    return delay > 0 && delay <= 1000000 ? uint64_t(delay) : 0;
+}
+
+bool saveStartDelay(const QString& path, const QString& key, uint64_t delayUs)
+{
+    if (key.isEmpty() || delayUs == 0 || delayUs > 1000000) return false;
+    if (!QDir().mkpath(QFileInfo(path).absolutePath())) return false;
+    QLockFile lock(path + ".lock");
+    if (!lock.tryLock(0)) return false;
+    auto entries = readStartDelays(path);
+    const auto now = QDateTime::currentSecsSinceEpoch();
+    for (const auto& name : entries.keys()) {
+        const auto age = now - entries.value(name).toObject().value("updated").toInteger();
+        if (age < 0 || age > 14 * 86400) entries.remove(name);
+    }
+    entries.remove(key);
+    while (entries.size() >= 16) {
+        QString oldest;
+        qint64 oldestTime = now + 1;
+        for (auto i = entries.begin(); i != entries.end(); ++i) {
+            const auto time = i.value().toObject().value("updated").toInteger();
+            if (time < oldestTime) { oldestTime = time; oldest = i.key(); }
+        }
+        if (oldest.isEmpty()) return false;
+        entries.remove(oldest);
+    }
+    entries.insert(key, QJsonObject{{"updated", now}, {"delay_us", qint64(delayUs)}});
+    const auto bytes = QJsonDocument(QJsonObject{{"version", 1}, {"entries", entries}})
+        .toJson(QJsonDocument::Compact);
+    QSaveFile file(path);
+    return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size() && file.commit();
+}
 }

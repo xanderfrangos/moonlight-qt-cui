@@ -334,6 +334,7 @@ PlVkRenderer::~PlVkRenderer()
         if (m_Vulkan) {
             for (auto& texture : m_PreparationTextures) pl_tex_destroy(m_Vulkan->gpu, &texture);
             for (auto& texture : m_PreparationFreeTextures) pl_tex_destroy(m_Vulkan->gpu, &texture);
+            for (auto& texture : m_DeferredTextures) pl_tex_destroy(m_Vulkan->gpu, &texture);
         }
 #endif
         pl_renderer_destroy(&m_Renderer);
@@ -1178,6 +1179,11 @@ void PlVkRenderer::selectPresentationMode(PDECODER_PARAMETERS params)
     if (mode) {
         m_VkPresentMode = *mode;
         m_VrrFallbackReason = VrrFallbackReason::NoFallback;
+#ifdef Q_OS_LINUX
+        // Render offscreen and acquire only at the target: a swapchain image
+        // held across the target wait lets the next decode delay its flip.
+        m_DeferredAcquireEnabled = *mode == VK_PRESENT_MODE_MAILBOX_KHR;
+#endif
         if (surface == PlVkVrrSurface::Gamescope) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "Gamescope VRR selected %s application presentation (WSI requested: %s; Mailbox experiment: %s); "
@@ -1600,6 +1606,22 @@ bool PlVkRenderer::acquirePendingSwapchainFrame(
     m_HasPendingSwapchainFrame = true;
 #ifdef Q_OS_LINUX
     updatePreparationTarget();
+    if (m_DeferredAcquireEnabled) {
+        const auto fbo = m_SwapchainFrame.fbo;
+        m_DeferredTemplateValid = fbo && fbo->params.format && fbo->params.blit_dst &&
+            (fbo->params.format->caps & PL_FMT_CAP_BLITTABLE) &&
+            (fbo->params.format->caps & PL_FMT_CAP_RENDERABLE);
+        if (m_DeferredTemplateValid) {
+            m_DeferredTemplate = m_SwapchainFrame;
+            m_DeferredTemplate.fbo = nullptr;
+            m_DeferredTextureParams = {};
+            m_DeferredTextureParams.w = fbo->params.w;
+            m_DeferredTextureParams.h = fbo->params.h;
+            m_DeferredTextureParams.format = fbo->params.format;
+            m_DeferredTextureParams.renderable = true;
+            m_DeferredTextureParams.blit_src = true;
+        }
+    }
 #endif
 
 #ifdef PLVK_USE_EARLY_RENDER_TO_WAIT
@@ -1689,6 +1711,29 @@ void PlVkRenderer::gpuRenderInfo(void* opaque, const pl_render_info* info)
 
 uint64_t PlVkRenderer::waitForDecode(AVFrame* frame)
 {
+#if defined(HAVE_PYROWAVE) && defined(Q_OS_LINUX)
+    if (frame != nullptr && m_PyroWavePool && m_PyroWavePool->ownsFrame(frame)) {
+        // These AVFrames use planar software format descriptors, but their
+        // pixels are still being decoded on Vulkan. Establish completion
+        // before the worker maps source time and learns decode/flip overlap.
+        const uint64_t startUs = LiGetMicroseconds();
+        const VkResult status = m_PyroWavePool->waitForFrame(
+            frame, kVulkanGpuReadyTimeoutUs * 1000);
+        const uint64_t endUs = LiGetMicroseconds();
+        if (m_GpuTrace) m_GpuTrace->record({"pyrowave_decode_sync", frame->pts,
+            uint64_t(frame->pkt_dts), startUs, endUs, 0, status});
+        if (status != VK_SUCCESS) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "PyroWave GPU decode completion wait failed: %d", int(status));
+            m_VrrFallbackReason = VrrFallbackReason::AdaptivePresentationUnavailable;
+            queueRenderDeviceReset();
+            // Failed waits are not completion observations. checkSupport()
+            // rejects this frame before it can be prepared or presented.
+            return 0;
+        }
+        return endUs >= startUs ? endUs - startUs : 0;
+    }
+#endif
 #ifdef HAVE_LIBVA
     if (frame == nullptr || frame->format != AV_PIX_FMT_VAAPI ||
             frame->hw_frames_ctx == nullptr) {
@@ -2335,17 +2380,42 @@ VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
     // libplacebo's AV_HWFRAME_MAP_READ import validates that dependency again;
     // another explicit vaSyncSurface() here only re-synchronizes the same VA
     // surface and cannot make it ready sooner.
+    bool deferred = false;
+#ifdef Q_OS_LINUX
+    m_DeferredPreparedTexture = nullptr;
+    if (m_DeferredAcquireEnabled && m_DeferredTemplateValid && !windowChanged &&
+            m_Vulkan != nullptr && !pl_gpu_is_failed(m_Vulkan->gpu)) {
+        int drawableW, drawableH;
+        SDL_Vulkan_GetDrawableSize(m_Window, &drawableW, &drawableH);
+        pl_tex& texture = m_DeferredTextures[m_DeferredIndex];
+        deferred = drawableW == m_DeferredTextureParams.w &&
+            drawableH == m_DeferredTextureParams.h &&
+            pl_tex_recreate(m_Vulkan->gpu, &texture, &m_DeferredTextureParams);
+        if (deferred) {
+            m_SwapchainFrame = m_DeferredTemplate;
+            m_SwapchainFrame.fbo = texture;
+            m_VrrRenderIntoDeferred = true;
+        }
+    }
+#endif
     const uint64_t acquireStartUs = LiGetMicroseconds();
-    if (!acquireVrrSwapchainFrame()) {
+    if (!deferred && !acquireVrrSwapchainFrame()) {
         return result;
     }
     const uint64_t acquireEndUs = LiGetMicroseconds();
     result.acquireUs = acquireEndUs >= acquireStartUs ?
         acquireEndUs - acquireStartUs : 0;
-    if (m_GpuTrace) m_GpuTrace->record({"acquire", m_GpuTracePts, m_GpuTraceOutputUs,
+    if (m_GpuTrace && !deferred) m_GpuTrace->record({"acquire", m_GpuTracePts, m_GpuTraceOutputUs,
         acquireStartUs, acquireEndUs});
+    // Leaves the deferred target on every early return below.
+    const auto leaveDeferred = [this, deferred]() {
+        if (!deferred) return;
+        m_VrrRenderIntoDeferred = false;
+        SDL_zero(m_SwapchainFrame);
+    };
 
     if (m_VrrWindowChangePending.load()) {
+        leaveDeferred();
         result.cancellationMaySubmit = m_HasPendingSwapchainFrame;
         return result;
     }
@@ -2376,6 +2446,7 @@ VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
     m_VrrPreparingFrame = false;
 
     if (!m_VrrRenderSucceeded || m_VrrWindowChangePending.load()) {
+        leaveDeferred();
         if (m_Vulkan != nullptr && m_Vulkan->gpu != nullptr &&
             pl_gpu_is_failed(m_Vulkan->gpu)) {
             queueRenderDeviceReset();
@@ -2402,6 +2473,7 @@ VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
     if (m_GpuTrace) m_GpuTrace->record({"output_wait_mode", m_GpuTracePts, m_GpuTraceOutputUs,
         flushEndUs, flushEndUs, 0, asynchronousHardwareSource});
     if (!asynchronousHardwareSource && !waitForVrrGpuReady(result.feedback)) {
+        leaveDeferred();
         m_VrrGpuReadyFeedback = result.feedback;
         result.cancellationMaySubmit = m_HasPendingSwapchainFrame;
         const bool gpuReadinessTimedOut =
@@ -2417,6 +2489,11 @@ VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
         return result;
     }
     retireCompletedVrrSourceFrames();
+    if (deferred) {
+        m_DeferredPreparedTexture = m_SwapchainFrame.fbo;
+        m_DeferredIndex ^= 1;
+        leaveDeferred();
+    }
 #endif
 
     m_VrrFramePrepared = true;
@@ -2435,6 +2512,37 @@ VrrPrepareResult PlVkRenderer::prepareFrame(AVFrame* frame,
 VrrPresentFeedback PlVkRenderer::presentAdaptive(const VrrPresentRequest& request)
 {
     (void) request;
+#ifdef Q_OS_LINUX
+    const pl_tex deferredTexture = m_DeferredPreparedTexture;
+    m_DeferredPreparedTexture = nullptr;
+    if (deferredTexture && m_VrrFramePrepared && !m_HasPendingSwapchainFrame &&
+            !m_VrrSuspended && !m_VrrWindowChangePending.load()) {
+        // Acquire only now, so no swapchain image is held across the target
+        // wait, then copy the prepared image into it on the GPU.
+        const uint64_t acquireStartUs = LiGetMicroseconds();
+        bool copied = acquireVrrSwapchainFrame();
+        const uint64_t acquireEndUs = LiGetMicroseconds();
+        if (m_GpuTrace) m_GpuTrace->record({"acquire", m_GpuTracePts, m_GpuTraceOutputUs,
+            acquireStartUs, acquireEndUs, 1});
+        if (copied) {
+            // An abandoned started frame is still submitted, so always fill
+            // it; the blit scales if the window size changed meanwhile.
+            const auto fbo = m_SwapchainFrame.fbo;
+            copied = fbo && fbo->params.blit_dst &&
+                fbo->params.format == deferredTexture->params.format;
+            if (copied) {
+                std::lock_guard<std::mutex> lock(m_CommandLock);
+                pl_tex_blit_params blit = {};
+                blit.src = deferredTexture;
+                blit.dst = fbo;
+                pl_tex_blit(m_Vulkan->gpu, &blit);
+            }
+        }
+        if (!copied) {
+            return cancelFrame();
+        }
+    }
+#endif
     if (!m_VrrFramePrepared || !m_HasPendingSwapchainFrame ||
         m_VrrSuspended ||
         m_VrrWindowChangePending.load()) {
@@ -2545,6 +2653,10 @@ VrrPresentFeedback PlVkRenderer::presentAdaptive(const VrrPresentRequest& reques
 bool PlVkRenderer::cancelVrrFrame()
 {
     const bool hadPendingFrame = m_HasPendingSwapchainFrame;
+#ifdef Q_OS_LINUX
+    m_DeferredPreparedTexture = nullptr;
+    m_VrrRenderIntoDeferred = false;
+#endif
     m_VrrPreparingFrame = false;
     m_VrrFramePrepared = false;
     m_VrrRenderSucceeded = false;
@@ -2726,7 +2838,7 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
 
     // If waitToRender() failed to get the next swapchain frame, skip
     // rendering this frame. It probably means the window is occluded.
-    if (!m_HasPendingSwapchainFrame) {
+    if (!m_HasPendingSwapchainFrame && !m_VrrRenderIntoDeferred) {
         return;
     }
 

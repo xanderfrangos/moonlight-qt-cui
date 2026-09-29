@@ -8,6 +8,7 @@ include($$PWD/../../pyrowave/pyrowave.pri)
 
 SOURCES += \
     $$PWD/tst_pyrowaveroundtrip.cpp \
+    $$PWD/tst_pyrowavedequant.cpp \
     $$PWD/../../app/streaming/video/pyrowave/pyrowaveframing.cpp
 HEADERS += $$PWD/../../app/streaming/video/pyrowave/pyrowaveframing.h
 

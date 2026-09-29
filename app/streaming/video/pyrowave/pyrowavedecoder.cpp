@@ -16,6 +16,8 @@
 
 namespace {
 
+constexpr unsigned kFrameContexts = 4;
+
 class DecodePhaseTimer {
 public:
     explicit DecodePhaseTimer(PyroWaveDecoder::DecodeDiagnostics* diagnostics)
@@ -287,6 +289,15 @@ PyroWaveDecoder::PyroWaveDecoder() = default;
 
 PyroWaveDecoder::~PyroWaveDecoder() = default;
 
+bool PyroWaveDecoder::hasAsynchronousOutput() const
+{
+#ifdef _WIN32
+    return m_Impl != nullptr;
+#else
+    return m_Impl && m_Impl->vulkanPool != nullptr;
+#endif
+}
+
 bool PyroWaveDecoder::initialize(const Config& config, IPyroWaveSurfacePool* pool)
 {
     SDL_assert(!m_Impl);
@@ -341,7 +352,6 @@ bool PyroWaveDecoder::initialize(const Config& config, IPyroWaveSurfacePool* poo
 #else
     pyrowave_result result = PYROWAVE_ERROR_NO_VULKAN;
     PyroWaveVulkanDevice shared;
-    bool asyncCompute = false;
     if (config.vulkanPool != nullptr && config.vulkanPool->pyroWaveVulkanDevice(shared)) {
         pyrowave_device_create_info deviceInfo = {};
         deviceInfo.GetInstanceProcAddr = shared.getInstanceProcAddr;
@@ -373,6 +383,14 @@ bool PyroWaveDecoder::initialize(const Config& config, IPyroWaveSurfacePool* poo
         }
     }
 #endif
+    // With two frame contexts, a decode blocks this thread until the GPU has
+    // finished the decode submitted two frames earlier. A brief GPU hiccup
+    // then ages queued frames past the stale limit and they are skipped. More
+    // contexts queue the work instead; the pacer sees late frames and decides.
+    if (pyrowave_device_set_frame_contexts(impl->device, kFrameContexts) != PYROWAVE_SUCCESS) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "PyroWave: keeping the default frame context count");
+    }
 
     pyrowave_decoder_create_info decoderInfo = {};
     decoderInfo.device = impl->device;
@@ -380,13 +398,12 @@ bool PyroWaveDecoder::initialize(const Config& config, IPyroWaveSurfacePool* poo
     decoderInfo.height = config.height;
     decoderInfo.chroma = config.chroma444 ? PYROWAVE_CHROMA_SUBSAMPLING_444 : PYROWAVE_CHROMA_SUBSAMPLING_420;
     decoderInfo.fragment_path = pyrowave_decoder_device_prefers_fragment_path(impl->device);
-#ifndef _WIN32
-    // The compute path can run on the async compute queue, so decoding the
-    // next frames does not delay rendering and presenting the current one.
-    if (impl->vulkanPool && shared.asyncCompute && !decoderInfo.fragment_path) {
-        asyncCompute = pyrowave_device_set_queue_type(impl->device, VK_QUEUE_COMPUTE_BIT) == PYROWAVE_SUCCESS;
-    }
-#endif
+    // Keep PyroWave's default graphics queue. A separate compute queue still
+    // competes for shader cores with the compositor after our Present returns.
+    // In the Deck 4K capture, delayed Wayland presentations tracked completion
+    // of the next async decode even though this frame was already GPU-ready.
+    // Shared surfaces and timeline synchronization remain asynchronous; only
+    // the queue selection changes here.
     result = pyrowave_decoder_create(&decoderInfo, &impl->decoder);
     if (result != PYROWAVE_SUCCESS) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -433,8 +450,7 @@ bool PyroWaveDecoder::initialize(const Config& config, IPyroWaveSurfacePool* poo
                 config.width, config.height,
                 config.chroma444 ? "4:4:4" : "4:2:0",
                 config.tenBit ? 10 : 8,
-                impl->vulkanPool ? (asyncCompute ? "shared renderer surfaces, async compute queue" :
-                                                   "shared renderer surfaces, graphics queue") :
+                impl->vulkanPool ? "shared renderer surfaces, graphics queue" :
                                    "Vulkan readback",
                 major, minor, patch, PYROWAVE_BITSTREAM_ID,
                 decoderInfo.fragment_path ? " (fragment path)" : "");

@@ -208,6 +208,10 @@ private:
     uint32_t m_PyroWaveStaleSkips = 0;
     // The current run of skipped frames, logged once a frame is decoded again
     uint32_t m_PyroWaveSkipRun = 0;
+    // Smoothed RTP interval of consecutive frames, the source's actual cadence.
+    uint64_t m_PyroWaveSourcePeriodUs = 0;
+    uint32_t m_PyroWaveLastRtp = 0;
+    int m_PyroWaveLastFrameNumber = -1;
     uint64_t m_PyroWaveSkipRunWaitUs = 0;
     uint64_t holdPyroWaveDecodeForPresent(uint32_t rtpTimestamp);
 

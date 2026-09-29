@@ -7980,6 +7980,9 @@ int main(int argc, char* argv[])
         "count", "0");
     QCommandLineOption setOption(
         "set", "Override a resolved parameter as section.name=value", "override");
+    QCommandLineOption sessionBaseOption(
+        "session-base",
+        "Apply controller overrides on top of the session policy resolved for the capture");
     QCommandLineOption modeOption(
         "mode", "Override scenario mode: fixed or worker", "mode");
     QCommandLineOption listParametersOption(
@@ -8001,6 +8004,7 @@ int main(int argc, char* argv[])
     parser.addOption(scenarioOption);
     parser.addOption(jobsOption);
     parser.addOption(setOption);
+    parser.addOption(sessionBaseOption);
     parser.addOption(modeOption);
     parser.addOption(listParametersOption);
     parser.addOption(dumpDefaultsOption);
@@ -8200,6 +8204,7 @@ int main(int argc, char* argv[])
                                     scenarioName };
             for (const QString& overrideValue : parser.values(setOption))
                 arguments << "--set" << overrideValue;
+            if (parser.isSet(sessionBaseOption)) arguments << "--session-base";
             if (parser.isSet(modeOption)) arguments << "--mode" << parser.value(modeOption);
             if (parser.isSet(displayOption)) arguments << "--display-hz" << parser.value(displayOption);
             if (parser.isSet(streamOption)) arguments << "--stream-fps" << parser.value(streamOption);
@@ -8320,6 +8325,7 @@ int main(int argc, char* argv[])
     }
 
     VrrReplayScenario scenario = replayConfiguration.scenarios.front();
+    if (parser.isSet(sessionBaseOption)) scenario.controllerFromSession = true;
     if (parser.isSet(modeOption)) scenario.mode = parser.value(modeOption);
     if (scenario.mode != "fixed" && scenario.mode != "worker") {
         std::fprintf(stderr, "--mode must be fixed or worker\n"); return 2;
@@ -11761,7 +11767,7 @@ int main(int argc, char* argv[])
                 // production defaults, which may differ from older captures.
                 scenario.controller = capturedParameters;
             }
-            else if (!scenario.controllerCustomized) {
+            else if (!scenario.controllerCustomized || scenario.controllerFromSession) {
                 // Current preferences migrate the enabled legacy checkbox to
                 // Balanced Target; exact/reference replay retains the recorded policy.
                 if (simulatedConfig.latencyFix && simulatedConfig.latencyMode == 0) {
@@ -11770,6 +11776,20 @@ int main(int argc, char* argv[])
                 }
                 scenario.controller = vrrTimingParametersForSession(
                     simulatedConfig);
+                // The start seed came from this machine's cache, not policy.
+                scenario.controller.playoutDelayStartSeedUs =
+                    capturedParameters.playoutDelayStartSeedUs;
+                if (scenario.controllerFromSession &&
+                        !scenario.controllerOverrides.isEmpty()) {
+                    QString overrideError;
+                    if (!applyVrrReplayControllerSnapshot(
+                            scenario.controllerOverrides, scenario.controller,
+                            overrideError)) {
+                        std::fprintf(stderr, "Invalid session-based override: %s\n",
+                                     qPrintable(overrideError));
+                        return 2;
+                    }
+                }
             }
             referenceController = std::make_unique<VrrTimingController>(
                 capturedConfig, capturedCanLatch, capturedParameters);

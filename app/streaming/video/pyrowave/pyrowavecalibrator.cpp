@@ -1,10 +1,13 @@
 #include "pyrowavecalibrator.h"
 
 #include "backend/networkbuffers.h"
+#include "backend/computermanager.h"
+#include "backend/nvhttp.h"
 #include "streaming/session.h"
 #include "streaming/video/pyrowave/pyrowavebitrate.h"
 
 #include <QMetaObject>
+#include <QReadWriteLock>
 #include <SDL.h>
 
 #include <algorithm>
@@ -16,6 +19,7 @@
 #include <functional>
 #include <mutex>
 #include <numeric>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -426,7 +430,7 @@ double percentile(std::vector<double> values, double share)
     if (values.empty()) return 0;
     std::sort(values.begin(), values.end());
     const size_t index = (std::min)(values.size() - 1,
-                                  size_t(std::ceil(double(values.size()) * share)) - 1);
+                                    size_t(std::ceil(double(values.size()) * share)) - 1);
     return values[index];
 }
 
@@ -853,7 +857,8 @@ void PyroWaveCalibrator::cancel()
     if (m_Cancel) m_Cancel->store(true);
 }
 
-void PyroWaveCalibrator::start(int fps, int displayWidth, int displayHeight)
+void PyroWaveCalibrator::start(ComputerManager* manager, const QString& hostUuid, int fps,
+                               int displayWidth, int displayHeight)
 {
     if (m_Running || (m_Worker && m_Worker->isRunning())) return;
     if (fps < 10 || fps > 240) {
@@ -869,19 +874,41 @@ void PyroWaveCalibrator::start(int fps, int displayWidth, int displayHeight)
         return;
     }
 
-    bool wireless = false;
-    const int linkMbps = NetworkBuffers::wiredLinkMbps(&wireless);
-    const int linkCapKbps = linkMbps > 0 ? roundDownKbps(linkMbps * 1000.0 * kLinkShare) : 0;
-    if (linkMbps > 0) {
-        m_LinkSummary = tr("Wired link at %1 Mbps: bitrates are capped at %2 Mbps.")
-                            .arg(linkMbps).arg(linkCapKbps / 1000);
+    const auto hosts = manager ? manager->getComputers() : QVector<NvComputer*>();
+    const auto host = std::find_if(hosts.begin(), hosts.end(), [&](const NvComputer* computer) {
+        QReadLocker lock(&computer->lock);
+        return computer->uuid == hostUuid;
+    });
+    if (host == hosts.end()) {
+        m_Results.clear();
+        m_Message = tr("Choose a paired online host before calibrating.");
+        emit changed();
+        return;
     }
-    else if (wireless) {
-        m_LinkSummary = tr("Wi-Fi link speed isn't measured, so bitrates aren't capped. Your network may not sustain them.");
+    NvAddress hostAddress;
+    uint16_t hostHttpsPort = 0;
+    QSslCertificate hostCertificate;
+    QString hostName;
+    bool useTrueUid = false;
+    {
+        QReadLocker lock(&(*host)->lock);
+        if ((*host)->state != NvComputer::CS_ONLINE ||
+            (*host)->pairState != NvComputer::PS_PAIRED ||
+            !((*host)->serverCodecModeSupport & SCM_PYROWAVE)) {
+            m_Results.clear();
+            m_Message = tr("Choose an online, paired host that supports PyroWave.");
+            emit changed();
+            return;
+        }
+        hostAddress = (*host)->activeAddress;
+        hostHttpsPort = (*host)->activeHttpsPort;
+        hostCertificate = (*host)->serverCert;
+        hostName = (*host)->name;
+        useTrueUid = !(*host)->isNvidiaServerSoftware;
     }
-    else {
-        m_LinkSummary = tr("No wired link detected, so bitrates aren't capped.");
-    }
+
+    const int linkMbps = NetworkBuffers::routedWiredLinkMbps(QHostAddress(hostAddress.address()));
+    m_LinkSummary = tr("Measuring bandwidth from %1 to this PC…").arg(hostName);
 
 #if !defined(HAVE_PYROWAVE) || (!defined(Q_OS_LINUX) && !defined(Q_OS_WIN32))
     Q_UNUSED(displayWidth);
@@ -892,12 +919,79 @@ void PyroWaveCalibrator::start(int fps, int displayWidth, int displayHeight)
 #else
     m_Running = true;
     m_Results.clear();
-    m_Message = tr("Timing each format on this device at %1 FPS…").arg(fps);
+    m_Message = tr("Testing host-to-client bandwidth…");
     emit changed();
 
     auto cancelled = std::make_shared<std::atomic<bool>>(false);
     m_Cancel = cancelled;
-    m_Worker = QThread::create([this, fps, displayWidth, displayHeight, linkCapKbps, cancelled] {
+    m_Worker = QThread::create([this, fps, displayWidth, displayHeight, linkMbps,
+                                hostAddress, hostHttpsPort, hostCertificate, hostName,
+                                useTrueUid, cancelled] {
+        int measuredMbps = 0;
+        int hostLinkMbps = 0;
+        try {
+            NvHTTP http(hostAddress, hostHttpsPort, hostCertificate, useTrueUid);
+            const QString serverInfo = http.getServerInfo(NvHTTP::NVLL_ERROR);
+            bool validBytes = false;
+            const auto probeBytes = NvHTTP::getXmlString(serverInfo, "PyroWaveBandwidthProbeBytes").toUInt(&validBytes);
+            if (!validBytes || probeBytes != 32U * 1024U * 1024U) {
+                throw std::runtime_error("This host does not support PyroWave bandwidth calibration");
+            }
+            hostLinkMbps = NvHTTP::getXmlString(serverInfo, "PyroWaveHostLinkMbps").toInt();
+            // The first transfer warms TLS and the receiver. The slowest of
+            // three subsequent transfers is a conservative bulk-throughput cap.
+            http.probePyroWaveDownloadMbps();
+            for (int i = 0; i < 3 && !cancelled->load(); ++i) {
+                const int sampleMbps = http.probePyroWaveDownloadMbps();
+                measuredMbps = measuredMbps == 0 ? sampleMbps : (std::min)(measuredMbps, sampleMbps);
+            }
+            if (!cancelled->load() && measuredMbps <= 0) {
+                throw std::runtime_error("PyroWave bandwidth probe returned no usable speed");
+            }
+        }
+        catch (const std::exception& e) {
+            const QString error = QString::fromUtf8(e.what());
+            QMetaObject::invokeMethod(this, [this, error] {
+                m_Running = false;
+                m_Message = error;
+                m_LinkSummary = tr("Host-to-client bandwidth could not be measured.");
+                emit changed();
+            }, Qt::QueuedConnection);
+            return;
+        }
+        if (cancelled->load()) {
+            QMetaObject::invokeMethod(this, [this] {
+                m_Running = false;
+                m_Message = tr("Calibration stopped.");
+                emit changed();
+            }, Qt::QueuedConnection);
+            return;
+        }
+        int availableMbps = measuredMbps;
+        if (hostLinkMbps > 0) availableMbps = (std::min)(availableMbps, hostLinkMbps);
+        if (linkMbps > 0) availableMbps = (std::min)(availableMbps, linkMbps);
+        const int linkCapKbps = roundDownKbps(availableMbps * 1000.0 * kLinkShare);
+        if (linkCapKbps < 5000) {
+            QMetaObject::invokeMethod(this, [this] {
+                m_Running = false;
+                m_Message = tr("This route is too slow for the minimum PyroWave bitrate.");
+                m_LinkSummary = tr("No usable PyroWave bitrate could be recommended.");
+                emit changed();
+            }, Qt::QueuedConnection);
+            return;
+        }
+        QMetaObject::invokeMethod(this, [this, fps, hostName, measuredMbps, hostLinkMbps,
+                                         linkMbps, linkCapKbps] {
+            m_LinkSummary = tr("%1 → this PC: measured %2 Mbps; host link %3 Mbps; client link %4 Mbps. Video bitrate cap: %5 Mbps. 4K 4:4:4 at %6 FPS: SDR %7, HDR %8 by network capacity.")
+                .arg(hostName).arg(measuredMbps)
+                .arg(hostLinkMbps > 0 ? QString::number(hostLinkMbps) : tr("unknown"))
+                .arg(linkMbps > 0 ? QString::number(linkMbps) : tr("unknown"))
+                .arg(linkCapKbps / 1000).arg(fps)
+                .arg(linkCapKbps >= pyroWaveRecommendedKbps(3840, 2160, fps, true, false) ? tr("supported") : tr("bandwidth-limited"))
+                .arg(linkCapKbps >= pyroWaveRecommendedKbps(3840, 2160, fps, true, true) ? tr("supported") : tr("bandwidth-limited"));
+            m_Message = tr("Timing each format on this device at %1 FPS…").arg(fps);
+            emit changed();
+        }, Qt::QueuedConnection);
         const QString error = runSweep(fps, displayWidth, displayHeight, linkCapKbps, *cancelled,
                                        [this](const Sample& sample) {
             const QVariantMap result = toMap(sample);

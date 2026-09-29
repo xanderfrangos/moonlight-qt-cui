@@ -36,6 +36,22 @@ different frame framing; see "Compatibility".
 The host ORs these bits into `ServerCodecModeSupport` when PyroWave encoding works
 on the capture adapter:
 
+For a paired HTTPS `/serverinfo` request, a capable host also returns
+`PyroWaveHostLinkMbps` (zero if its outbound route is not a known physical wired
+link) and `PyroWaveBandwidthProbeBytes=33554432`. The link number is the host's
+local transmit speed, not measured end-to-end throughput. Linux and Windows
+resolve the route to the requesting client; Linux ignores virtual, wireless,
+half-duplex and inactive interfaces. The host refreshes its streaming pace from
+that route every two seconds.
+
+The paired client can GET `/pyrowave-bandwidth-probe` over its pinned HTTPS
+connection. It receives exactly 32 MiB of fixed binary payload
+to time. The client discards a warm-up and uses the slowest of three measurements,
+then reserves 20% for protocol overhead and contention. The result is a bulk
+host-to-client throughput estimate. It does not prove that live UDP bursts will
+avoid packet loss, so calibration remains a recommendation rather than a stream
+quality guarantee.
+
 | Bit | Value | Meaning |
 |---|---|---|
 | `SCM_PYROWAVE` | `0x00800000` | 8-bit 4:2:0 |
@@ -225,17 +241,22 @@ Our client decodes a record-framed frame that lost packets. moonlight-common-c
 first repairs what parity can (the critical packets). It does not drop a PyroWave
 frame whose FEC block cannot complete: once the next block or frame starts
 arriving, each missing data packet is replaced by zeros and delivered as a
-`BUFFER_TYPE_LOST` buffer. A final block without parity can also complete after
-1 ms of packet silence, without waiting for the next frame. When the client
+`BUFFER_TYPE_LOST` buffer. Once its final data packet has arrived, a final block
+without parity can also complete after 1 ms of packet silence, without waiting
+for the next frame. The final packet is identified by its sequence position in
+the announced data-packet count; an EOF flag on an earlier packet is insufficient. When the client
 reports that the frame's VRR slot is nearer than that
 (`LiSetVideoReassemblyDeadlineCallback()`), the silence shrinks to the slot, but
 never below 250 us after the last unique packet. This requires a
 record-start flag, the short frame header's nonzero critical packet count, and
 all packets in that critical prefix to be present. Unique arrivals renew the
 deadline, including reordered packets; duplicates do not. The receiver drains
-queued socket data before expiring the deadline. Missing EOF is handled by the
-same silence deadline. Optional detail arriving later is discarded, trading a
-bounded reorder allowance for prompt partial-frame delivery. Parity-bearing
+queued socket data before expiring the deadline. If the final data packet is
+absent, no silence deadline is armed: the frame waits for its remaining data or
+the next frame boundary. This prevents host batch/pacing gaps from becoming
+artificial loss. A genuinely lost tail may therefore delay partial delivery
+until the next frame. Interior detail arriving after expiry is discarded,
+trading a bounded reorder allowance for prompt partial-frame delivery. Parity-bearing
 blocks and unknown or incomplete critical prefixes retain boundary-based
 recovery. The frame is still dropped when its first packet
 (sequence header) or a whole FEC block is missing, which parity on the critical

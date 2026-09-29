@@ -284,7 +284,7 @@ bool PyroWavePlaceboPool::releasePyroWaveSurface(const PyroWaveVulkanSurface& su
 
     auto ref = new FrameRef { m_FreeList, surface.index,
                               { target.planes[0], target.planes[1], target.planes[2] },
-                              target.sixteenBit };
+                              target.sixteenBit, surface.doneValue };
     frame->buf[0] = av_buffer_create(reinterpret_cast<uint8_t*>(ref), sizeof(*ref),
                                      freeFrameRef, this, 0);
     if (frame->buf[0] == nullptr) {
@@ -305,6 +305,29 @@ bool PyroWavePlaceboPool::releasePyroWaveSurface(const PyroWaveVulkanSurface& su
 bool PyroWavePlaceboPool::ownsFrame(const AVFrame* frame) const
 {
     return frame->buf[0] != nullptr && av_buffer_get_opaque(frame->buf[0]) == this;
+}
+
+VkResult PyroWavePlaceboPool::waitForFrame(const AVFrame* frame, uint64_t timeoutNs) const
+{
+    if (frame == nullptr || !ownsFrame(frame)) {
+        return VK_ERROR_UNKNOWN;
+    }
+    const auto* ref = reinterpret_cast<const FrameRef*>(frame->buf[0]->data);
+    // Resolve through libplacebo's loader. The codec's private volk globals
+    // must not be used to dispatch calls on the renderer's device.
+    const auto waitSemaphores = reinterpret_cast<PFN_vkWaitSemaphores>(
+        m_Instance->get_proc_addr(m_Instance->instance, "vkWaitSemaphores"));
+    if (waitSemaphores == nullptr) {
+        return VK_ERROR_FEATURE_NOT_PRESENT;
+    }
+    VkSemaphoreWaitInfo wait = {};
+    wait.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+    wait.semaphoreCount = 1;
+    wait.pSemaphores = &m_Done;
+    wait.pValues = &ref->doneValue;
+    // Do not hold the command/queue locks while waiting: decode submissions
+    // on the other thread must be able to make progress.
+    return waitSemaphores(m_Vulkan->device, &wait, timeoutNs);
 }
 
 bool PyroWavePlaceboPool::mapFrame(const AVFrame* frame, pl_frame* out) const

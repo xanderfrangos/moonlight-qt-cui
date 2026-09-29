@@ -38,6 +38,9 @@ public:
 
     bool initialize(const Config& config, IPyroWaveSurfacePool* pool);
 
+    // Shared surfaces return after submission; CPU readback returns complete.
+    bool hasAsynchronousOutput() const;
+
     // CPU wall times, not GPU execution times. Submission can wait for older work.
     struct DecodeDiagnostics {
         uint64_t phaseUs[5] = {}; // parse, push/validate, acquire, submit, release

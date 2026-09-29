@@ -3,6 +3,7 @@
 #include "../../../../vrrratepolicy.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <vector>
 
@@ -198,9 +199,10 @@ VrrTimingParameters vrrTimingParametersForSession(
     // over the qualified window. Include decoder waits and raw preparation
     // even when readiness-lead learning excludes them from generic render cost.
     parameters.playoutSerialServiceGate = parameters.playoutResponsiveBuffer ? 2 : 0;
-    // Keep the preset's long quality history for reporting and future attack,
-    // while only absorbable readiness misses renew the standing-delay hold.
-    parameters.playoutRecentPressureRelease = parameters.playoutResponsiveBuffer ? 2 : 0;
+    // Keep the preset's long quality history for reporting and future attack.
+    // Only absorbable readiness misses renew the hold; revision 3 preserves
+    // qualified clean recovery across short frame or phase breaks.
+    parameters.playoutRecentPressureRelease = parameters.playoutResponsiveBuffer ? 3 : 0;
     // Qualify initial learning sooner with enough observations, without
     // increasing attack speed or rearming fast calibration on FPS changes.
     parameters.playoutIntervalInitialWarmupUs = 500000;
@@ -310,7 +312,19 @@ VrrTimingParameters vrrTimingParametersForSession(
     parameters.renderStartAfterSubmissionUs = 0;
     parameters.renderStartMinimumLeadUs = kRenderStartMinimumLeadUs;
     parameters.renderLeadFloorUs = kRenderLeadFloorUs;
+    parameters.preparationInitialSampleExcluded = 1;
+    // A source-rate epoch of at least 1.5x returns to the delay previously
+    // sustained at that rate; decreases slew so a restore is not a jump.
+    parameters.playoutEpochRateRatioPerMille = 1500;
+    parameters.playoutEpochSustainUs = 10000000;
+    parameters.playoutDelayDecreaseSlewUs = 250;
+    parameters.playoutEpochConfirmUs = 1000000;
     parameters.rateCandidateMinimumUs = kRateCandidateMinimumUs;
+    // A provisional source rate is cancelled only by an interval near the
+    // old fitted period. The captured 2:1 default treats the 16.7 ms half of
+    // a 16.7/33.3 ms pattern as a return to 120 FPS and never accepts 40 FPS.
+    parameters.candidateCadenceRatioNumerator = 5;
+    parameters.candidateCadenceRatioDenominator = 4;
     parameters.playoutStallBurstExclusion = 1;
     parameters.latchedFloorDisabled = 1;
     // A latched present flips no earlier than one display period after the
@@ -509,6 +523,7 @@ void VrrTimingController::clearTimeline(bool retainLearnedBudgets)
     m_RateCandidateSamples.clear();
     m_ReadyOffsets.clear();
     m_PreparationDurations.clear();
+    m_PreparationInitialSampleSeen = false;
     m_RenderSchedulerDelays.clear();
     m_TargetSchedulerDelays.clear();
     // A phase rebase invalidates sample timestamps, but the bounded reserve
@@ -2251,7 +2266,16 @@ void VrrTimingController::noteSubmission(bool submitted, bool cancelled,
                     m_Pending.intervalValid) {
                 noteReadinessFloorSample(submissionUs, m_Pending.readyOffsetUs);
             }
+            // The first preparation after a presenter or source epoch starts
+            // includes one-time renderer setup. Learning it as typical render
+            // cost pushes the following targets out by that setup time.
+            const bool initialPreparation =
+                m_Parameters.preparationInitialSampleExcluded != 0 &&
+                !m_PreparationInitialSampleSeen;
             if (m_Pending.hasPreparationDuration) {
+                m_PreparationInitialSampleSeen = true;
+            }
+            if (m_Pending.hasPreparationDuration && !initialPreparation) {
                 if (m_Parameters.playoutPredictionEnabled &&
                     !m_Parameters.playoutReadinessHitchThresholdUs) {
                     m_ReadinessPrediction.observe(m_PlayoutHistory, m_Pending.prediction,
@@ -2905,6 +2929,66 @@ uint64_t VrrTimingController::scaledPerMille(uint64_t value,
     return whole * perMille + remainder * perMille / 1000;
 }
 
+void VrrTimingController::noteIntervalBufferEpoch(uint64_t atUs)
+{
+    if (m_SourcePeriodUs == 0) {
+        return;
+    }
+    const uint64_t rateMilliHz = kMicrosecondsPerSecond * 1000 / m_SourcePeriodUs;
+    if (m_EpochRateMilliHz == 0) {
+        m_EpochRateMilliHz = rateMilliHz;
+        m_EpochSinceUs = atUs;
+        return;
+    }
+    const uint64_t ratio = m_Parameters.playoutEpochRateRatioPerMille;
+    const auto departs = [ratio](uint64_t a, uint64_t b) {
+        return a * 1000 >= b * ratio || b * 1000 >= a * ratio;
+    };
+    if (!departs(rateMilliHz, m_EpochRateMilliHz)) {
+        m_EpochCandidateMilliHz = 0;
+        return;
+    }
+    // A hitch can briefly re-fit the source period. Require the new rate to
+    // persist before treating it as a different source.
+    if (m_EpochCandidateMilliHz == 0 || departs(rateMilliHz, m_EpochCandidateMilliHz)) {
+        m_EpochCandidateMilliHz = rateMilliHz;
+        m_EpochCandidateSinceUs = atUs;
+    }
+    if (atUs < m_EpochCandidateSinceUs ||
+            atUs - m_EpochCandidateSinceUs < m_Parameters.playoutEpochConfirmUs) {
+        return;
+    }
+    m_EpochCandidateMilliHz = 0;
+    // Quarter-octave buckets: nearby rates of one source share a demand.
+    const auto bucket = [](uint64_t milliHz) {
+        return static_cast<int>(std::lround(std::log2(double(milliHz) / 1000.0) * 4.0));
+    };
+    const uint64_t current = m_IntervalBuffer.demand(m_AppliedPlayoutDelayUs);
+    // Only a demand learned over a sustained epoch describes that source.
+    if (atUs >= m_EpochSinceUs && atUs - m_EpochSinceUs >= m_Parameters.playoutEpochSustainUs) {
+        const int outgoing = bucket(m_EpochRateMilliHz);
+        auto it = std::find_if(m_EpochDemands.begin(), m_EpochDemands.end(),
+                               [outgoing](const auto& entry) { return entry.first == outgoing; });
+        if (it != m_EpochDemands.end()) it->second = current;
+        else m_EpochDemands.emplace_back(outgoing, current);
+    }
+    const int incoming = bucket(rateMilliHz);
+    const std::pair<int, uint64_t>* nearest = nullptr;
+    for (const auto& entry : m_EpochDemands) {
+        if (std::abs(entry.first - incoming) <= 1 &&
+                (!nearest || std::abs(entry.first - incoming) < std::abs(nearest->first - incoming))) {
+            nearest = &entry;
+        }
+    }
+    // Delay bought for another source rate is not evidence for this one.
+    // Restore only downward; an unfamiliar rate keeps the current protection.
+    if (nearest && nearest->second < current) {
+        m_IntervalBuffer.restoreTarget(nearest->second, atUs);
+    }
+    m_EpochRateMilliHz = rateMilliHz;
+    m_EpochSinceUs = atUs;
+}
+
 uint64_t VrrTimingController::playoutDelayMaximumUs() const
 {
     uint64_t maximumUs = std::max(m_Parameters.playoutDelayMaximumUs,
@@ -2992,6 +3076,10 @@ uint64_t VrrTimingController::playoutQueueLimitUs() const
 
 uint64_t VrrTimingController::playoutDelayStartUs() const
 {
+    if (m_Parameters.playoutDelayStartSeedUs != 0) {
+        return clampUnsigned(m_Parameters.playoutDelayStartSeedUs,
+                             playoutDelayMinimumUs(), playoutDelayMaximumUs());
+    }
     uint64_t startUs = m_Parameters.playoutDelayStartUs != 0 ?
         m_Parameters.playoutDelayStartUs : m_Parameters.sourcePlayoutDelayUs;
     if (m_Parameters.playoutDelayStartPeriodPerMille != 0) {
@@ -3215,6 +3303,10 @@ void VrrTimingController::updatePlayoutHistory(
                 m_MeanMissBuffer.breakSequence();
                 if (rebased || cadence.phaseDiscontinuity) m_IntervalBuffer.breakSequence();
             }
+            if (m_Parameters.playoutResponsiveBuffer >= 6 &&
+                    m_Parameters.playoutEpochRateRatioPerMille != 0) {
+                noteIntervalBufferEpoch(at);
+            }
             const uint64_t requestedDemandUs =
                 m_Parameters.playoutResponsiveBuffer >= 6 ?
                     m_IntervalBuffer.demand(m_AppliedPlayoutDelayUs) :
@@ -3228,6 +3320,9 @@ void VrrTimingController::updatePlayoutHistory(
             if (m_RequestedPlayoutDelayUs > m_AppliedPlayoutDelayUs)
                 m_AppliedPlayoutDelayUs += std::min<uint64_t>(125,
                     m_RequestedPlayoutDelayUs - m_AppliedPlayoutDelayUs);
+            else if (m_Parameters.playoutDelayDecreaseSlewUs != 0)
+                m_AppliedPlayoutDelayUs -= std::min(m_Parameters.playoutDelayDecreaseSlewUs,
+                    m_AppliedPlayoutDelayUs - m_RequestedPlayoutDelayUs);
             else
                 m_AppliedPlayoutDelayUs = m_RequestedPlayoutDelayUs;
             m_AppliedPlayoutDelayUs = std::min(m_AppliedPlayoutDelayUs, playoutDelayMaximumUs());

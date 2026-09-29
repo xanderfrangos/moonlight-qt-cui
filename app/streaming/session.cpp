@@ -1326,6 +1326,17 @@ bool Session::validateLaunch(SDL_Window* testWindow)
             m_SupportedVideoFormats.removeByMask(VIDEO_FORMAT_MASK_PYROWAVE);
         }
         else {
+            const int hostLinkMbps = int(m_Computer->pyrowaveHostLinkMbps);
+            if (hostLinkMbps > 0 && m_StreamConfig.bitrate > hostLinkMbps * 800) {
+                emitLaunchWarning(tr("PyroWave is set to %1 Mbps, but the host's %2 Mbps wired link leaves room for only about %3 Mbps of video. Lower the bitrate or run calibration.")
+                                  .arg(m_StreamConfig.bitrate / 1000).arg(hostLinkMbps).arg(hostLinkMbps * 8 / 10));
+            }
+            const int clientLinkMbps = NetworkBuffers::routedWiredLinkMbps(
+                QHostAddress(m_Computer->activeAddress.address()));
+            if (clientLinkMbps > 0 && m_StreamConfig.bitrate > clientLinkMbps * 800) {
+                emitLaunchWarning(tr("PyroWave is set to %1 Mbps, but this PC's %2 Mbps wired link leaves room for only about %3 Mbps of video. Lower the bitrate or run calibration.")
+                                  .arg(m_StreamConfig.bitrate / 1000).arg(clientLinkMbps).arg(clientLinkMbps * 8 / 10));
+            }
             const QString bufferWarning = NetworkBuffers::launchWarning();
             if (!bufferWarning.isEmpty()) {
                 emitLaunchWarning(bufferWarning);

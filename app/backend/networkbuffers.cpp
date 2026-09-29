@@ -7,6 +7,8 @@
 #include <QPointer>
 #include <QProcess>
 #include <QStandardPaths>
+#include <QNetworkInterface>
+#include <QUdpSocket>
 
 #ifdef Q_OS_WIN
 #include <winsock2.h>
@@ -320,6 +322,57 @@ int NetworkBuffers::wiredLinkMbps(bool* wirelessConnected)
         *wirelessConnected = wireless;
     }
     return fastest;
+}
+
+int NetworkBuffers::routedWiredLinkMbps(const QHostAddress& host)
+{
+    if (host.isNull()) return 0;
+    QUdpSocket route;
+    route.connectToHost(host, 9);
+    if (!route.waitForConnected(200)) return 0;
+    const QHostAddress source = route.localAddress();
+    for (const auto& netInterface : QNetworkInterface::allInterfaces()) {
+        if (!(netInterface.flags() & QNetworkInterface::IsUp) ||
+            (netInterface.flags() & QNetworkInterface::IsLoopBack)) continue;
+        bool ownsSource = false;
+        for (const auto& entry : netInterface.addressEntries()) {
+            if (entry.ip() == source) { ownsSource = true; break; }
+        }
+        if (!ownsSource) continue;
+#ifdef Q_OS_LINUX
+        const QString path = QStringLiteral("/sys/class/net/") + netInterface.name();
+        if (!QFile::exists(path + QStringLiteral("/device")) ||
+            QFile::exists(path + QStringLiteral("/wireless")) ||
+            QFile::exists(path + QStringLiteral("/phy80211"))) return 0;
+        QFile duplex(path + QStringLiteral("/duplex"));
+        if (!duplex.open(QIODevice::ReadOnly) || duplex.readAll().trimmed() != "full") return 0;
+        QFile speed(path + QStringLiteral("/speed"));
+        if (!speed.open(QIODevice::ReadOnly)) return 0;
+        bool valid = false;
+        const int mbps = speed.readAll().trimmed().toInt(&valid);
+        return valid && mbps > 0 ? mbps : 0;
+#elif defined(Q_OS_WIN)
+        ULONG size = 16 * 1024;
+        std::vector<unsigned char> buffer;
+        ULONG result = ERROR_BUFFER_OVERFLOW;
+        for (int attempt = 0; attempt < 3 && result == ERROR_BUFFER_OVERFLOW; ++attempt) {
+            buffer.resize(size);
+            result = GetAdaptersAddresses(AF_UNSPEC,
+                                          GAA_FLAG_SKIP_UNICAST | GAA_FLAG_SKIP_ANYCAST |
+                                          GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                                          nullptr, reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data()), &size);
+        }
+        if (result != NO_ERROR) return 0;
+        for (auto adapter = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data()); adapter; adapter = adapter->Next) {
+            if (adapter->OperStatus == IfOperStatusUp && adapter->IfType == IF_TYPE_ETHERNET_CSMACD &&
+                (adapter->IfIndex == ULONG(netInterface.index()) || adapter->Ipv6IfIndex == ULONG(netInterface.index()))) {
+                return int(adapter->ReceiveLinkSpeed / 1'000'000);
+            }
+        }
+#endif
+        return 0;
+    }
+    return 0;
 }
 
 QString NetworkBuffers::launchWarning()

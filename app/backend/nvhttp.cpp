@@ -6,6 +6,7 @@
 #include <QtNetwork/QNetworkReply>
 #include <QEventLoop>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QXmlStreamReader>
 #include <QSslKey>
 #include <QImageReader>
@@ -202,6 +203,26 @@ NvHTTP::getServerInfo(NvLogLevel logLevel, bool fastFail)
     }
 
     return serverInfo;
+}
+
+int NvHTTP::probePyroWaveDownloadMbps()
+{
+    constexpr qint64 expectedBytes = 32LL * 1024 * 1024;
+    if (m_ServerCert.isNull() || httpsPort() == 0) {
+        throw QtNetworkReplyException(QNetworkReply::AuthenticationRequiredError,
+                                      "A paired HTTPS host is required for PyroWave calibration");
+    }
+    QElapsedTimer clock;
+    clock.start();
+    QNetworkReply* reply = openConnection(m_BaseUrlHttps, "pyrowave-bandwidth-probe", nullptr,
+                                         10000, NVLL_ERROR);
+    const qint64 bytes = reply->readAll().size();
+    delete reply;
+    if (bytes != expectedBytes || clock.elapsed() <= 0) {
+        throw QtNetworkReplyException(QNetworkReply::UnknownContentError,
+                                      "Incomplete PyroWave bandwidth probe");
+    }
+    return qRound(bytes * 8.0 / clock.elapsed() / 1000.0);
 }
 
 void

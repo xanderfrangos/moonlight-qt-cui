@@ -634,6 +634,14 @@ void testExpiredQueueSkipsBlockingDecode()
     const PacedFrame discontinuous(nullptr, 3, 749, true, 51000);
     expect(!VrrFrameDropPolicy::beforeDecodeWait(a, discontinuous, 1000, 71000, 8333, false),
            "backward source timestamps must defer to normal discontinuity handling");
+    const PacedFrame steady(nullptr, 4, 6000, true, 1000);
+    const PacedFrame successor(nullptr, 5, 7500, true, 51000);
+    expect(!VrrFrameDropPolicy::beforeDecodeWait(
+               steady, successor, 1000, 51000, 16667, false, 65000),
+           "a queued frame inside learned Smooth playout must survive the two-period stale gate");
+    expect(VrrFrameDropPolicy::beforeDecodeWait(
+               steady, successor, 1000, 90000, 16667, false, 65000),
+           "work beyond the learned playout window must still skip blocking decode");
 }
 
 void testSinglePeriodQueueDelayPreservesFluidity()
@@ -700,6 +708,13 @@ void testLatencyFixDropBoundaries()
            "real queue or scheduler delay beyond the boundary must still yield to a successor");
     expect(VrrFrameDropPolicy::afterRenderWait(decision, 10000, 66667, false, false, 40000),
            "decode service cannot forgive a later target-relative scheduling stall");
+    decision.playoutDelayUs = 65000;
+    expect(!VrrFrameDropPolicy::beforeRender(decision, 8333, 50000, false, false, 65000),
+           "a ready frame inside learned playout must not be marked stale before rendering");
+    expect(!VrrFrameDropPolicy::afterRenderWait(decision, 10000, 60000, false, true, 0, 65000),
+           "render waiting inside learned playout must not discard the frame");
+    expect(VrrFrameDropPolicy::afterRenderWait(decision, 10000, 90000, false, false, 0, 65000),
+           "target-relative stale checks must not count playout delay twice");
     expect(VrrFrameDropPolicy::ageExcludingDecodeWaitUs(10, 20, 40000) == 0 &&
                VrrFrameDropPolicy::ageExcludingDecodeWaitUs(20, 10, 40000) == 0,
            "service-age subtraction must not wrap on a reversed or coarsely sampled clock");
@@ -718,6 +733,10 @@ void testLatencyFixDropBoundaries()
     expect(VrrFrameDropPolicy::maximumAgeUs(decision, false, false) ==
                std::numeric_limits<uint64_t>::max(),
            "age tolerance multiplication must saturate instead of wrapping");
+    expect(VrrFrameDropPolicy::staleHorizonUs(8333, 2,
+               std::numeric_limits<uint64_t>::max() - 100) ==
+               std::numeric_limits<uint64_t>::max(),
+           "learned-delay addition must saturate instead of wrapping");
 }
 
 void runLatencyFixQueuedRecovery(int streamRateHz, bool enabled,
@@ -2624,6 +2643,31 @@ void testReceiveDeadlineMath()
     expect(p95 >= 2190 && p95 <= 2220,
            "reassembly cost must track a high percentile and ignore invalid samples");
 
+    D::RecentDuration gpuCost;
+    for (size_t i = 0; i < D::RecentDuration::kWindow; ++i) {
+        gpuCost.observeGpuCompletion(1000, 1500, 1500);
+    }
+    expect(!gpuCost.ready(),
+           "CPU decoder output alone must not qualify as GPU completion history");
+    for (size_t i = 0; i < D::RecentDuration::kMinimumSamples; ++i) {
+        gpuCost.observeGpuCompletion(1000, 1500, 5000);
+    }
+    expect(gpuCost.ready() && gpuCost.percentileUs() == 4000,
+           "observed GPU completion must qualify the decode protection cost");
+    for (size_t i = 0; i < D::RecentDuration::kWindow; ++i) {
+        gpuCost.observeGpuCompletion(1000, 1500, 1500);
+        gpuCost.observeGpuCompletion(1000, 1500, 1400);
+    }
+    expect(gpuCost.percentileUs() == 4000,
+           "already-ready or invalid samples must not replace GPU cost with CPU submit cost");
+
+    D::RecentDuration synchronousCost;
+    for (size_t i = 0; i < D::RecentDuration::kMinimumSamples; ++i) {
+        synchronousCost.observeGpuCompletion(1000, 5000, 5000, true);
+    }
+    expect(synchronousCost.ready() && synchronousCost.percentileUs() == 4000,
+           "synchronous readback output is valid completion evidence");
+
     // Decode hold around the next Present: wait for the Present call, never
     // past the frame's own deadline or the safety bound.
     D::publishPresentWindow(nowUs - 500, nowUs + 1500);
@@ -2655,6 +2699,21 @@ void testReceiveDeadlineMath()
            "a decode outside the window must go at once");
     expect(D::decodeHold(0, roomy, 10, nowUs).window == 0,
            "no published window means no hold");
+
+    // The hold budget must leave room for preparation, not only decode:
+    // a roomy reassembly deadline does not authorize a hold.
+    D::publishPresentWindow(nowUs - 500, nowUs + 1500);
+    D::publish(10, nowUs + 8000);
+    D::publishHold(10, nowUs + 1000);
+    expect(D::decodeHold(10, nowUs).window == 0,
+           "a hold must use the decode-and-preparation bound, not the reassembly deadline");
+    D::publishHold(10, nowUs + 8000);
+    expect(D::decodeHold(10, nowUs).window != 0,
+           "a hold within the decode-and-preparation bound is allowed");
+    D::clear();
+    expect(D::decodeHold(10, nowUs).window == 0,
+           "clearing the deadlines also clears the hold bound");
+    D::clearPresentWindow();
 }
 
 int main()

@@ -39,6 +39,9 @@ public:
 
     bool ownsFrame(const AVFrame* frame) const;
 
+    // Wait for this frame's decode, not later submissions using the pool.
+    VkResult waitForFrame(const AVFrame* frame, uint64_t timeoutNs) const;
+
     // Fills out with the frame's planes if the frame came from this pool.
     bool mapFrame(const AVFrame* frame, pl_frame* out) const;
 
@@ -52,6 +55,7 @@ private:
         int index;
         pl_tex planes[3];
         bool sixteenBit;
+        uint64_t doneValue;
     };
     struct Surface {
         pl_tex planes[3] = {};

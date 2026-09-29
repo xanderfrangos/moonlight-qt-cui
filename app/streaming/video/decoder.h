@@ -16,6 +16,8 @@ typedef struct _VIDEO_STATS {
     uint32_t totalFrames;
     uint32_t networkDroppedFrames;
     uint32_t pacerDroppedFrames;
+    // Received frames discarded before decoding because they were stale.
+    uint32_t decoderSkippedFrames;
     // Latest 30-frame-time source snapshot, independent of client delivery time.
     uint64_t incomingTimingSequence;
     double incomingTimingVarianceTicksSquared;

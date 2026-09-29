@@ -94,7 +94,26 @@ public:
         const bool adjacent = m_HavePrevious && s.valid && s.frame == previous.frame + 1 &&
             s.submitted > previous.submitted && s.intended > previous.intended &&
             s.submitted - previous.submitted < 1000000 && s.intended - previous.intended < 1000000;
-        if (!adjacent) breakSequence();
+        if (recentPressureRelease >= 3 && s.submitted) {
+            // Keep this clock independent of m_Previous: an invalid sample may
+            // replace m_Previous with a zero timestamp before the next frame.
+            const bool unobservedGap = m_LastObservedSubmittedUs &&
+                (s.submitted <= m_LastObservedSubmittedUs ||
+                 s.submitted - m_LastObservedSubmittedUs >= 1000000);
+            const bool prolongedIneligible = m_LastCleanEvidenceUs &&
+                s.submitted > m_LastCleanEvidenceUs &&
+                s.submitted - m_LastCleanEvidenceUs >= 2000000;
+            if (unobservedGap || prolongedIneligible) {
+                m_CleanEvidenceUs = 0;
+                m_LastCleanEvidenceUs = 0;
+            }
+            m_LastObservedSubmittedUs = s.submitted;
+        }
+        if (!adjacent) {
+            // A short dropped-frame or phase break does not erase already
+            // observed clean recovery; requalification still starts afresh.
+            breakSequence();
+        }
         auto& update = m_Stats.update;
         update = {};
         update.atUs = s.submitted;
@@ -106,8 +125,8 @@ public:
         update.maximumUs = maximum;
         m_Previous = s;
         m_HavePrevious = s.valid && s.submitted && s.intended;
-        updateScore(s.submitted, scoreWindowUs);
         if (!adjacent) {
+            updateScore(s.submitted, scoreWindowUs);
             if (beforeUs == boundedUs) update.action = Action::SequenceBreak;
             return;
         }
@@ -145,7 +164,10 @@ public:
         m_Stats.calibrationCoverageUs = s.submitted - m_First;
         m_Stats.averageValid = samples >= 2 && m_SequenceSamples >= m_SequenceMinimumSamples &&
             m_Stats.calibrationCoverageUs >= m_SequenceWarmupUs;
-        if (!m_Stats.averageValid) return;
+        if (!m_Stats.averageValid) {
+            updateScore(s.submitted, scoreWindowUs);
+            return;
+        }
         m_Stats.initialCalibrationComplete = true;
         m_Stats.serviceOverloaded = service > intendedTime || decoderQueue > intendedTime;
         const bool pressure = total > samples * toleranceUs;
@@ -189,17 +211,36 @@ public:
             historyHolds;
         // While the score still meets the target, a small dip pauses release
         // for that frame without restarting the clean-time hold.
-        if (holdProtection &&
-                (!holdRenewsBelowTargetOnly || !severityWeighted || belowTarget)) {
+        const bool renewsHold = holdProtection &&
+            (!holdRenewsBelowTargetOnly || !severityWeighted || belowTarget);
+        if (renewsHold) {
             m_LastPressure = s.submitted;
             if (severityWeighted) m_ReleaseFraction = 0;
+        }
+        // Revision 3 earns release time only from qualified, absorbable
+        // adjacent observations. The qualification window still restarts on
+        // every break, while earned recovery survives short gaps. This avoids
+        // keeping a raised delay forever when a frame is missed every few
+        // seconds, without counting the unknown gap as clean playback.
+        if (recentPressureRelease >= 3) {
+            if (renewsHold || !s.absorbable || !windowAbsorbable) {
+                m_CleanEvidenceUs = 0;
+                m_LastCleanEvidenceUs = 0;
+            }
+            else if (!holdProtection) {
+                m_CleanEvidenceUs = std::min<uint64_t>(
+                    hold, m_CleanEvidenceUs + std::min<uint64_t>(actual, 100000));
+                m_LastCleanEvidenceUs = s.submitted;
+            }
         }
         update.attributedFrame = delayed.frame;
         update.latenessUs = lateness;
         const auto remaining = [](uint64_t elapsed, uint64_t duration) {
             return elapsed < duration ? duration - elapsed : 0;
         };
-        update.holdRemainingUs = std::max(remaining(s.submitted - m_First, hold),
+        update.holdRemainingUs = std::max(
+            recentPressureRelease >= 3 ? remaining(m_CleanEvidenceUs, hold) :
+                remaining(s.submitted - m_First, hold),
             m_LastPressure ? remaining(s.submitted - m_LastPressure, hold) : 0);
         update.cooldownRemainingUs = m_LastAttack ?
             remaining(s.submitted - m_LastAttack, 250000) : 0;
@@ -237,7 +278,10 @@ public:
             m_LastAttack = s.submitted;
             m_ReleaseFraction = 0;
         }
-        else if (!holdProtection && s.absorbable && s.submitted - m_First >= hold &&
+        else if (!holdProtection && s.absorbable &&
+                (recentPressureRelease >= 3 ?
+                    (windowAbsorbable && m_CleanEvidenceUs >= hold) :
+                    s.submitted - m_First >= hold) &&
                 (!m_LastPressure || s.submitted - m_LastPressure >= hold)) {
             m_ReleaseFraction += std::min<uint64_t>(actual, 100000) * releaseRate;
             const auto release = m_ReleaseFraction / 1000000;
@@ -260,6 +304,14 @@ public:
         update.requestedUs = m_Target;
     }
     uint64_t demand(uint64_t applied) const { return m_Initialized ? m_Target : applied; }
+    // Replace the standing target at a source epoch and protect it for one
+    // hold from the given time, as if pressure had just been observed.
+    void restoreTarget(uint64_t target, uint64_t atUs) {
+        if (!m_Initialized) return;
+        m_Target = target;
+        m_LastPressure = atUs;
+        m_ReleaseFraction = 0;
+    }
     Stats stats() const { return m_Stats; }
     void breakSequence() {
         m_Window = {}; m_First = m_ReleaseFraction = m_SequenceSamples = 0; m_HavePrevious = false;
@@ -299,6 +351,7 @@ private:
     Sample m_Previous;
     Stats m_Stats;
     uint64_t m_Target = 0, m_First = 0, m_LastAttack = 0, m_LastPressure = 0, m_ReleaseFraction = 0;
+    uint64_t m_CleanEvidenceUs = 0, m_LastObservedSubmittedUs = 0, m_LastCleanEvidenceUs = 0;
     uint64_t m_SequenceWarmupUs = 1000000;
     uint64_t m_SequenceSamples = 0;
     size_t m_SequenceMinimumSamples = 2;

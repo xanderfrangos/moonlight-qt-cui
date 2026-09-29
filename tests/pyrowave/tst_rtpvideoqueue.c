@@ -30,6 +30,7 @@ static unsigned submittedLost[8];
 static unsigned submittedPackets[8];
 static unsigned lostNotifications;
 static unsigned fecPercent;
+static unsigned dataPackets = DATA_PACKETS;
 
 uint64_t PltGetMicroseconds(void) { return ++fakeNowUs; }
 void connectionSawFrame(uint32_t frame) { (void)frame; }
@@ -77,6 +78,7 @@ static void resetObservations(void) {
 static void beginQueue(RTP_VIDEO_QUEUE* queue, int videoFormat) {
     memset(queue, 0, sizeof(*queue));
     fecPercent = 0;
+    dataPackets = DATA_PACKETS;
     NegotiatedVideoFormat = videoFormat;
     RtpvInitializeQueue(queue);
     resetObservations();
@@ -104,12 +106,12 @@ static int addPacket(RTP_VIDEO_QUEUE* queue, unsigned frame, unsigned block,
     packet->ssrc = 0x12345678;
 
     nv = (PNV_VIDEO_PACKET)(buffer + dataOffset);
-    nv->streamPacketIndex = LE32((block * DATA_PACKETS + index) << 8);
+    nv->streamPacketIndex = LE32((block * dataPackets + index) << 8);
     nv->frameIndex = LE32(frame);
     nv->flags = (uint8_t)flags;
     nv->extraFlags = recordStart ? NV_VIDEO_PACKET_EXTRA_FLAG_PYROWAVE_RECORD_START : 0;
     nv->multiFecBlocks = (uint8_t)((block << 4) | (lastBlock << 6));
-    nv->fecInfo = LE32((DATA_PACKETS << 22) | (fecPercent << 4) | (index << 12));
+    nv->fecInfo = LE32((dataPackets << 22) | (fecPercent << 4) | (index << 12));
 
     if (index == 0) {
         uint8_t* payload = (uint8_t*)buffer + payloadOffset;
@@ -138,10 +140,10 @@ static void addFullFrame(RTP_VIDEO_QUEUE* queue, unsigned frame, unsigned baseSe
                          unsigned block, unsigned lastBlock, bool recordStart,
                          unsigned criticalCount) {
     unsigned i;
-    for (i = 0; i < DATA_PACKETS; i++) {
+    for (i = 0; i < dataPackets; i++) {
         unsigned flags = FLAG_CONTAINS_PIC_DATA;
         if (i == 0) flags |= FLAG_SOF;
-        if (i == DATA_PACKETS - 1) flags |= FLAG_EOF;
+        if (i == dataPackets - 1) flags |= FLAG_EOF;
         addPacket(queue, frame, block, lastBlock, i, baseSequence, flags,
                   recordStart && i == 0, true, criticalCount);
     }
@@ -194,17 +196,19 @@ static void testOptionalHoleExpiresWithoutSuccessor(void) {
     RtpvCleanupQueue(&queue);
 }
 
-static void testMissingEofCanExpire(void) {
+static void testMissingEofWaitsForSuccessor(void) {
     RTP_VIDEO_QUEUE queue;
     beginQueue(&queue, PYROWAVE_FORMAT);
     addPacket(&queue, 1, 0, 0, 0, 100, FLAG_SOF | FLAG_CONTAINS_PIC_DATA, true, true, 1);
     addPacket(&queue, 1, 0, 0, 1, 100, FLAG_CONTAINS_PIC_DATA, false, false, 0);
     addPacket(&queue, 1, 0, 0, 2, 100, FLAG_CONTAINS_PIC_DATA, false, false, 0);
-    uint64_t deadline = RtpvGetPendingFrameDeadlineUs(&queue);
-    EXPECT(deadline != 0, "missing EOF still arms deadline with complete critical prefix");
-    EXPECT(RtpvExpirePendingFrame(&queue, deadline), "missing EOF frame expires without successor");
-    EXPECT(submittedPackets[1] == DATA_PACKETS, "missing EOF expiry submits padded frame");
-    EXPECT(submittedLost[1] == 1, "missing EOF is synthesized as optional loss");
+    EXPECT(RtpvGetPendingFrameDeadlineUs(&queue) == 0, "an absent tail is not evidence of packet loss");
+    EXPECT(!RtpvExpirePendingFrame(&queue, fakeNowUs + 5000), "silence cannot discard a possibly unsent tail");
+    EXPECT(submittedPackets[1] == 0, "missing EOF waits for a successor boundary");
+    addPacket(&queue, 2, 0, 0, 0, 104, FLAG_SOF | FLAG_CONTAINS_PIC_DATA, true, true, 1);
+    EXPECT(submittedPackets[1] == DATA_PACKETS, "successor releases the previous partial frame");
+    EXPECT(submittedLost[1] == 1, "only the missing EOF is synthesized at the boundary");
+    EXPECT(RtpvGetPendingFrameDeadlineUs(&queue) == 0, "successor does not inherit an expiry");
     RtpvCleanupQueue(&queue);
 }
 
@@ -212,19 +216,19 @@ static void testProgressExtendsDeadline(void) {
     RTP_VIDEO_QUEUE queue;
     beginQueue(&queue, PYROWAVE_FORMAT);
     addPacket(&queue, 1, 0, 0, 0, 100, FLAG_SOF | FLAG_CONTAINS_PIC_DATA, true, true, 2);
-    addPacket(&queue, 1, 0, 0, 1, 100, FLAG_CONTAINS_PIC_DATA, false, false, 0);
+    addPacket(&queue, 1, 0, 0, 3, 100, FLAG_EOF | FLAG_CONTAINS_PIC_DATA, false, false, 0);
     uint64_t first = RtpvGetPendingFrameDeadlineUs(&queue);
     fakeNowUs += 100;
-    EXPECT(addPacket(&queue, 1, 0, 0, 1, 100, FLAG_CONTAINS_PIC_DATA, false, false, 0) == RTPF_RET_REJECTED,
+    EXPECT(addPacket(&queue, 1, 0, 0, 3, 100, FLAG_EOF | FLAG_CONTAINS_PIC_DATA, false, false, 0) == RTPF_RET_REJECTED,
            "duplicate packet is rejected");
     EXPECT(RtpvGetPendingFrameDeadlineUs(&queue) == first, "duplicate packet cannot prolong the deadline");
     fakeNowUs += 400;
-    addPacket(&queue, 1, 0, 0, 2, 100, FLAG_CONTAINS_PIC_DATA, false, false, 0);
+    addPacket(&queue, 1, 0, 0, 1, 100, FLAG_CONTAINS_PIC_DATA, false, false, 0);
     uint64_t second = RtpvGetPendingFrameDeadlineUs(&queue);
-    EXPECT(second > first, "new unique packet reschedules deadline");
+    EXPECT(second > first, "reordered unique packet reschedules deadline after EOF");
     EXPECT(!RtpvExpirePendingFrame(&queue, first), "old deadline cannot flush after progress");
-    EXPECT(RtpvExpirePendingFrame(&queue, second), "new deadline flushes the still-missing optional suffix");
-    EXPECT(submittedLost[1] == 1, "only absent optional suffix packet is synthesized at current deadline");
+    EXPECT(RtpvExpirePendingFrame(&queue, second), "new deadline flushes the remaining interior hole");
+    EXPECT(submittedLost[1] == 1, "only absent interior packet is synthesized at current deadline");
     RtpvCleanupQueue(&queue);
 }
 
@@ -232,14 +236,17 @@ static void testReorderedRecoveryBeforeDeadline(void) {
     RTP_VIDEO_QUEUE queue;
     beginQueue(&queue, PYROWAVE_FORMAT);
     addPacket(&queue, 1, 0, 0, 0, 100, FLAG_SOF | FLAG_CONTAINS_PIC_DATA, true, true, 2);
-    addPacket(&queue, 1, 0, 0, 2, 100, FLAG_CONTAINS_PIC_DATA, false, false, 0);
+    addPacket(&queue, 1, 0, 0, 3, 100, FLAG_EOF | FLAG_CONTAINS_PIC_DATA, false, false, 0);
     uint64_t oldDeadline = RtpvGetPendingFrameDeadlineUs(&queue);
     fakeNowUs += 300;
     EXPECT(addPacket(&queue, 1, 0, 0, 1, 100, FLAG_CONTAINS_PIC_DATA, false, false, 0) == RTPF_RET_QUEUED,
            "reordered missing packet accepted before expiry");
     EXPECT(RtpvGetPendingFrameDeadlineUs(&queue) > oldDeadline, "reordered recovery reschedules silence timer");
-    EXPECT(RtpvExpirePendingFrame(&queue, oldDeadline) == false, "old deadline does not expire recovered block");
-    EXPECT(submittedPackets[1] == 0, "recovered critical payload remains buffered while EOF is absent");
+    EXPECT(!RtpvExpirePendingFrame(&queue, oldDeadline), "old deadline does not expire recovered block");
+    EXPECT(submittedPackets[1] == 0, "recovered critical payload waits for remaining interior hole");
+    addPacket(&queue, 1, 0, 0, 2, 100, FLAG_CONTAINS_PIC_DATA, false, false, 0);
+    EXPECT(submittedPackets[1] == DATA_PACKETS && submittedLost[1] == 0, "reordered intact frame submits without holes");
+    EXPECT(RtpvGetPendingFrameDeadlineUs(&queue) == 0, "complete frame clears expiry");
     RtpvCleanupQueue(&queue);
 }
 
@@ -248,10 +255,12 @@ static void testStaleDeadlineAfterCleanupAndWrap(void) {
     beginQueue(&queue, PYROWAVE_FORMAT);
     queue.nextContiguousSequenceNumber = 65534;
     addPacket(&queue, 1, 0, 0, 0, 65534, FLAG_SOF | FLAG_CONTAINS_PIC_DATA, true, true, 1);
-    addPacket(&queue, 1, 0, 0, 2, 65534, FLAG_CONTAINS_PIC_DATA, false, false, 0);
+    addPacket(&queue, 1, 0, 0, 3, 65534, FLAG_EOF | FLAG_CONTAINS_PIC_DATA, false, false, 0);
     uint64_t staleDeadline = RtpvGetPendingFrameDeadlineUs(&queue);
     EXPECT(staleDeadline != 0, "wrap case arms deadline");
     addPacket(&queue, 2, 0, 0, 0, 2, FLAG_SOF | FLAG_CONTAINS_PIC_DATA, true, true, 1);
+    EXPECT(RtpvGetPendingFrameDeadlineUs(&queue) == 0, "new tail has no stale deadline");
+    addPacket(&queue, 2, 0, 0, 3, 2, FLAG_EOF | FLAG_CONTAINS_PIC_DATA, false, false, 0);
     EXPECT(RtpvGetPendingFrameDeadlineUs(&queue) > staleDeadline, "frame transition replaces old deadline with successor deadline");
     EXPECT(!RtpvExpirePendingFrame(&queue, staleDeadline), "stale deadline cannot flush successor frame");
     EXPECT(submittedPackets[1] == DATA_PACKETS, "previous partial frame finalized by successor");
@@ -324,20 +333,20 @@ static void testCriticalCompleteAndOptionalMissingMultiblock(void) {
     RTP_VIDEO_QUEUE queue;
     beginQueue(&queue, PYROWAVE_FORMAT);
     // Block 0 arrives intact; block 1 has a two-packet critical prefix. The
-    // critical prefix is real while the final optional packet is missing.
-    for (unsigned i = 0; i < DATA_PACKETS; i++) {
+    // critical prefix is real while an interior optional packet is missing.
+    for (unsigned i = 0; i < dataPackets; i++) {
         unsigned flags = FLAG_CONTAINS_PIC_DATA | (i == 0 ? FLAG_SOF : 0) |
                          (i == DATA_PACKETS - 1 ? FLAG_EOF : 0);
         addPacket(&queue, 1, 0, 1, i, 100, flags, i == 0, true, i == 0 ? 6 : 0);
     }
     addPacket(&queue, 1, 1, 1, 0, 104, FLAG_SOF | FLAG_CONTAINS_PIC_DATA, false, false, 0);
     addPacket(&queue, 1, 1, 1, 1, 104, FLAG_CONTAINS_PIC_DATA, false, false, 0);
-    addPacket(&queue, 1, 1, 1, 2, 104, FLAG_CONTAINS_PIC_DATA, false, false, 0);
+    addPacket(&queue, 1, 1, 1, 3, 104, FLAG_EOF | FLAG_CONTAINS_PIC_DATA, false, false, 0);
     uint64_t deadline = RtpvGetPendingFrameDeadlineUs(&queue);
-    EXPECT(deadline != 0, "optional missing multiblock suffix arms deadline");
+    EXPECT(deadline != 0, "optional missing multiblock interior packet arms deadline");
     EXPECT(RtpvExpirePendingFrame(&queue, deadline), "multiblock frame flushes after validating combined critical prefix");
     EXPECT(submittedPackets[1] == 2 * DATA_PACKETS, "multiblock expiry emits both blocks");
-    EXPECT(submittedLost[1] == 1, "multiblock expiry fills only optional suffix");
+    EXPECT(submittedLost[1] == 1, "multiblock expiry fills only optional interior hole");
     RtpvCleanupQueue(&queue);
 }
 
@@ -352,7 +361,7 @@ static void testMissingCriticalFromEarlierBlockBlocksExpiry(void) {
     addPacket(&queue, 1, 0, 1, 3, 100, FLAG_EOF | FLAG_CONTAINS_PIC_DATA, false, false, 0);
     addPacket(&queue, 1, 1, 1, 0, 104, FLAG_SOF | FLAG_CONTAINS_PIC_DATA, false, false, 0);
     addPacket(&queue, 1, 1, 1, 1, 104, FLAG_CONTAINS_PIC_DATA, false, false, 0);
-    addPacket(&queue, 1, 1, 1, 2, 104, FLAG_CONTAINS_PIC_DATA, false, false, 0);
+    addPacket(&queue, 1, 1, 1, 3, 104, FLAG_EOF | FLAG_CONTAINS_PIC_DATA, false, false, 0);
     uint64_t deadline = RtpvGetPendingFrameDeadlineUs(&queue);
     EXPECT(deadline != 0, "last block with critical loss in earlier block still arms timer");
     EXPECT(!RtpvExpirePendingFrame(&queue, deadline), "earlier critical hole blocks multiblock expiry");
@@ -423,6 +432,7 @@ static void testLateFrameStillReceivingIsNotCut(void) {
     RTP_VIDEO_QUEUE queue;
     beginOnTimeQueue(&queue, true, -5000);
     addPacket(&queue, 1, 0, 0, 0, 100, FLAG_SOF | FLAG_CONTAINS_PIC_DATA, true, true, 1);
+    addPacket(&queue, 1, 0, 0, 3, 100, FLAG_EOF | FLAG_CONTAINS_PIC_DATA, false, false, 0);
     uint64_t first = RtpvGetPendingFrameDeadlineUs(&queue);
     EXPECT(RtpvPendingFrameDeadlineIsPrecise(&queue), "a late frame uses the short silence");
     EXPECT(first > fakeNowUs && first < fakeNowUs + DEADLINE_US / 2, "a late frame waits only a short silence");
@@ -432,7 +442,7 @@ static void testLateFrameStillReceivingIsNotCut(void) {
     EXPECT(second > first, "a packet still arriving renews the short silence");
     EXPECT(!RtpvExpirePendingFrame(&queue, first), "a frame still receiving packets is not cut short");
     EXPECT(RtpvExpirePendingFrame(&queue, second), "a late frame is released once the burst goes quiet");
-    EXPECT(submittedLost[1] == 2, "only the packets that never arrived are filled");
+    EXPECT(submittedLost[1] == 1, "only the remaining interior hole is filled");
     RtpvCleanupQueue(&queue);
 }
 
@@ -451,12 +461,67 @@ static void testOnTimeDeadlineRequeriedPerFrame(void) {
     LiSetVideoReassemblyDeadlineCallback(NULL);
 }
 
+
+// A final block may pause between host send batches. Expiry must not turn its
+// unsent suffix into holes, even with a past presentation deadline or RTP wrap.
+static void testSpacedBatchesKeepTheirTail(void) {
+    const struct { bool known; int64_t offset; unsigned gap; } cases[] = {
+        { false, 0, 2500 }, { true, -5000, 800 }, { true, 400, 800 }
+    };
+    const unsigned bases[] = { 100, 64900 };
+    for (unsigned c = 0; c < sizeof(cases) / sizeof(cases[0]); ++c) {
+        for (unsigned b = 0; b < sizeof(bases) / sizeof(bases[0]); ++b) {
+            RTP_VIDEO_QUEUE queue;
+            beginOnTimeQueue(&queue, cases[c].known, cases[c].offset);
+            dataPackets = 199;
+            queue.nextContiguousSequenceNumber = bases[b];
+            for (unsigned block = 0; block < 3; ++block) {
+                addFullFrame(&queue, 1, bases[b] + block * 199, block, 3, true, 1);
+            }
+            for (unsigned i = 0; i < 199; ++i) {
+                if (i && i % 46 == 0) {
+                    fakeNowUs += cases[c].gap;
+                    EXPECT(!RtpvExpirePendingFrame(&queue, fakeNowUs), "batch gap must not discard an unfinished tail");
+                }
+                unsigned flags = FLAG_CONTAINS_PIC_DATA;
+                if (i == 0) flags |= FLAG_SOF;
+                if (i == 198) flags |= FLAG_EOF;
+                EXPECT(addPacket(&queue, 1, 3, 3, i, bases[b] + 597, flags, false, false, 0) == RTPF_RET_QUEUED,
+                       "every arriving suffix packet remains acceptable");
+                // Approximate a full-size packet's serialization on a 1 Gbps link.
+                fakeNowUs += 12;
+            }
+            EXPECT(submittedPackets[1] == 796, "all four blocks reach the depacketizer");
+            EXPECT(submittedLost[1] == 0, "zero-loss spaced batches create no holes");
+            EXPECT(RtpvGetPendingFrameDeadlineUs(&queue) == 0, "intact frame leaves no expiry");
+            RtpvCleanupQueue(&queue);
+        }
+    }
+    LiSetVideoReassemblyDeadlineCallback(NULL);
+}
+
+static void testEofFlagBeforeLastDataPacketIsNotCompletion(void) {
+    RTP_VIDEO_QUEUE queue;
+    beginOnTimeQueue(&queue, true, -5000);
+    addPacket(&queue, 1, 0, 0, 0, 100, FLAG_SOF | FLAG_EOF | FLAG_CONTAINS_PIC_DATA, true, true, 1);
+    EXPECT(RtpvGetPendingFrameDeadlineUs(&queue) == 0, "an early EOF flag cannot prove the tail arrived");
+    EXPECT(!RtpvExpirePendingFrame(&queue, fakeNowUs + 5000), "packet count controls end-of-block evidence");
+    for (unsigned i = 1; i < 4; ++i) {
+        unsigned flags = FLAG_CONTAINS_PIC_DATA | (i == 3 ? FLAG_EOF : 0);
+        EXPECT(addPacket(&queue, 1, 0, 0, i, 100, flags, false, false, 0) == RTPF_RET_QUEUED,
+               "the actual suffix remains acceptable");
+    }
+    EXPECT(submittedPackets[1] == 4 && submittedLost[1] == 0, "real end completes frame without fabricated loss");
+    RtpvCleanupQueue(&queue);
+    LiSetVideoReassemblyDeadlineCallback(NULL);
+}
+
 int main(void) {
     StreamConfig.packetSize = PACKET_SIZE;
     testCodecControls();
     testIntactFrameImmediate();
     testOptionalHoleExpiresWithoutSuccessor();
-    testMissingEofCanExpire();
+    testMissingEofWaitsForSuccessor();
     testProgressExtendsDeadline();
     testReorderedRecoveryBeforeDeadline();
     testStaleDeadlineAfterCleanupAndWrap();
@@ -467,6 +532,8 @@ int main(void) {
     testOnTimeDeadlineShortensSilence();
     testLateFrameStillReceivingIsNotCut();
     testOnTimeDeadlineRequeriedPerFrame();
+    testSpacedBatchesKeepTheirTail();
+    testEofFlagBeforeLastDataPacketIsNotCompletion();
     if (failures != 0) {
         fprintf(stderr, "%d queue test(s) failed\n", failures);
         return 1;

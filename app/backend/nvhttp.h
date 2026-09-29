@@ -123,6 +123,10 @@ public:
     QString
     getServerInfo(NvLogLevel logLevel, bool fastFail = false);
 
+    // Downloads a fixed-size probe from the paired host over pinned HTTPS.
+    // Returns measured Mbps, or throws on an unsupported/failed request.
+    int probePyroWaveDownloadMbps();
+
     static
     void
     verifyResponseStatus(QString xml);

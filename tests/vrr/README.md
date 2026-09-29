@@ -14,7 +14,7 @@ removed when settings are saved. Every normal session uses 0.5 ms tolerance for
 Low Latency and Balanced Target and 0.2 ms for Smooth, with severity-weighted
 preset histories and targets of
 99% / 99.5% / 99.99% for Low Latency / Balanced Target / Smooth. Their clean
-holds are 6 / 8 / 10 seconds and release speeds are 125 / 250 / 50 us per
+holds are 6 / 8 / 10 seconds and release speeds are 250 / 250 / 50 us per
 second. Their score histories are 1 / 2 / 5 minutes respectively. Growth
 requires below-target long-window quality, current pressure, fresh readiness-
 related interval error, and serial local work that fits the intended interval.
@@ -23,12 +23,14 @@ useful for qualifying future growth but cannot pin the live delay by itself.
 While the long-window score still meets the target, current pressure only
 pauses release for that frame (`playout_hold_renew_below_target`); it restarts
 the hold once the score falls below target.
-Preset allowances are now 2/2/4 fitted source frames, additionally limited by
-16/16/24 ms and the unchanged three-frame queue-capacity bound. Initial interval
+Preset allowances are 1/2/4 fitted source frames, additionally limited by
+the four-waiting-frame queue-capacity bound. Initial interval
 calibration needs at least 500 ms and 32 consecutive valid intervals. Growth
 still requests at most 250 us per 250 ms and applies at most 125 us per frame.
 Completing calibration is sticky across sequence breaks and FPS changes;
-subsequent requalification retains the historical one-second gate. The controller
+subsequent requalification retains the historical one-second gate. Production
+release revision 3 preserves earned clean time across short gaps but never
+credits the gap itself; recorded revisions 0-2 retain their prior behavior. The controller
 suite checks 20/30/60/116/240 FPS startup, repeated 120/19/30/99/116/60 FPS
 transitions across all presets and smoothing settings, unchanged attack bounds,
 and no padding growth from clean variable-rate source intervals alone.
@@ -148,12 +150,12 @@ persistent swapchain; per-frame latch decisions never destroy or recreate it.
 Persistent Mailbox counts as protected presentation and omits the redundant
 software spacing floor, while Immediate and FIFO retain that floor. The
 Gamescope WSI FIFO compatibility path retains its compositor-owned behavior.
-The latency presets cap adaptive padding independently of native mode: two
-fitted source frames for Low Latency and Balanced Target, and four frames for
+The latency presets cap adaptive padding independently of native mode: one,
+two, and four fitted source frames for Low Latency, Balanced Target, and
 Smooth in live sessions. Explicit historical replay parameters can
-retain the configured stream-rate basis. Smooth is additionally allowed up to
-24 ms, subject to queue capacity. Stale-work replacement remains a separate
-two-frame rule.
+retain the configured stream-rate basis. The effective maximum remains subject to queue capacity. The current stale-work
+rule also protects the learned playout delay; old captured policies retain
+their two-period rule.
 
 New live VRR sessions always enable native adaptive-presentation permission and
 record the schema-5 `session_allow_tearing` field as true. Worker tests retain a
@@ -170,8 +172,8 @@ The FPS picker offers native VRR rates and preserves saved custom values; the
 reduced-rate Low Latency VRR recommendation has been removed. The worker no
 longer generates gap-fill repeats when new frames are unavailable.
 
-Low Latency and Balanced Target cap playout padding at 16 ms; Smooth caps it at
-24 ms. Reduce judder optionally smooths
+Low Latency, Balanced Target, and Smooth allow one, two, and four fitted source
+periods respectively, subject to queue capacity. Reduce judder optionally smooths
 credible source cadence; transitions follow raw RTP slots. Historical policies remain replayable.
 For controller accuracy, use `simulation.sender_cadence.spacing_accuracy_percent`
 and `spacing_errors_over_2ms`: both long and short spacing errors count. The
@@ -230,8 +232,9 @@ this policy. They remain optional trace/cadence diagnostics, with absent display
 events reported as unavailable or through separately labeled submission
 estimates. The selected latency preset still limits the allowed padding. The
 historical version-18 profiles isolate that policy from native-hitch estimates;
-current version-20 diagnostics cannot hold the live buffer high. The three-frame queue
-and preset padding caps are unchanged. Missing `playout_prediction_only` defaults to zero;
+current version-20 diagnostics cannot hold the live buffer high. The live
+queue now has four waiting slots; captured size and preset caps replay as recorded.
+Missing `playout_prediction_only` defaults to zero;
 the historical native-hitch and combined-feedback policies remain replayable.
 Controller regressions cover growth and later release without display events,
 delivery/render/scheduler faults, startup without double-counted protection,
@@ -351,7 +354,7 @@ controller parameter set, controller call duration and learned-model state,
 stale-check age, render/target wait boundaries, both spacing-floor checks,
 correction-wait boundaries, explicit worker-requested rebase cause, and
 terminal time. The parameter set includes the source-frame-relative playout
-cap so new captures distinguish the 2/2/4-frame allowances while older captures
+cap so new captures distinguish the 1/2/4-frame allowances while older captures
 retain their recorded ratios or historical default. Initial-calibration
 duration/sample parameters default to one second/two intervals when missing;
 new production captures record 500 ms/32 intervals. Header-resolved schema-5 extensions also record the native
@@ -648,7 +651,7 @@ proves the producer relationships among
 `spacing_deficit_us`, guard feedback, the correction-wait interval, and
 `spacing_corrected`, including the exact pre-feedback recheck and
 post-feedback floor, and bounds both arrival-time and completion-time queue
-depth against the worker's actual three-frame capacity. These fields are
+depth against the worker's actual four-waiting-frame capacity. These fields are
 exported in the per-frame timeline instead of being accepted as inert
 diagnostic decoration.
 DXGI `SyncQPCTime` is converted through one stable QPC-to-Moonlight-clock

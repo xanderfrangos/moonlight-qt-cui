@@ -222,6 +222,14 @@ private:
     std::atomic_bool m_CalibrationInvalidated { false };
     QByteArray m_InitialPlayoutProfile;
     bool m_CalibrationLoaded = false;
+    QString startDelayPath() const;
+    void noteSettledDelay(uint64_t nowUs, uint64_t delayUs);
+    static constexpr uint64_t kSettledDelayWarmupUs = 30000000;
+    static constexpr size_t kMinimumSettledDelaySamples = 60;
+    uint64_t m_StartDelaySeedUs = 0;
+    uint64_t m_FirstDecisionUs = 0;
+    uint64_t m_LastSettledDelaySampleUs = 0;
+    std::vector<uint64_t> m_SettledDelaySamples;
     uint64_t m_InitialCachedSamples = 0;
     int m_HistoryVersion = 0;
 
@@ -229,6 +237,7 @@ private:
     VrrReceiveDeadline::RecentDuration m_RecentDuration;
     VrrReceiveDeadline::RecentDuration m_DecodeGpuCost;
     VrrReceiveDeadline::RecentDuration m_PresentCallCost;
+    VrrReceiveDeadline::RecentDuration m_PreparationCost;
     std::unique_ptr<VrrTargetWaiter> m_TargetWaiter;
 
     QMutex m_FrameQueueLock;

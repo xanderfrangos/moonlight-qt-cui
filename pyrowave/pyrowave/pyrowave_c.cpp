@@ -425,6 +425,15 @@ pyrowave_device_set_queue_type(pyrowave_device device, VkQueueFlagBits queue_fla
 	return PYROWAVE_SUCCESS;
 }
 
+pyrowave_result
+pyrowave_device_set_frame_contexts(pyrowave_device device, unsigned count)
+{
+	if (!device || count < 2 || count > 8)
+		return PYROWAVE_ERROR_INVALID_ARGUMENT;
+	device->device.init_frame_contexts(count);
+	return PYROWAVE_SUCCESS;
+}
+
 void pyrowave_device_destroy(pyrowave_device device)
 {
 	Util::set_thread_logging_interface(&null_logger);

@@ -36,9 +36,21 @@ inline void publish(uint32_t rtpTimestamp, uint64_t deadlineUs)
     g_Anchor.store(pack(rtpTimestamp, deadlineUs), std::memory_order_release);
 }
 
+// Latest decode start that still leaves the frame's decode and preparation
+// before its target, in the same packed form as g_Anchor. A decode hold may
+// only extend to this bound; the reassembly deadline above does not include
+// preparation and must not be used for it.
+inline std::atomic<uint64_t> g_HoldAnchor {0};
+
+inline void publishHold(uint32_t rtpTimestamp, uint64_t deadlineUs)
+{
+    g_HoldAnchor.store(pack(rtpTimestamp, deadlineUs), std::memory_order_release);
+}
+
 inline void clear()
 {
     g_Anchor.store(0, std::memory_order_release);
+    g_HoldAnchor.store(0, std::memory_order_release);
 }
 
 // The deadline is stored truncated, so it is recovered relative to nowUs; it
@@ -70,9 +82,9 @@ inline uint64_t deadlineUs(uint32_t rtpTimestamp, uint64_t nowUs)
 // a given GPU suffers varies; the rule does not: submit the next decode after
 // our Present call. The pacer opens a window from (its target - this
 // machine's learned decode GPU time) and closes it when the Present call
-// returns. The decoder holds only when the frame still meets its own
-// reassembly deadline at the expected close (target + learned Present-call
-// duration).
+// returns. The decoder holds only when the frame can still decode and
+// prepare before its own target after the expected close (target + learned
+// Present-call duration).
 // Low 32 bits: window start, high 32 bits: expected close, both the low 32
 // bits of LiGetMicroseconds() time. Zero means no window.
 inline std::atomic<uint64_t> g_PresentWindow {0};
@@ -123,7 +135,7 @@ inline DecodeHold decodeHold(uint64_t window, uint64_t deadlineAnchor,
 inline DecodeHold decodeHold(uint32_t rtpTimestamp, uint64_t nowUs)
 {
     return decodeHold(g_PresentWindow.load(std::memory_order_acquire),
-                      g_Anchor.load(std::memory_order_acquire),
+                      g_HoldAnchor.load(std::memory_order_acquire),
                       rtpTimestamp, nowUs);
 }
 
@@ -141,6 +153,18 @@ public:
     static constexpr size_t kWindow = 128;
     static constexpr size_t kMinimumSamples = 32;
     static constexpr size_t kPercentilePerMille = 950;
+
+    void observeGpuCompletion(uint64_t startUs, uint64_t decoderOutputUs,
+                              uint64_t completionUs, bool decoderOutputComplete = false)
+    {
+        // An async decoder's output is submission, not completion. If the
+        // worker found the image already ready, it has no new completion
+        // timestamp: preserve observed history instead of learning CPU cost.
+        if (completionUs > decoderOutputUs ||
+                (decoderOutputComplete && completionUs == decoderOutputUs)) {
+            observe(startUs, completionUs);
+        }
+    }
 
     void observe(uint64_t reassembledUs, uint64_t decodeCompleteUs)
     {

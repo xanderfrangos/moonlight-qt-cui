@@ -243,6 +243,17 @@ private:
     pl_renderer m_PreparationRenderer = nullptr;
     pl_tex m_PreparationTextures[PL_MAX_PLANES] = {};
     std::vector<pl_tex> m_PreparationFreeTextures;
+    // Deferred acquisition: render into a renderer-owned texture at
+    // preparation and acquire, copy and present the swapchain image only at
+    // the target. A held swapchain image keeps its buffer on the GPU's
+    // residency list, so the next decode can delay its flip.
+    bool m_DeferredAcquireEnabled = false;
+    bool m_DeferredTemplateValid = false;
+    pl_swapchain_frame m_DeferredTemplate = {};
+    pl_tex_params m_DeferredTextureParams = {};
+    pl_tex m_DeferredTextures[2] = {};
+    int m_DeferredIndex = 0;
+    pl_tex m_DeferredPreparedTexture = nullptr;
     // The ordinary renderer can still handle an incompatible output epoch.
     // Serialize the shared overlay snapshot while either renderer records it.
     QMutex m_ImageRenderLock;
@@ -268,6 +279,8 @@ private:
     std::atomic<VrrFallbackReason> m_VrrFallbackReason { VrrFallbackReason::InitializationFailed };
     std::atomic<bool> m_VrrWindowChangePending { false };
     bool m_VrrPreparingFrame = false;
+    // renderFrame() targets a deferred-acquisition texture (Linux Mailbox).
+    bool m_VrrRenderIntoDeferred = false;
     bool m_VrrFramePrepared = false;
     bool m_VrrRenderSucceeded = false;
     bool m_VrrRenderTimingActive = false;

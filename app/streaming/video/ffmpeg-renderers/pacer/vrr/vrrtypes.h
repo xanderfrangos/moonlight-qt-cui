@@ -123,6 +123,16 @@ public:
         return m_DecoderOutputUs;
     }
 
+    void setDecoderOutputComplete(bool complete)
+    {
+        m_DecoderOutputComplete = complete;
+    }
+
+    bool decoderOutputComplete() const
+    {
+        return m_DecoderOutputComplete;
+    }
+
     uint64_t decodeSyncWaitUs() const
     {
         return m_DecodeSyncWaitUs;
@@ -203,6 +213,7 @@ private:
     int m_FrameNumber = -1;
     uint32_t m_RtpTimestamp = 0;
     bool m_TimestampValid = false;
+    bool m_DecoderOutputComplete = true;
     uint64_t m_DecoderOutputUs = 0;
     uint64_t m_DecodeCompleteUs = 0;
     uint64_t m_DecodeSyncWaitUs = 0;

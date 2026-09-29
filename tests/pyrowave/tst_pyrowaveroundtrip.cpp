@@ -143,6 +143,62 @@ struct SharedRenderer {
     }
 };
 
+// Reproduces a decoder that has returned an AVFrame while its completion
+// semaphore is still pending. No timing race or artificial GPU load is needed.
+void checkSharedDecodeCompletion()
+{
+    SharedRenderer renderer;
+    if (!renderer.create()) {
+        expect(false, "completion test Vulkan device");
+        return;
+    }
+    auto signal = reinterpret_cast<PFN_vkSignalSemaphore>(
+        renderer.instance->get_proc_addr(renderer.instance->instance, "vkSignalSemaphore"));
+    expect(signal != nullptr, "timeline semaphore host signal available");
+    if (!signal) return;
+
+    PyroWaveVulkanSurface first = {}, second = {};
+    AVFrame* a = av_frame_alloc();
+    AVFrame* b = av_frame_alloc();
+    AVFrame* foreign = av_frame_alloc();
+    const bool firstHeld = renderer.pool->holdPyroWaveSurface(64, 64, false, false, first);
+    const bool secondHeld = renderer.pool->holdPyroWaveSurface(64, 64, false, false, second);
+    expect(firstHeld && secondHeld, "two independent decode surfaces acquired");
+    if (firstHeld && secondHeld) {
+        expect(renderer.pool->releasePyroWaveSurface(first, true, a), "first decode submitted");
+        expect(renderer.pool->releasePyroWaveSurface(second, true, b), "second decode submitted");
+        expect(renderer.pool->waitForFrame(a, 0) == VK_TIMEOUT,
+               "decoder output is not GPU completion");
+        expect(renderer.pool->waitForFrame(a, 1000000) == VK_TIMEOUT,
+               "an unsignalled decode has a bounded wait");
+
+        VkSemaphoreSignalInfo info = {};
+        info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
+        info.semaphore = first.done;
+        info.value = first.doneValue;
+        expect(signal(renderer.vulkan->device, &info) == VK_SUCCESS, "complete first decode");
+        expect(renderer.pool->waitForFrame(a, 0) == VK_SUCCESS,
+               "first frame does not wait for a later pending decode");
+        expect(renderer.pool->waitForFrame(b, 0) == VK_TIMEOUT,
+               "first completion does not release the second frame");
+        AVFrame* clone = av_frame_clone(a);
+        expect(clone && renderer.pool->waitForFrame(clone, 0) == VK_SUCCESS,
+               "cloned frame retains its own completion value");
+        av_frame_free(&clone);
+
+        info.value = second.doneValue;
+        expect(signal(renderer.vulkan->device, &info) == VK_SUCCESS, "complete second decode");
+        expect(renderer.pool->waitForFrame(b, 0) == VK_SUCCESS, "second frame completes independently");
+    }
+    expect(renderer.pool->waitForFrame(nullptr, 0) != VK_SUCCESS,
+           "missing frame cannot report decode completion");
+    expect(renderer.pool->waitForFrame(foreign, 0) != VK_SUCCESS,
+           "foreign frame cannot report pool completion");
+    av_frame_free(&a);
+    av_frame_free(&b);
+    av_frame_free(&foreign);
+}
+
 // Reads a decoded plane as 8-bit samples, from system memory or from the
 // shared texture.
 std::vector<uint8_t> planeSamples(const AVFrame* frame, SharedRenderer* shared, int plane,
@@ -195,6 +251,8 @@ void checkLinuxClientDecode(const std::vector<uint8_t>& records, const Planes& s
         expect(false, label + ": Linux client initialization");
         return;
     }
+    expect(client.hasAsynchronousOutput() == (shared != nullptr),
+           label + ": completion semantics match the actual decode path");
 
     // Warm up, then time decode calls; with shared surfaces also time until
     // the GPU finished, which a one-pixel download waits for.
@@ -268,6 +326,8 @@ void checkLinuxClientDecode(const std::vector<uint8_t>& records, const Planes& s
     expect(frame->width == source.width && frame->height == source.height, label + ": frame size");
     if (shared) {
         expect(shared->pool->ownsFrame(frame), label + ": frame references a shared surface");
+        expect(shared->pool->waitForFrame(frame, 50000000) == VK_SUCCESS,
+               label + ": actual decoder signals the frame completion value");
     }
     else {
         expect(frame->data[0] && frame->data[1] && frame->data[2], label + ": planar output");
@@ -640,7 +700,9 @@ void runCase(pyrowave_device device, int width, int height, bool chroma444, size
 
 }
 
-int main()
+bool checkPyroWaveDequantStores();
+
+int main(int argc, char** argv)
 {
     pyrowave_device device = nullptr;
     if (pyrowave_create_default_device(&device) != PYROWAVE_SUCCESS) {
@@ -648,7 +710,14 @@ int main()
         return 0;
     }
 
+    if (argc == 2 && std::strcmp(argv[1], "--dequant-only") == 0) {
+        const bool passed = checkPyroWaveDequantStores();
+        pyrowave_device_destroy(device);
+        return passed ? 0 : 1;
+    }
+
 #ifdef __linux__
+    checkSharedDecodeCompletion();
     SharedRenderer shared;
     if (shared.create()) {
         g_Shared = &shared;
@@ -657,6 +726,8 @@ int main()
         expect(false, "libplacebo device for shared PyroWave surfaces");
     }
 #endif
+
+    expect(checkPyroWaveDequantStores(), "coefficient-store GPU equivalence");
 
     // Budgets around 1.6 bits per pixel
     runCase(device, 1280, 720, false, 180 * 1024);

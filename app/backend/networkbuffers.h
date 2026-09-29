@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QHostAddress>
 
 // PyroWave frames arrive as hundreds of packets at line rate. Two places can
 // drop them before Moonlight reads the socket:
@@ -38,6 +39,8 @@ public:
     // connected or its speed is unknown. wirelessConnected, when given, reports
     // whether a wireless adapter is connected.
     static int wiredLinkMbps(bool* wirelessConnected = nullptr);
+    // Speed of the wired interface actually routed to the selected host.
+    static int routedWiredLinkMbps(const QHostAddress& host);
 
     bool needsFix() const { return m_NeedsFix; }
     bool canApply() const;

@@ -6,6 +6,7 @@ import QtQuick.Controls.Material 2.2
 
 import StreamingPreferences 1.0
 import ComputerManager 1.0
+import ComputerModel 1.0
 import SdlGamepadKeyNavigation 1.0
 import InputModeTracker 1.0
 import SystemProperties 1.0
@@ -19,6 +20,10 @@ Flickable {
     clip: SystemProperties.tvMode
 
     id: settingsPage
+    ComputerModel {
+        id: calibrationHosts
+        Component.onCompleted: initialize(ComputerManager)
+    }
     objectName: qsTr("Settings")
 
     signal languageChanged()
@@ -1097,14 +1102,24 @@ Flickable {
                     spacing: 5
                     visible: SystemProperties.hasPyroWave && slider.pyroWave
 
+                    ComboBox {
+                        id: calibrationHost
+                        width: parent.width
+                        model: calibrationHosts
+                        textRole: "name"
+                        enabled: !PyroWaveCalibrator.running
+                    }
+
                     Button {
                         text: qsTr("Calibrate PyroWave")
-                        enabled: !PyroWaveCalibrator.running
+                        enabled: !PyroWaveCalibrator.running && calibrationHost.currentIndex >= 0
                         onClicked: {
                             calibrationDialog.testFps = StreamingPreferences.fps
                             calibrationDialog.open()
                             // Each test frame is drawn at this screen's size, as a stream would be
-                            PyroWaveCalibrator.start(calibrationDialog.testFps,
+                            PyroWaveCalibrator.start(ComputerManager,
+                                                     calibrationHosts.uuidAt(calibrationHost.currentIndex),
+                                                     calibrationDialog.testFps,
                                                      Math.round(Screen.width * Screen.devicePixelRatio),
                                                      Math.round(Screen.height * Screen.devicePixelRatio))
                         }
@@ -1113,7 +1128,7 @@ Flickable {
                     Label {
                         width: parent.width
                         wrapMode: Text.Wrap
-                        text: qsTr("Finds the best bitrate this device can decode and draw smoothly for each resolution and format at your frame rate. Takes about two minutes. Click a result to use it.")
+                        text: qsTr("Tests bandwidth from the selected host to this PC, then finds a bitrate this device can decode and draw smoothly at your frame rate. Takes about two minutes. Click a result to use it.")
                     }
                 }
 
@@ -1384,7 +1399,7 @@ Flickable {
                                 wrapMode: Text.Wrap
                                 font.pointSize: 9
                                 text: PyroWaveCalibrator.linkSummary + " " +
-                                      qsTr("Your host isn't tested. Clicking a format applies it with the bitrate shown.")
+                                      qsTr("The bandwidth test is a bulk transfer; a live stream can still encounter packet loss or congestion. Clicking a format applies the bitrate shown.")
                             }
 
                             Repeater {

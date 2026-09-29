@@ -197,6 +197,12 @@ pyrowave_device_set_command_buffer(pyrowave_device device, VkCommandBuffer cmd);
 PYROWAVE_PUBLIC_API pyrowave_result
 pyrowave_device_set_queue_type(pyrowave_device device, VkQueueFlagBits queue_flags);
 
+// Number of frame contexts, i.e. how many submissions may be in flight on the
+// GPU before the next one blocks the CPU waiting for the oldest (default 2).
+// Call before creating codecs on the device; it waits for the device to idle.
+PYROWAVE_PUBLIC_API pyrowave_result
+pyrowave_device_set_frame_contexts(pyrowave_device device, unsigned count);
+
 PYROWAVE_PUBLIC_API bool
 pyrowave_device_confirm_interop_support(pyrowave_device device);
 
