@@ -490,11 +490,18 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
         // Intel's Windows drivers seem to have interoperability issues as of FFmpeg 7.0.1
         // when using Vulkan Video decoding. Since they also expose HEVC REXT profiles using
         // D3D11VA, let's reject them here so we can select a different Vulkan device or
-        // just allow D3D11VA to take over.
-        if (deviceProps->vendorID == 0x8086 && !qEnvironmentVariableIntValue("PLVK_ALLOW_INTEL")) {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "Skipping Intel GPU for Vulkan Video due to broken drivers");
-            return false;
+        // just allow D3D11VA to take over. An explicit Vulkan renderer selection
+        // overrides this, since the user asked for Vulkan over D3D11VA.
+        if (deviceProps->vendorID == 0x8086) {
+            if (decoderParams->renderer == StreamingPreferences::RS_VULKAN) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "Using Intel GPU for Vulkan Video because the Vulkan renderer is forced");
+            }
+            else if (!qEnvironmentVariableIntValue("PLVK_ALLOW_INTEL")) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "Skipping Intel GPU for Vulkan Video due to broken drivers");
+                return false;
+            }
         }
 #endif
     }

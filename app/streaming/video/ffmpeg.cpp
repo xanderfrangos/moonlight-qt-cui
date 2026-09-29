@@ -483,9 +483,11 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
         decoderPrefersVrrCapableRenderer(params->enableVrr, params->preferVrrRenderer);
 #ifdef Q_OS_LINUX
     const bool preferVulkan = preferVulkanForVrr || params->fsr1Upscaling ||
-                              params->ls1Upscaling;
+                              params->ls1Upscaling ||
+                              params->renderer == StreamingPreferences::RS_VULKAN;
 #else
-    const bool preferVulkan = preferVulkanForVrr;
+    const bool preferVulkan = preferVulkanForVrr ||
+                              params->renderer == StreamingPreferences::RS_VULKAN;
 #endif
 #else
     const bool preferVulkanForVrr = false;
@@ -523,6 +525,8 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
                 // rendering HDR with Vulkan if possible since it's more fully featured than DRM.
                 if (preferVulkan) {
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                params->renderer == StreamingPreferences::RS_VULKAN ?
+                                    "Vulkan renderer forced by user preference" :
                                 (params->fsr1Upscaling || params->ls1Upscaling) && !preferVulkanForVrr ?
                                     "Upscaling requested: preferring Vulkan frontend on Linux" :
                                 params->enableVrr ?
@@ -572,6 +576,8 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
             if (preferVulkan || qgetenv("PREFER_VULKAN") == "1") {
                 if (preferVulkan) {
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                params->renderer == StreamingPreferences::RS_VULKAN ?
+                                    "Vulkan renderer forced by user preference" :
                                 (params->fsr1Upscaling || params->ls1Upscaling) && !preferVulkanForVrr ?
                                     "Upscaling requested: preferring Vulkan frontend on Linux" :
                                 params->enableVrr ?
@@ -1806,6 +1812,13 @@ IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig
         // DXVA2 appears in the hwaccel list before D3D11VA, so we only check for D3D11VA
         // on the first pass to ensure we prefer D3D11VA over DXVA2.
         case AV_HWDEVICE_TYPE_D3D11VA:
+#ifdef HAVE_LIBPLACEBO_VULKAN
+            // When the Vulkan renderer is forced, skip D3D11VA here so the Vulkan
+            // hwaccel config gets the first shot. D3D11VA is still tried in pass 1.
+            if (params->renderer == StreamingPreferences::RS_VULKAN) {
+                return nullptr;
+            }
+#endif
             return new D3D11VARenderer(pass);
 #endif
 #ifdef Q_OS_DARWIN
@@ -2161,7 +2174,8 @@ bool FFmpegVideoDecoder::tryInitializeRendererForUnknownDecoder(const AVCodec* d
         // Supported output pixel formats are unknown. We'll just try DRM/SDL and hope it can cope.
 
 #if defined(Q_OS_LINUX) && defined(HAVE_LIBPLACEBO_VULKAN)
-        if ((params->fsr1Upscaling || params->ls1Upscaling) &&
+        if ((params->fsr1Upscaling || params->ls1Upscaling ||
+             params->renderer == StreamingPreferences::RS_VULKAN) &&
                 tryInitializeRenderer(decoder, AV_PIX_FMT_NONE, params, nullptr, nullptr,
                                       []() -> IFFmpegRenderer* { return new PlVkRenderer(); })) {
             return true;
@@ -2215,8 +2229,12 @@ bool FFmpegVideoDecoder::tryInitializeRendererForUnknownDecoder(const AVCodec* d
     }
 
     // Check if any of our decoders prefer any of the pixel formats first
-#if defined(Q_OS_LINUX) && defined(HAVE_LIBPLACEBO_VULKAN)
-    if (params->fsr1Upscaling || params->ls1Upscaling) {
+#if defined(HAVE_LIBPLACEBO_VULKAN) && !defined(Q_OS_DARWIN)
+    bool preferPlVk = params->renderer == StreamingPreferences::RS_VULKAN;
+#ifdef Q_OS_LINUX
+    preferPlVk = preferPlVk || params->fsr1Upscaling || params->ls1Upscaling;
+#endif
+    if (preferPlVk) {
         for (int i = 0; decoder_pix_fmts[i] != AV_PIX_FMT_NONE; i++) {
             TRY_PREFERRED_PIXEL_FORMAT(PlVkRenderer);
         }

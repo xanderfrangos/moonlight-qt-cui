@@ -74,7 +74,7 @@ public:
     };
     Q_ENUM(VrrLatencyMode)
 
-    // Mac only (for now)
+    // Full selection is Mac only. Other platforms only toggle between RS_AUTO and RS_VULKAN.
     enum RendererSelection
     {
         RS_PROBE_ONLY = -1, // Only valid for probing decoder properties

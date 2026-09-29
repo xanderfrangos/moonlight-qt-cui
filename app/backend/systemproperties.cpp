@@ -155,12 +155,17 @@ SystemProperties::SystemProperties()
     supportsVideoDithering = false;
 #endif
 
-    // Only libplacebo has debanding. On Windows 10-bit always goes through the
-    // D3D11VA renderer, which has no equivalent, so don't offer it there.
-#if defined(HAVE_LIBPLACEBO_VULKAN) && !defined(Q_OS_WIN32)
+    // Only libplacebo has debanding. On Windows the default renderer is D3D11VA,
+    // which has no equivalent, so it is only offered when Vulkan is forced.
+#ifdef HAVE_LIBPLACEBO_VULKAN
     supportsVideoDebanding = true;
 #else
     supportsVideoDebanding = false;
+#endif
+#ifdef Q_OS_WIN32
+    videoDebandingRequiresVulkan = true;
+#else
+    videoDebandingRequiresVulkan = false;
 #endif
 
     // FSR1 and LS1 are integrated with the D3D11 renderer on Windows and the

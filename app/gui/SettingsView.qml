@@ -1993,7 +1993,9 @@ Flickable {
                 Column {
                     width: parent.width
                     spacing: 5
-                    visible: SystemProperties.supportsVideoDebanding
+                    visible: SystemProperties.supportsVideoDebanding &&
+                             (!SystemProperties.videoDebandingRequiresVulkan ||
+                              StreamingPreferences.rendererSelection === StreamingPreferences.RS_VULKAN)
 
                     Label {
                         width: parent.width
@@ -3229,6 +3231,25 @@ Flickable {
                     onActivated : {
                         StreamingPreferences.rendererSelection = rendererListModel.get(currentIndex).val
                     }
+                }
+
+                CheckBox {
+                    id: forceVulkanRendererCheck
+                    width: parent.width
+                    text: qsTr("Force Vulkan renderer")
+                    font.pointSize: 12
+                    visible: !SystemProperties.isDarwin
+
+                    checked: StreamingPreferences.rendererSelection === StreamingPreferences.RS_VULKAN
+                    onCheckedChanged: {
+                        StreamingPreferences.rendererSelection = checked ? StreamingPreferences.RS_VULKAN
+                                                                         : StreamingPreferences.RS_AUTO
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 8000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Uses the Vulkan (libplacebo) renderer instead of the platform default. Falls back to the default renderer if Vulkan fails to initialize.")
                 }
 
                 CheckBox {
