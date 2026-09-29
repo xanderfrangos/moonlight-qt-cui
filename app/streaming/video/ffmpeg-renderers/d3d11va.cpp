@@ -17,10 +17,13 @@
 #include <SDL_syswm.h>
 #include <Limelight.h>
 
+#include <libplacebo/dither.h>
+
 #include <dwmapi.h>
 
 #include <cwchar>
 #include <limits>
+#include <mutex>
 #include <thread>
 
 using Microsoft::WRL::ComPtr;
@@ -90,6 +93,12 @@ static_assert(sizeof(DITHER_FRAME_CONST_BUF) % 16 == 0, "Constant buffer sizes m
 // Advancing the phase by an irrational fraction spreads successive frames
 // evenly over the threshold range instead of cycling through a short pattern.
 static const float k_DitherPhaseStep = 0.6180339887f;
+
+// Threshold matrix sizes. libplacebo's own blue noise dithering defaults to 64,
+// which is large enough that the tiling isn't visible. The ordered kernel keeps
+// the classic 8x8 Bayer matrix.
+static const int k_BlueNoiseSize = 64;
+static const int k_BayerSize = 8;
 
 // HDR frames are PQ-encoded into the 10-bit swapchain. The display's HDR
 // pipeline takes it from there, so the swapchain is the depth we quantize to.
@@ -329,6 +338,7 @@ D3D11VARenderer::~D3D11VARenderer()
     }
 
     m_DitherFrameBuffer.Reset();
+    m_DitherThresholdView.Reset();
 
     for (auto& textureSrvs : m_VideoTextureResourceViews) {
         for (auto& srv : textureSrvs) {
@@ -1339,6 +1349,67 @@ int D3D11VARenderer::queryDisplayBitsPerComponent()
     return (int)outputDesc.BitsPerColor;
 }
 
+// Fills the t3 threshold texture the dithering shaders read. Each entry gets
+// half a step of offset so the pattern is centered on the rounded value.
+bool D3D11VARenderer::createDitherThresholds(bool blueNoise)
+{
+    const int size = blueNoise ? k_BlueNoiseSize : k_BayerSize;
+    std::vector<float> thresholds(size * size);
+
+    if (blueNoise) {
+        // Blue noise generation takes a noticeable moment even at this size,
+        // and the result is deterministic, so build it once per process.
+        static std::once_flag s_BlueNoiseOnce;
+        static std::vector<float> s_BlueNoise;
+        std::call_once(s_BlueNoiseOnce, []() {
+            s_BlueNoise.resize(k_BlueNoiseSize * k_BlueNoiseSize);
+            pl_generate_blue_noise(s_BlueNoise.data(), k_BlueNoiseSize);
+        });
+        thresholds = s_BlueNoise;
+    }
+    else {
+        pl_generate_bayer_matrix(thresholds.data(), size);
+    }
+
+    const float halfStep = 0.5f / (float)(size * size);
+    for (float& threshold : thresholds) {
+        threshold += halfStep;
+    }
+
+    D3D11_TEXTURE2D_DESC texDesc = {};
+    texDesc.Width = size;
+    texDesc.Height = size;
+    texDesc.MipLevels = 1;
+    texDesc.ArraySize = 1;
+    texDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Usage = D3D11_USAGE_IMMUTABLE;
+    texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA texData = {};
+    texData.pSysMem = thresholds.data();
+    texData.SysMemPitch = size * sizeof(float);
+
+    ComPtr<ID3D11Texture2D> texture;
+    HRESULT hr = m_RenderDevice->CreateTexture2D(&texDesc, &texData, &texture);
+    if (FAILED(hr)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "ID3D11Device::CreateTexture2D() failed for the dither thresholds: %x",
+                     hr);
+        return false;
+    }
+
+    hr = m_RenderDevice->CreateShaderResourceView(texture.Get(), nullptr, &m_DitherThresholdView);
+    if (FAILED(hr)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "ID3D11Device::CreateShaderResourceView() failed for the dither thresholds: %x",
+                     hr);
+        return false;
+    }
+
+    return true;
+}
+
 // Picks the SDR dithering depth for the display we're presenting to. Safe to
 // call again whenever that display may have changed.
 void D3D11VARenderer::refreshDitherState()
@@ -1411,6 +1482,10 @@ void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame, boo
         }
 
         m_RenderDeviceContext->PSSetConstantBuffers(1, 1, m_DitherFrameBuffer.GetAddressOf());
+
+        // Rebound every frame like b1. Nothing else uses t3, so it stays put
+        // for the upscaler's final pass too.
+        m_RenderDeviceContext->PSSetShaderResources(3, 1, m_DitherThresholdView.GetAddressOf());
     }
 
     // PyroWave planes are exactly the frame size; D3D11VA surfaces may be padded
@@ -4000,9 +4075,11 @@ bool D3D11VARenderer::setupRenderingResources()
                         m_DecoderParams.debandMode);
         }
 
-        if (m_DecoderParams.ditheringMode != StreamingPreferences::DM_ORDERED) {
+        const bool blueNoise = m_DecoderParams.ditheringMode != StreamingPreferences::DM_ORDERED;
+        if (m_DecoderParams.ditheringMode == StreamingPreferences::DM_ERROR_DIFFUSION ||
+                m_DecoderParams.ditheringMode == StreamingPreferences::DM_ERROR_DIFFUSION_HQ) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "D3D11 has a single ordered dithering kernel; using it "
+                        "D3D11 has no error diffusion; using blue noise "
                         "instead of the selected mode %d",
                         m_DecoderParams.ditheringMode);
         }
@@ -4058,6 +4135,19 @@ bool D3D11VARenderer::setupRenderingResources()
                 SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                             "Temporal dithering enabled");
             }
+        }
+
+        if (m_VideoDitherPixelShaders[0] && !createDitherThresholds(blueNoise)) {
+            // The shaders read t3 unconditionally, so drop dithering rather
+            // than sample an unbound texture.
+            for (auto& shader : m_VideoDitherPixelShaders) {
+                shader.Reset();
+            }
+        }
+        else if (m_VideoDitherPixelShaders[0]) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "D3D11 dithering kernel: %s",
+                        blueNoise ? "blue noise" : "ordered (Bayer)");
         }
     }
 

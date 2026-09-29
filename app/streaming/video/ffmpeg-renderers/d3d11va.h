@@ -109,6 +109,7 @@ private:
     void bindColorConversion(bool frameChanged, AVFrame* frame, bool allowCscDither);
     int queryDisplayBitsPerComponent();
     void refreshDitherState();
+    bool createDitherThresholds(bool blueNoise);
     void bindVideoVertexBuffer(bool frameChanged, AVFrame* frame);
     void drawVideoPlanes(AVFrame* frame, ID3D11ShaderResourceView* const* planes, UINT planeCount);
     bool renderVideo(AVFrame* frame, uint64_t decodeBoundary = 0);
@@ -280,6 +281,9 @@ private:
     bool m_TemporalDither;
     float m_DitherPhase;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_DitherFrameBuffer;
+    // Tiled per-pixel thresholds read by every dithering shader at t3: blue
+    // noise, or a Bayer matrix for the ordered kernel.
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_DitherThresholdView;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_VideoVertexBuffer;
     // Covers the whole window. FSR1 narrows the viewport and restores this.
     D3D11_VIEWPORT m_FullViewport = {};

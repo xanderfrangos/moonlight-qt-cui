@@ -1899,6 +1899,19 @@ Flickable {
                     spacing: 5
                     visible: SystemProperties.supportsVideoDithering
 
+                    // Error diffusion only exists in libplacebo. Where the D3D11
+                    // renderer would run instead, those modes are just Balanced,
+                    // so they're hidden and a saved one is shown as Balanced. The
+                    // saved value is kept so it applies again if Vulkan is forced.
+                    readonly property bool errorDiffusionAvailable:
+                        !SystemProperties.libplaceboRequiresForcedVulkan ||
+                        StreamingPreferences.rendererSelection === StreamingPreferences.RS_VULKAN
+                    readonly property int effectiveDitheringMode:
+                        !errorDiffusionAvailable &&
+                        (StreamingPreferences.ditheringMode === StreamingPreferences.DM_ERROR_DIFFUSION ||
+                         StreamingPreferences.ditheringMode === StreamingPreferences.DM_ERROR_DIFFUSION_HQ) ?
+                            StreamingPreferences.DM_BLUE_NOISE : StreamingPreferences.ditheringMode
+
                     Label {
                         width: parent.width
                         text: qsTr("Dither video")
@@ -1910,40 +1923,30 @@ Flickable {
                     AutoResizingComboBox {
                         id: ditheringModeComboBox
                         textRole: "text"
-                        model: ListModel {
-                            id: ditheringModeListModel
-                            ListElement {
-                                text: qsTr("Off")
-                                val: StreamingPreferences.DM_OFF
+                        model: {
+                            var modes = [
+                                { text: qsTr("Off"), val: StreamingPreferences.DM_OFF },
+                                { text: qsTr("Fast"), val: StreamingPreferences.DM_ORDERED },
+                                { text: qsTr("Balanced"), val: StreamingPreferences.DM_BLUE_NOISE }
+                            ]
+                            if (parent.errorDiffusionAvailable) {
+                                modes.push({ text: qsTr("High Quality"), val: StreamingPreferences.DM_ERROR_DIFFUSION })
+                                modes.push({ text: qsTr("Highest Quality"), val: StreamingPreferences.DM_ERROR_DIFFUSION_HQ })
                             }
-                            ListElement {
-                                text: qsTr("Fast")
-                                val: StreamingPreferences.DM_ORDERED
-                            }
-                            ListElement {
-                                text: qsTr("Balanced")
-                                val: StreamingPreferences.DM_BLUE_NOISE
-                            }
-                            ListElement {
-                                text: qsTr("High Quality")
-                                val: StreamingPreferences.DM_ERROR_DIFFUSION
-                            }
-                            ListElement {
-                                text: qsTr("Highest Quality")
-                                val: StreamingPreferences.DM_ERROR_DIFFUSION_HQ
-                            }
+                            return modes
                         }
                         currentIndex: {
-                            for (var i = 0; i < ditheringModeListModel.count; i++) {
-                                if (ditheringModeListModel.get(i).val === StreamingPreferences.ditheringMode) {
+                            for (var i = 0; i < model.length; i++) {
+                                if (model[i].val === parent.effectiveDitheringMode) {
                                     return i
                                 }
                             }
                             return 0
                         }
                         onActivated: {
-                            StreamingPreferences.ditheringMode = ditheringModeListModel.get(currentIndex).val
+                            StreamingPreferences.ditheringMode = model[currentIndex].val
                         }
+                        onModelChanged: recalculateWidth()
                         Component.onCompleted: {
                             recalculateWidth()
                             languageChanged.connect(recalculateWidth)
@@ -1953,13 +1956,13 @@ Flickable {
                     Label {
                         width: parent.width
                         wrapMode: Text.Wrap
-                        text: StreamingPreferences.ditheringMode === StreamingPreferences.DM_OFF ?
+                        text: parent.effectiveDitheringMode === StreamingPreferences.DM_OFF ?
                                   qsTr("Video is reduced to the output depth without dithering, which can show banding in gradients.") :
-                              StreamingPreferences.ditheringMode === StreamingPreferences.DM_ORDERED ?
+                              parent.effectiveDitheringMode === StreamingPreferences.DM_ORDERED ?
                                   qsTr("Cheapest kernel. Breaks up banding with a fixed pattern that can be visible up close.") :
-                              StreamingPreferences.ditheringMode === StreamingPreferences.DM_BLUE_NOISE ?
-                                  qsTr("Recommended. Good quality with a small, steady cost per frame.") :
-                              StreamingPreferences.ditheringMode === StreamingPreferences.DM_ERROR_DIFFUSION ?
+                              parent.effectiveDitheringMode === StreamingPreferences.DM_BLUE_NOISE ?
+                                  qsTr("Recommended. Breaks up banding with fine, even noise at a small, steady cost per frame.") :
+                              parent.effectiveDitheringMode === StreamingPreferences.DM_ERROR_DIFFUSION ?
                                   qsTr("Better gradients at a higher GPU cost. Falls back to Balanced if the GPU cannot run it.") :
                                   qsTr("Best gradients at the highest GPU cost, which may add latency. Falls back to Balanced if the GPU cannot run it.")
                     }
@@ -1994,7 +1997,7 @@ Flickable {
                     width: parent.width
                     spacing: 5
                     visible: SystemProperties.supportsVideoDebanding &&
-                             (!SystemProperties.videoDebandingRequiresVulkan ||
+                             (!SystemProperties.libplaceboRequiresForcedVulkan ||
                               StreamingPreferences.rendererSelection === StreamingPreferences.RS_VULKAN)
 
                     Label {
