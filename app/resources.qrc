@@ -115,6 +115,12 @@
         <file alias="d3d11_ayuv_pixel.fxc">shaders/d3d11_ayuv_pixel.fxc</file>
         <file alias="d3d11_y410_pixel.fxc">shaders/d3d11_y410_pixel.fxc</file>
         <file alias="d3d11_yuv420_dither_pixel.fxc">shaders/d3d11_yuv420_dither_pixel.fxc</file>
+        <file alias="d3d11_yuv420_deband_pixel.fxc">shaders/d3d11_yuv420_deband_pixel.fxc</file>
+        <file alias="d3d11_ayuv_deband_pixel.fxc">shaders/d3d11_ayuv_deband_pixel.fxc</file>
+        <file alias="d3d11_y410_deband_pixel.fxc">shaders/d3d11_y410_deband_pixel.fxc</file>
+        <file alias="d3d11_yuv420_deband_dither_pixel.fxc">shaders/d3d11_yuv420_deband_dither_pixel.fxc</file>
+        <file alias="d3d11_ayuv_deband_dither_pixel.fxc">shaders/d3d11_ayuv_deband_dither_pixel.fxc</file>
+        <file alias="d3d11_y410_deband_dither_pixel.fxc">shaders/d3d11_y410_deband_dither_pixel.fxc</file>
         <file alias="d3d11_ayuv_dither_pixel.fxc">shaders/d3d11_ayuv_dither_pixel.fxc</file>
         <file alias="d3d11_y410_dither_pixel.fxc">shaders/d3d11_y410_dither_pixel.fxc</file>
         <file alias="d3d11_yuv_planar_pixel.fxc">shaders/d3d11_yuv_planar_pixel.fxc</file>

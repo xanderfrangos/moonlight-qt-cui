@@ -16,6 +16,7 @@
 
 extern "C" {
 #include <libavutil/hwcontext_d3d11va.h>
+#include <libavutil/mastering_display_metadata.h>
 }
 
 #include <wrl/client.h>
@@ -110,6 +111,8 @@ private:
     int queryDisplayBitsPerComponent();
     void refreshDitherState();
     bool createDitherThresholds(bool blueNoise);
+    bool loadDebandShaders();
+    void updateDebandConstants(const AVFrame* frame, int textureWidth, int textureHeight);
     void bindVideoVertexBuffer(bool frameChanged, AVFrame* frame);
     void drawVideoPlanes(AVFrame* frame, ID3D11ShaderResourceView* const* planes, UINT planeCount);
     bool renderVideo(AVFrame* frame, uint64_t decodeBoundary = 0);
@@ -271,6 +274,13 @@ private:
     // a display change only flips which one bindColorConversion() picks.
     std::array<Microsoft::WRL::ComPtr<ID3D11PixelShader>, PixelShaders::_COUNT> m_VideoPixelShaders;
     std::array<Microsoft::WRL::ComPtr<ID3D11PixelShader>, PixelShaders::_COUNT> m_VideoDitherPixelShaders;
+    // Debanding variants, alone and followed by dithering. Loaded only when
+    // debanding is on; PyroWave's planar shader has no debanding variant.
+    std::array<Microsoft::WRL::ComPtr<ID3D11PixelShader>, PixelShaders::_COUNT> m_VideoDebandPixelShaders;
+    std::array<Microsoft::WRL::ComPtr<ID3D11PixelShader>, PixelShaders::_COUNT> m_VideoDebandDitherPixelShaders;
+    // Rewritten every frame: the grain is seeded with the frame index
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_DebandFrameBuffer;
+    uint32_t m_DebandFrameIndex = 0;
     bool m_DitherActive;
     float m_DitherLevels;
     bool m_DitherStateChanged;

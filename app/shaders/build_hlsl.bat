@@ -11,6 +11,14 @@ fxc /T ps_5_0 /O3 /D DITHER_OUTPUT=1 /Fo d3d11_yuv420_dither_pixel.fxc d3d11_yuv
 fxc /T ps_5_0 /O3 /D DITHER_OUTPUT=1 /Fo d3d11_ayuv_dither_pixel.fxc d3d11_ayuv_pixel.hlsl
 fxc /T ps_5_0 /O3 /D DITHER_OUTPUT=1 /Fo d3d11_y410_dither_pixel.fxc d3d11_y410_pixel.hlsl
 
+rem Debanding variants, with and without dithering
+fxc /T ps_5_0 /O3 /D DEBAND_INPUT=1 /Fo d3d11_yuv420_deband_pixel.fxc d3d11_yuv420_pixel.hlsl
+fxc /T ps_5_0 /O3 /D DEBAND_INPUT=1 /Fo d3d11_ayuv_deband_pixel.fxc d3d11_ayuv_pixel.hlsl
+fxc /T ps_5_0 /O3 /D DEBAND_INPUT=1 /Fo d3d11_y410_deband_pixel.fxc d3d11_y410_pixel.hlsl
+fxc /T ps_5_0 /O3 /D DEBAND_INPUT=1 /D DITHER_OUTPUT=1 /Fo d3d11_yuv420_deband_dither_pixel.fxc d3d11_yuv420_pixel.hlsl
+fxc /T ps_5_0 /O3 /D DEBAND_INPUT=1 /D DITHER_OUTPUT=1 /Fo d3d11_ayuv_deband_dither_pixel.fxc d3d11_ayuv_pixel.hlsl
+fxc /T ps_5_0 /O3 /D DEBAND_INPUT=1 /D DITHER_OUTPUT=1 /Fo d3d11_y410_deband_dither_pixel.fxc d3d11_y410_pixel.hlsl
+
 rem FidelityFX Super Resolution 1.0 passes, built from one source
 fxc /T ps_5_0 /O3 /D APPLY_EASU=1 /Fo d3d11_fsr1_easu_pixel.fxc d3d11_fsr1_pixel.hlsl
 fxc /T ps_5_0 /O3 /D APPLY_EASU=1 /D FSR_PQ=1 /Fo d3d11_fsr1_easu_pq_pixel.fxc d3d11_fsr1_pixel.hlsl

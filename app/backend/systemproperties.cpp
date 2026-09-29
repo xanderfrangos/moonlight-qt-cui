@@ -155,10 +155,10 @@ SystemProperties::SystemProperties()
     supportsVideoDithering = false;
 #endif
 
-    // Only libplacebo has debanding and error diffusion. On Windows the default
-    // renderer is D3D11VA, which has no equivalent, so they are only offered
-    // when Vulkan is forced.
-#ifdef HAVE_LIBPLACEBO_VULKAN
+    // Debanding is libplacebo's, with a port of its shader in the D3D11VA
+    // renderer. Error diffusion is libplacebo-only, and on Windows the default
+    // renderer is D3D11VA, so it is only offered when Vulkan is forced.
+#if defined(HAVE_LIBPLACEBO_VULKAN) || defined(Q_OS_WIN32)
     supportsVideoDebanding = true;
 #else
     supportsVideoDebanding = false;

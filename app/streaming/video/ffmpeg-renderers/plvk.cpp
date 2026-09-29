@@ -1,6 +1,7 @@
 #include "plvk.h"
 #include "plvkpresentation.h"
 #include "plvkswapchain.h"
+#include "streaming/video/debandpresets.h"
 
 #include "streaming/session.h"
 #include "streaming/streamutils.h"
@@ -724,44 +725,19 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
     // dithering it can repair banding that arrived in the stream. It reads the
     // source at full precision, which is where a 10-bit stream pays off.
     if (params->debandMode != StreamingPreferences::DB_OFF) {
-        const char* debandName;
+        const DebandPreset preset = getDebandPreset(params->debandMode);
 
         m_DebandParams = pl_deband_default_params;
-
-        switch (params->debandMode) {
-        case StreamingPreferences::DB_GRAIN_ONLY:
-            // Zero iterations turns this into a pure grain function. It cannot
-            // reconstruct a gradient, but the noise still covers contours that
-            // half-LSB dithering is too fine to reach.
-            m_DebandParams.iterations = 0;
-            debandName = "grain only";
-            break;
-        case StreamingPreferences::DB_LIGHT:
-            m_DebandParams.threshold = 2.0f;
-            m_DebandParams.grain = 2.0f;
-            debandName = "light";
-            break;
-        default:
-        case StreamingPreferences::DB_MEDIUM:
-            // libplacebo's own defaults
-            debandName = "medium";
-            break;
-        case StreamingPreferences::DB_STRONG:
-            // A second pass widens the radius, which is what finds the broad
-            // soft gradients that a single 16px pass walks straight past.
-            m_DebandParams.iterations = 2;
-            m_DebandParams.threshold = 4.0f;
-            m_DebandParams.radius = 24.0f;
-            m_DebandParams.grain = 6.0f;
-            debandName = "strong";
-            break;
-        }
+        m_DebandParams.iterations = preset.iterations;
+        m_DebandParams.threshold = preset.threshold;
+        m_DebandParams.radius = preset.radius;
+        m_DebandParams.grain = preset.grain;
 
         m_RenderParams.deband_params = &m_DebandParams;
 
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Debanding enabled: %s (%d iterations, threshold %.1f, radius %.1f, grain %.1f)",
-                    debandName, m_DebandParams.iterations,
+                    preset.name, m_DebandParams.iterations,
                     m_DebandParams.threshold, m_DebandParams.radius,
                     m_DebandParams.grain);
     }

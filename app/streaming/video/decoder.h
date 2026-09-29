@@ -111,7 +111,8 @@ typedef struct _DECODER_PARAMETERS {
     int ditheringMode = 0;
     // Vary the dither pattern per frame. Ignored when ditheringMode is off.
     bool temporalDithering = false;
-    // StreamingPreferences::DebandMode. Only libplacebo implements this.
+    // StreamingPreferences::DebandMode. libplacebo implements this, and the
+    // D3D11VA renderer has a port of its shader.
     int debandMode = 0;
     // FSR1 and LS1 in the D3D11 and Linux Vulkan renderers; ignored by others.
     bool fsr1Upscaling = false;

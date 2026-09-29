@@ -1996,9 +1996,7 @@ Flickable {
                 Column {
                     width: parent.width
                     spacing: 5
-                    visible: SystemProperties.supportsVideoDebanding &&
-                             (!SystemProperties.libplaceboRequiresForcedVulkan ||
-                              StreamingPreferences.rendererSelection === StreamingPreferences.RS_VULKAN)
+                    visible: SystemProperties.supportsVideoDebanding
 
                     Label {
                         width: parent.width

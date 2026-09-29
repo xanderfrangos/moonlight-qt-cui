@@ -272,6 +272,7 @@ HEADERS += \
     streaming/audio/renderers/sdl.h \
     gui/computermodel.h \
     gui/appmodel.h \
+    streaming/video/debandpresets.h \
     streaming/video/decoder.h \
     streaming/vrrratepolicy.h \
     streaming/bandwidth.h \

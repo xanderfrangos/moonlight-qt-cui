@@ -15,6 +15,30 @@ frame parameters (`sw_format` NONE), so every 8-bit D3D11VA stream fails with
 dependency update (2e13ed99). After merging, rerun `setup-deps.ps1` (currently
 tag v17, FFmpeg 9.0.2) instead of reusing an older `libs\windows`.
 
+Windows renderer, dithering, and debanding (2026-09-28, not yet validated on a
+live stream):
+- **Forced Vulkan:** the "Force Vulkan renderer" checkbox stores `RS_VULKAN` in
+  the existing `rendererSelection` preference on Windows and Linux. On Windows,
+  pass 0 of `createHwAccelRenderer()` skips D3D11VA so the Vulkan hwaccel
+  config reaches `PlVkRenderer` first; D3D11VA/DXVA2 still follow in pass 1.
+  The forced selection also overrides `PlVkRenderer`'s Intel Vulkan Video
+  rejection. On Linux it joins the existing Vulkan-frontend preference.
+- **Dithering:** applies to 8-bit, 10-bit SDR and PQ streams in both
+  renderers. D3D11 quantizes SDR to min(swapchain, display) bits and PQ to the
+  10-bit swapchain. Its shaders read thresholds from a t3 texture: libplacebo's
+  64x64 blue noise (`pl_generate_blue_noise`) for every non-ordered mode, or
+  an 8x8 Bayer matrix for Fast. Error diffusion is libplacebo-only, so the UI
+  hides it unless Vulkan is forced. With dithering on, upscaler intermediates
+  stay 10-bit even for 8-bit streams, and FSR1 has a PQ dither RCAS variant.
+- **Debanding:** `d3d11_deband.hlsli` ports libplacebo's `pl_shader_deband()`
+  into `*_deband_pixel` and `*_deband_dither_pixel` variants of the
+  4:2:0/AYUV/Y410 shaders (constants at b3, per-frame seed). It debands each
+  plane at its own texel size before color conversion, inside the
+  color-conversion draw rather than as libplacebo's separate plane pass.
+  `updateDebandConstants()` mirrors `plane_deband()` for P010 scaling, grain
+  neutral points and HDR grain scaling. Both renderers take presets from
+  `debandpresets.h`. PyroWave's planar shader has no deband variant.
+
 Linux Vulkan LS1 integration (2026-09-24, based on MAKO's GPL-3.0-or-later
 implementation): the opt-in `ls1upscaling` setting selects the Vulkan frontend
 and adds a four-stage LS1 Quality compute hook at libplacebo's resizable RGB
@@ -67,8 +91,8 @@ color-conversion shader into a stream-sized RGB intermediate, then EASU into a
 destination-sized texture, then RCAS into the back buffer inside the letterbox
 rectangle. It then restores the full viewport, so overlays draw as before. Unlike the Linux
 luma hook, both passes filter RGB. PQ frames use variants that convert to
-approximate gamma 2.0 around each pass, as `FSR1_HDR.glsl` does. SDR ordered
-dithering moves from the color-conversion shader to the RCAS pass, so the
+approximate gamma 2.0 around each pass, as `FSR1_HDR.glsl` does. Dithering
+(SDR and, since 2026-09-28, PQ) moves from the color-conversion shader to the RCAS pass, so the
 upscaler never smears the pattern. The decision is recomputed whenever the
 video vertex buffer is rebuilt, which happens on a frame-format change or a
 resize. A shader or resource failure logs and keeps bilinear scaling. The work
@@ -101,7 +125,7 @@ The pipeline:
 2. Stage 3 writes an R8_SNORM feature texture at twice the stream size.
 3. The reconstruction writes an RGBA16F texture at destination size.
 4. `d3d11_upscale_copy_pixel.hlsl` copies that into the letterbox rectangle,
-   with a dither variant for SDR.
+   with a dither variant.
 
 LS1 is SDR only. `drawVideoPlanes()` draws PQ frames directly and hides the
 overlay chip for them. The DLL is found from an explicit path,

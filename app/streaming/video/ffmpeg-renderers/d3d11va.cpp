@@ -10,6 +10,7 @@
 #include "path.h"
 #include "utils.h"
 #include "windowsvblankvirtualization.h"
+#include "streaming/video/debandpresets.h"
 
 #include "streaming/streamutils.h"
 #include "streaming/session.h"
@@ -103,6 +104,37 @@ static const int k_BayerSize = 8;
 // HDR frames are PQ-encoded into the 10-bit swapchain. The display's HDR
 // pipeline takes it from there, so the swapchain is the depth we quantize to.
 static const float k_PqDitherLevels = 1023.0f;
+
+// Debanding variants of the same shaders, a port of libplacebo's
+// pl_shader_deband(). See d3d11_deband.hlsli.
+typedef struct _DEBAND_CONST_BUF
+{
+    float neutral[3];
+    uint32_t iterations;
+    float lumaMax[2];
+    float radius;
+    float threshold;
+    float grain;
+    uint32_t frameIndex;
+
+    // Padding floats to end on a 16-byte boundary
+    float padding[2];
+} DEBAND_CONST_BUF, *PDEBAND_CONST_BUF;
+static_assert(sizeof(DEBAND_CONST_BUF) % 16 == 0, "Constant buffer sizes must be a multiple of 16");
+
+static const std::array<const char*, 3> k_VideoDebandShaderNames =
+{
+    "d3d11_yuv420_deband_pixel.fxc",
+    "d3d11_ayuv_deband_pixel.fxc",
+    "d3d11_y410_deband_pixel.fxc",
+};
+
+static const std::array<const char*, 3> k_VideoDebandDitherShaderNames =
+{
+    "d3d11_yuv420_deband_dither_pixel.fxc",
+    "d3d11_ayuv_deband_dither_pixel.fxc",
+    "d3d11_y410_deband_dither_pixel.fxc",
+};
 
 static const std::array<const char*, 3> k_VideoDitherShaderNames =
 {
@@ -339,6 +371,14 @@ D3D11VARenderer::~D3D11VARenderer()
 
     m_DitherFrameBuffer.Reset();
     m_DitherThresholdView.Reset();
+
+    for (auto& shader : m_VideoDebandPixelShaders) {
+        shader.Reset();
+    }
+    for (auto& shader : m_VideoDebandDitherPixelShaders) {
+        shader.Reset();
+    }
+    m_DebandFrameBuffer.Reset();
 
     for (auto& textureSrvs : m_VideoTextureResourceViews) {
         for (auto& srv : textureSrvs) {
@@ -1349,6 +1389,128 @@ int D3D11VARenderer::queryDisplayBitsPerComponent()
     return (int)outputDesc.BitsPerColor;
 }
 
+bool D3D11VARenderer::loadDebandShaders()
+{
+    auto resetAll = [this]() {
+        for (auto& shader : m_VideoDebandPixelShaders) {
+            shader.Reset();
+        }
+        for (auto& shader : m_VideoDebandDitherPixelShaders) {
+            shader.Reset();
+        }
+        m_DebandFrameBuffer.Reset();
+    };
+
+    auto loadSet = [this](const std::array<const char*, 3>& names,
+                          std::array<ComPtr<ID3D11PixelShader>, PixelShaders::_COUNT>& shaders) {
+        for (size_t i = 0; i < names.size(); i++) {
+            QByteArray bytecode = Path::readDataFile(names[i]);
+            HRESULT hr = m_RenderDevice->CreatePixelShader(bytecode.constData(), bytecode.length(),
+                                                           nullptr, &shaders[i]);
+            if (FAILED(hr)) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "ID3D11Device::CreatePixelShader() failed for %s: %x",
+                             names[i], hr);
+                return false;
+            }
+        }
+        return true;
+    };
+
+    // The combined variants are only bound when dithering is available
+    if (!loadSet(k_VideoDebandShaderNames, m_VideoDebandPixelShaders) ||
+            (m_VideoDitherPixelShaders[0] &&
+             !loadSet(k_VideoDebandDitherShaderNames, m_VideoDebandDitherPixelShaders))) {
+        resetAll();
+        return false;
+    }
+
+    D3D11_BUFFER_DESC desc = {};
+    desc.ByteWidth = sizeof(DEBAND_CONST_BUF);
+    desc.Usage = D3D11_USAGE_DYNAMIC;
+    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    DEBAND_CONST_BUF initial = {};
+    D3D11_SUBRESOURCE_DATA data = {};
+    data.pSysMem = &initial;
+
+    HRESULT hr = m_RenderDevice->CreateBuffer(&desc, &data, &m_DebandFrameBuffer);
+    if (FAILED(hr)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "ID3D11Device::CreateBuffer() failed for the deband constants: %x",
+                     hr);
+
+        // The shaders read b3 unconditionally
+        resetAll();
+        return false;
+    }
+
+    return true;
+}
+
+// Mirrors how libplacebo's renderer parameterizes pl_shader_deband() for a
+// frame (plane_deband() in src/renderer.c), then advances the frame index.
+void D3D11VARenderer::updateDebandConstants(const AVFrame* frame, int textureWidth, int textureHeight)
+{
+    const DebandPreset preset = getDebandPreset(m_DecoderParams.debandMode);
+    const bool tenBit = (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_10BIT) != 0;
+    const bool yuv444 = (m_DecoderParams.videoFormat & VIDEO_FORMAT_MASK_YUV444) != 0;
+
+    // libplacebo compares against sample values normalized to the color depth.
+    // P010 holds 10 bits at the top of a 16-bit texel, so its UNORM reads are
+    // off from that by 65535 / (1023 << 6). NV12, AYUV and Y410 read exactly.
+    const bool p010 = tenBit && !yuv444;
+    const float scale = p010 ? 65535.0f / (1023.0f * 64.0f) : 1.0f;
+
+    // Neutral points that grain fades out towards: black for luma (16/256 for
+    // limited range) and the midpoint for chroma, as libplacebo computes them
+    // from the sample depth.
+    const int sampleBits = p010 ? 16 : (tenBit ? 10 : 8);
+    const float outScale = (float)(1u << sampleBits) / (float)((1u << sampleBits) - 1);
+    const float neutralLuma = frame->color_range == AVCOL_RANGE_JPEG ? 0.0f : 16.0f / 256.0f * outScale;
+    const float neutralChroma = 0.5f * outScale;
+
+    // libplacebo divides grain by the content's nominal peak relative to SDR
+    // white, so HDR grain has about the same visible intensity as SDR grain.
+    float grain = preset.grain;
+    if (frame->color_trc == AVCOL_TRC_SMPTE2084) {
+        float maxLuma = 10000.0f;
+        const AVFrameSideData* sideData = av_frame_get_side_data(frame, AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
+        if (sideData != nullptr) {
+            auto mdm = (const AVMasteringDisplayMetadata*)sideData->data;
+            if (mdm->has_luminance && av_q2d(mdm->max_luminance) > 0) {
+                maxLuma = (float)av_q2d(mdm->max_luminance);
+            }
+        }
+        grain /= maxLuma / 203.0f;
+    }
+
+    DEBAND_CONST_BUF constBuf = {};
+    constBuf.neutral[0] = neutralLuma / scale;
+    constBuf.neutral[1] = neutralChroma / scale;
+    constBuf.neutral[2] = neutralChroma / scale;
+    constBuf.iterations = (uint32_t)preset.iterations;
+    // Last texel center inside the frame, as chromaUVMax does for chroma
+    constBuf.lumaMax[0] = frame->width != textureWidth ?
+                              ((float)frame->width - 0.5f) / textureWidth : 1.0f;
+    constBuf.lumaMax[1] = frame->height != textureHeight ?
+                              ((float)frame->height - 0.5f) / textureHeight : 1.0f;
+    constBuf.radius = preset.radius;
+    constBuf.threshold = preset.threshold / (1000.0f * scale);
+    constBuf.grain = grain / (1000.0f * scale);
+    constBuf.frameIndex = m_DebandFrameIndex++;
+
+    D3D11_MAPPED_SUBRESOURCE mapping;
+    if (SUCCEEDED(m_RenderDeviceContext->Map(m_DebandFrameBuffer.Get(), 0,
+                                             D3D11_MAP_WRITE_DISCARD, 0, &mapping))) {
+        memcpy(mapping.pData, &constBuf, sizeof(constBuf));
+        m_RenderDeviceContext->Unmap(m_DebandFrameBuffer.Get(), 0);
+    }
+
+    m_RenderDeviceContext->PSSetConstantBuffers(3, 1, m_DebandFrameBuffer.GetAddressOf());
+}
+
 // Fills the t3 threshold texture the dithering shaders read. Each entry gets
 // half a step of offset so the pattern is centered on the rounded value.
 bool D3D11VARenderer::createDitherThresholds(bool blueNoise)
@@ -1460,7 +1622,13 @@ void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame, boo
     // still keeps its per-frame phase up to date.
     const bool pq = frame->color_trc == AVCOL_TRC_SMPTE2084;
     const bool dither = m_DitherActive;
-    const auto& videoShaders = dither && allowCscDither ? m_VideoDitherPixelShaders : m_VideoPixelShaders;
+    const bool cscDither = dither && allowCscDither;
+
+    // Debanding runs on the planes before color conversion, so it applies
+    // whether or not an upscaler takes over afterward.
+    const bool deband = m_VideoDebandPixelShaders[0] && !isPyroWave();
+    const auto& videoShaders = deband ? (cscDither ? m_VideoDebandDitherPixelShaders : m_VideoDebandPixelShaders) :
+                                        (cscDither ? m_VideoDitherPixelShaders : m_VideoPixelShaders);
 
     if (dither && m_DitherFrameBuffer) {
         if (m_TemporalDither) {
@@ -1495,6 +1663,10 @@ void D3D11VARenderer::bindColorConversion(bool frameChanged, AVFrame* frame, boo
         auto framesContext = (AVHWFramesContext*)frame->hw_frames_ctx->data;
         textureWidth = framesContext->width;
         textureHeight = framesContext->height;
+    }
+
+    if (deband) {
+        updateDebandConstants(frame, textureWidth, textureHeight);
     }
 
     if (isPyroWave()) {
@@ -4069,12 +4241,6 @@ bool D3D11VARenderer::setupRenderingResources()
     // Only libplacebo can honor the higher-quality kernels.
     if (m_DecoderParams.ditheringMode != StreamingPreferences::DM_OFF)
     {
-        if (m_DecoderParams.debandMode != StreamingPreferences::DB_OFF) {
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "D3D11 has no debanding; ignoring deband mode %d",
-                        m_DecoderParams.debandMode);
-        }
-
         const bool blueNoise = m_DecoderParams.ditheringMode != StreamingPreferences::DM_ORDERED;
         if (m_DecoderParams.ditheringMode == StreamingPreferences::DM_ERROR_DIFFUSION ||
                 m_DecoderParams.ditheringMode == StreamingPreferences::DM_ERROR_DIFFUSION_HQ) {
@@ -4148,6 +4314,24 @@ bool D3D11VARenderer::setupRenderingResources()
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "D3D11 dithering kernel: %s",
                         blueNoise ? "blue noise" : "ordered (Bayer)");
+        }
+    }
+
+    // Debanding is a quality option too, so a failure just leaves it off.
+    // Loaded after dithering so it knows whether the combined variants are
+    // needed.
+    if (m_DecoderParams.debandMode != StreamingPreferences::DB_OFF) {
+        if (isPyroWave()) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "D3D11 has no debanding for PyroWave; ignoring deband mode %d",
+                        m_DecoderParams.debandMode);
+        }
+        else if (loadDebandShaders()) {
+            const DebandPreset preset = getDebandPreset(m_DecoderParams.debandMode);
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Debanding enabled: %s (%d iterations, threshold %.1f, radius %.1f, grain %.1f)",
+                        preset.name, preset.iterations, preset.threshold,
+                        preset.radius, preset.grain);
         }
     }
 
