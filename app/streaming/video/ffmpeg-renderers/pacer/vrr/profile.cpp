@@ -111,9 +111,9 @@ uint64_t loadStartDelay(const QString& path, const QString& key)
 {
     if (key.isEmpty()) return 0;
     const auto entry = readStartDelays(path).value(key).toObject();
-    const auto age = QDateTime::currentSecsSinceEpoch() - entry.value("updated").toInteger();
+    const auto age = QDateTime::currentSecsSinceEpoch() - jsonInteger(entry.value("updated"));
     if (age < 0 || age > 14 * 86400) return 0;
-    const auto delay = entry.value("delay_us").toInteger(0);
+    const auto delay = jsonInteger(entry.value("delay_us"), 0);
     return delay > 0 && delay <= 1000000 ? uint64_t(delay) : 0;
 }
 
@@ -126,7 +126,7 @@ bool saveStartDelay(const QString& path, const QString& key, uint64_t delayUs)
     auto entries = readStartDelays(path);
     const auto now = QDateTime::currentSecsSinceEpoch();
     for (const auto& name : entries.keys()) {
-        const auto age = now - entries.value(name).toObject().value("updated").toInteger();
+        const auto age = now - jsonInteger(entries.value(name).toObject().value("updated"));
         if (age < 0 || age > 14 * 86400) entries.remove(name);
     }
     entries.remove(key);
@@ -134,7 +134,7 @@ bool saveStartDelay(const QString& path, const QString& key, uint64_t delayUs)
         QString oldest;
         qint64 oldestTime = now + 1;
         for (auto i = entries.begin(); i != entries.end(); ++i) {
-            const auto time = i.value().toObject().value("updated").toInteger();
+            const auto time = jsonInteger(i.value().toObject().value("updated"));
             if (time < oldestTime) { oldestTime = time; oldest = i.key(); }
         }
         if (oldest.isEmpty()) return false;
