@@ -260,6 +260,7 @@ private:
                        double fsr1RcasSharpness = 20.0,
                        bool ls1Upscaling = false,
                        int ls1Sharpness = 0,
+                       int downscalingFilter = StreamingPreferences::DF_BILINEAR,
                        int vrrDisplayRefreshHz = 0,
                        bool* effectiveVrr = nullptr, bool smoothVrrFrameTiming = true,
                        bool gamescopeMailbox = false, int vrrLatencyMode = 0,
@@ -337,6 +338,7 @@ private:
         int ditherGrainMode = 0;
         int debandMode = 0;
         bool fsr1Upscaling = false;
+        int downscalingFilter = StreamingPreferences::DF_BILINEAR;
         double fsr1RcasSharpness = 20.0;
         bool ls1Upscaling = false;
         int ls1Sharpness = 0;

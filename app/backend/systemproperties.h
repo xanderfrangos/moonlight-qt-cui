@@ -23,6 +23,7 @@ public:
     Q_PROPERTY(bool isDarwin MEMBER isDarwin CONSTANT)
     Q_PROPERTY(bool supportsVideoDithering MEMBER supportsVideoDithering CONSTANT)
     Q_PROPERTY(bool supportsVideoDebanding MEMBER supportsVideoDebanding CONSTANT)
+    Q_PROPERTY(bool supportsDownscalingFilters MEMBER supportsDownscalingFilters CONSTANT)
     Q_PROPERTY(bool libplaceboRequiresForcedVulkan MEMBER libplaceboRequiresForcedVulkan CONSTANT)
     Q_PROPERTY(bool supportsFsr1Upscaling MEMBER supportsFsr1Upscaling CONSTANT)
     Q_PROPERTY(bool supportsLs1Upscaling MEMBER supportsLs1Upscaling CONSTANT)
@@ -118,6 +119,7 @@ private:
     bool isDarwin;
     bool supportsVideoDithering;
     bool supportsVideoDebanding;
+    bool supportsDownscalingFilters;
     bool libplaceboRequiresForcedVulkan;
     bool supportsFsr1Upscaling;
     bool supportsLs1Upscaling;

@@ -484,9 +484,11 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
 #ifdef Q_OS_LINUX
     const bool preferVulkan = preferVulkanForVrr || params->fsr1Upscaling ||
                               params->ls1Upscaling ||
+                              params->downscalingFilter != StreamingPreferences::DF_BILINEAR ||
                               params->renderer == StreamingPreferences::RS_VULKAN;
 #else
     const bool preferVulkan = preferVulkanForVrr ||
+                              params->downscalingFilter != StreamingPreferences::DF_BILINEAR ||
                               params->renderer == StreamingPreferences::RS_VULKAN;
 #endif
 #else
@@ -529,6 +531,8 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
                                     "Vulkan renderer forced by user preference" :
                                 (params->fsr1Upscaling || params->ls1Upscaling) && !preferVulkanForVrr ?
                                     "Upscaling requested: preferring Vulkan frontend on Linux" :
+                                params->downscalingFilter != StreamingPreferences::DF_BILINEAR && !preferVulkanForVrr ?
+                                    "Downscaling filter requested: preferring Vulkan frontend" :
                                 params->enableVrr ?
                                     "VRR requested: preferring Vulkan frontend on Linux" :
                                     "VRR renderer policy: preferring Vulkan frontend on Linux without enabling VRR presentation");
@@ -580,6 +584,8 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
                                     "Vulkan renderer forced by user preference" :
                                 (params->fsr1Upscaling || params->ls1Upscaling) && !preferVulkanForVrr ?
                                     "Upscaling requested: preferring Vulkan frontend on Linux" :
+                                params->downscalingFilter != StreamingPreferences::DF_BILINEAR && !preferVulkanForVrr ?
+                                    "Downscaling filter requested: preferring Vulkan frontend" :
                                 params->enableVrr ?
                                     "VRR requested: preferring Vulkan frontend on Linux" :
                                     "VRR renderer policy: preferring Vulkan frontend on Linux without enabling VRR presentation");
@@ -985,6 +991,14 @@ bool FFmpegVideoDecoder::finishRenderInitialization(PDECODER_PARAMETERS params)
     else {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Renderer '%s' chosen",
+                    m_FrontendRenderer->getRendererName());
+    }
+
+    if (params->downscalingFilter != StreamingPreferences::DF_BILINEAR &&
+            m_FrontendRenderer->getRendererType() != IFFmpegRenderer::RendererType::Vulkan &&
+            m_FrontendRenderer->getRendererType() != IFFmpegRenderer::RendererType::D3D11VA) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Selected renderer '%s' does not support the requested downscaling filter; using its default scaling",
                     m_FrontendRenderer->getRendererName());
     }
 
@@ -2178,6 +2192,7 @@ bool FFmpegVideoDecoder::tryInitializeRendererForUnknownDecoder(const AVCodec* d
 
 #if defined(Q_OS_LINUX) && defined(HAVE_LIBPLACEBO_VULKAN)
         if ((params->fsr1Upscaling || params->ls1Upscaling ||
+             params->downscalingFilter != StreamingPreferences::DF_BILINEAR ||
              params->renderer == StreamingPreferences::RS_VULKAN) &&
                 tryInitializeRenderer(decoder, AV_PIX_FMT_NONE, params, nullptr, nullptr,
                                       []() -> IFFmpegRenderer* { return new PlVkRenderer(); })) {
@@ -2234,6 +2249,9 @@ bool FFmpegVideoDecoder::tryInitializeRendererForUnknownDecoder(const AVCodec* d
     // Check if any of our decoders prefer any of the pixel formats first
 #if defined(HAVE_LIBPLACEBO_VULKAN) && !defined(Q_OS_DARWIN)
     bool preferPlVk = params->renderer == StreamingPreferences::RS_VULKAN;
+#if defined(Q_OS_UNIX) && !defined(Q_OS_DARWIN)
+    preferPlVk = preferPlVk || params->downscalingFilter != StreamingPreferences::DF_BILINEAR;
+#endif
 #ifdef Q_OS_LINUX
     preferPlVk = preferPlVk || params->fsr1Upscaling || params->ls1Upscaling;
 #endif

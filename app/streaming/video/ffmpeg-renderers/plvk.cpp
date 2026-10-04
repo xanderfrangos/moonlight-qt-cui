@@ -672,6 +672,30 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
     // mapping, against whatever the swapchain actually is.
     m_RenderParams = pl_render_fast_params;
 
+    // Keep Bilinear on the existing direct-sampling path. Quality filters use
+    // libplacebo's ratio-aware footprint and linear-light downscaling.
+    switch (params->downscalingFilter) {
+    case StreamingPreferences::DF_BICUBIC:
+        m_RenderParams.downscaler = &pl_filter_bicubic;
+        break;
+    case StreamingPreferences::DF_MITCHELL:
+        m_RenderParams.downscaler = &pl_filter_mitchell;
+        break;
+    case StreamingPreferences::DF_LANCZOS:
+        m_RenderParams.downscaler = &pl_filter_lanczos;
+        break;
+    default:
+        break;
+    }
+    if (m_RenderParams.downscaler) {
+        m_RenderParams.skip_anti_aliasing = false;
+        // Main-image filtering must not implicitly change chroma interpolation.
+        m_RenderParams.plane_upscaler = &pl_filter_bilinear;
+        m_RenderParams.plane_downscaler = &pl_filter_bilinear;
+    }
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Vulkan downscaling filter: %s",
+                m_RenderParams.downscaler ? m_RenderParams.downscaler->name : "bilinear");
+
     // Keep full-precision intermediates. 8-bit FBOs would flatten a 10-bit
     // source before dithering or debanding ever see it, which is exactly the
     // banding both are meant to prevent. Set explicitly rather than inherited

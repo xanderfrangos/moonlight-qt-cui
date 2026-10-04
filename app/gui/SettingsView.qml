@@ -1816,6 +1816,44 @@ Flickable {
                                       qsTr("HDR streaming is not supported on this PC.")
                 }
 
+                Column {
+                    width: parent.width
+                    spacing: 5
+                    visible: SystemProperties.supportsDownscalingFilters
+
+                    Label {
+                        width: parent.width
+                        text: qsTr("Downscaling filter")
+                        topPadding: 8
+                        font.pointSize: 14
+                        wrapMode: Text.Wrap
+                    }
+
+                    AutoResizingComboBox {
+                        textRole: "text"
+                        model: [
+                            { text: qsTr("Bilinear"), val: StreamingPreferences.DF_BILINEAR },
+                            { text: qsTr("Bicubic"), val: StreamingPreferences.DF_BICUBIC },
+                            { text: qsTr("Mitchell"), val: StreamingPreferences.DF_MITCHELL },
+                            { text: qsTr("Lanczos"), val: StreamingPreferences.DF_LANCZOS }
+                        ]
+                        currentIndex: StreamingPreferences.downscalingFilter
+                        enabled: !SystemProperties.isDarwin ||
+                                 StreamingPreferences.rendererSelection === StreamingPreferences.RS_AUTO ||
+                                 StreamingPreferences.rendererSelection === StreamingPreferences.RS_VULKAN
+                        onActivated: StreamingPreferences.downscalingFilter = model[currentIndex].val
+                        onModelChanged: recalculateWidth()
+                        Component.onCompleted: recalculateWidth()
+
+                        ToolTip.delay: 1000
+                        ToolTip.timeout: 10000
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                        ToolTip.text: enabled ?
+                            qsTr("Filters a stream that is larger than the display. Bilinear is fastest, Bicubic is softer, Mitchell balances detail and softness, and Lanczos retains more detail but can add edge halos. Higher quality filters may add GPU work. Reconnect after changing this setting.") :
+                            qsTr("Downscaling filters require the Auto or Vulkan renderer on macOS.")
+                    }
+                }
+
                 CheckBox {
                     width: parent.width
                     text: qsTr("FSR1 upscaling")

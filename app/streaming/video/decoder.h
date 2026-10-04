@@ -122,6 +122,7 @@ typedef struct _DECODER_PARAMETERS {
     int debandMode = 0;
     // FSR1 and LS1 in the D3D11 and Linux Vulkan renderers; ignored by others.
     bool fsr1Upscaling = false;
+    int downscalingFilter = StreamingPreferences::DF_BILINEAR;
     double fsr1RcasSharpness = 20.0;
     bool ls1Upscaling = false;
     int ls1Sharpness = 0;

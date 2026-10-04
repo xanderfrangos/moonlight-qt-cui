@@ -241,7 +241,7 @@ void D3D11Ls1Upscaler::dispatch(ID3D11DeviceContext* context, int stage,
     context->CSSetShaderResources(0, 2, nullInputs);
 }
 
-void D3D11Ls1Upscaler::upscale(ID3D11DeviceContext* context, ID3D11RenderTargetView* target,
+void D3D11Ls1Upscaler::scale(ID3D11DeviceContext* context, ID3D11RenderTargetView* target,
                                bool, bool dither, float ditherLevels,
                                const D3D11_VIEWPORT& fullViewport)
 {

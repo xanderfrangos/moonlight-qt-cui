@@ -1248,6 +1248,16 @@ void D3D11VARenderer::bindVideoVertexBuffer(bool frameChanged, AVFrame* frame)
             }
         }
 
+        if (m_Downscaler &&
+                !m_Downscaler->configure(m_RenderDevice.Get(), m_RenderDeviceContext.Get(),
+                                         src.w, src.h,
+                                         dst.x, m_DisplayHeight - dst.y - dst.h, dst.w, dst.h,
+                                         uMax, vMax)) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "%s resources could not be created; using bilinear downscaling",
+                        m_Downscaler->name());
+        }
+
         VERTEX verts[] =
         {
             {renderRect.x, renderRect.y, 0, vMax},
@@ -1299,15 +1309,20 @@ void D3D11VARenderer::drawVideoPlanes(AVFrame* frame, ID3D11ShaderResourceView* 
     // only, so HDR frames are drawn directly instead.
     const bool upscale = m_Upscaler && m_Upscaler->active() &&
                          (!pq || m_Upscaler->handlesPq());
+    const bool downscale = m_Downscaler && m_Downscaler->active();
+    D3D11Upscaler* scaler = downscale ? m_Downscaler.get() : (upscale ? m_Upscaler.get() : nullptr);
+    if (downscale) {
+        m_Downscaler->setColorTransfer(frame->color_trc);
+    }
     const float ditherLevels = pq ? k_PqDitherLevels : m_DitherLevels;
     m_UpscalerRunning.store(upscale, std::memory_order_relaxed);
-    if (upscale) {
-        m_Upscaler->beginSourcePass(m_RenderDeviceContext.Get());
+    if (scaler) {
+        scaler->beginSourcePass(m_RenderDeviceContext.Get());
     }
 
     // Bind our CSC shader (and constant buffer, if required). When upscaling,
     // the dithering happens afterward so the pattern isn't smeared.
-    bindColorConversion(frameChanged, frame, !upscale);
+    bindColorConversion(frameChanged, frame, scaler == nullptr);
 
     // Draw the video
     m_RenderDeviceContext->PSSetShaderResources(0, planeCount, planes);
@@ -1317,9 +1332,9 @@ void D3D11VARenderer::drawVideoPlanes(AVFrame* frame, ID3D11ShaderResourceView* 
     ID3D11ShaderResourceView* nullSrvs[3] = {};
     m_RenderDeviceContext->PSSetShaderResources(0, planeCount, nullSrvs);
 
-    if (upscale) {
-        m_Upscaler->upscale(m_RenderDeviceContext.Get(), m_RenderTargetView.Get(),
-                            pq, m_DitherActive, ditherLevels, m_FullViewport);
+    if (scaler) {
+        scaler->scale(m_RenderDeviceContext.Get(), m_RenderTargetView.Get(),
+                      pq, m_DitherActive, ditherLevels, m_FullViewport);
     }
 }
 
@@ -4468,6 +4483,18 @@ bool D3D11VARenderer::setupRenderingResources()
         else {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "FSR1 shader initialization failed; using standard D3D11 scaling");
+        }
+    }
+
+    if (m_DecoderParams.downscalingFilter != StreamingPreferences::DF_BILINEAR) {
+        auto downscaler = std::make_unique<D3D11Downscaler>();
+        if (downscaler->initialize(m_RenderDevice.Get(), m_DecoderParams.downscalingFilter)) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "D3D11 downscaling filter: %s", downscaler->name());
+            m_Downscaler = std::move(downscaler);
+        }
+        else {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "D3D11 downscaling shader initialization failed; using bilinear");
         }
     }
 

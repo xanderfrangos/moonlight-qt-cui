@@ -1,5 +1,44 @@
 # Streaming, VRR, and timing architecture
 
+Downscaling filters (2026-10-04, source `d8fa2d3d` plus this change): the saved
+`downscalingfilter` preference offers Bilinear (default), Bicubic (B-spline),
+Mitchell, and Lanczos (three lobes). The presentation snapshot carries it into
+both probing and playback/reset. Bilinear retains the previous direct sampling.
+On eligible Unix frontends, another choice prefers libplacebo Vulkan, including
+the probe so negotiated color range matches playback. macOS Auto already prefers
+libplacebo/MoltenVK when available. Unsupported fallback renderers log that they
+are using their own default scaling; the setting is disabled for explicit native
+Metal or AVSampleBufferDisplayLayer selection.
+
+`PlVkRenderer` assigns only the main downscaler, keeps bilinear plane sampling,
+and retains filter widening and full-precision intermediates. Direct rendering
+and optional offscreen preparation use the same parameters. D3D11's
+`D3D11Downscaler` shares source/quad resources with the optional upscalers but
+activates only for reduction. Color conversion/debanding first writes the cropped
+stream into RGBA16F without output dithering. CPU-generated normalized weight
+textures carry exact source indices and combine clamped border samples. Horizontal
+filtering linearizes SDR/PQ and writes RGBA32F, retaining dark HDR and signed
+filter lobes; vertical filtering restores the transfer function and performs final
+dithering/grain inside the letterbox rectangle. An unchanged axis is copied.
+The full viewport is restored before overlays. Filter/source resources are
+reconfigured on frame-format changes or window resize; allocation failure falls
+back to the existing bilinear draw. FSR1/LS1 remain enlargement-only and can be
+enabled alongside the downscaling preference.
+
+Validation: shaders compile with FXC; the incremental Windows release builds.
+`tests/rendering/tst_d3d11downscaling.cpp` runs the production scaler through WARP:
+132 cases cover CPU-reference comparisons, libplacebo Vulkan comparisons, linear/
+gamma/sRGB/PQ input, output dithering, borders, one-axis resizing, extreme reduction,
+native/upscaled bypass, and constant dark PQ at 2650x1600 -> 1280x773. The largest
+D3D11/libplacebo difference in the tested SDR patterns is 0.001125 in normalized
+RGB. The local D3D11 debug layer is unavailable. This is offscreen software/GPU
+validation, not live-stream quality, timing, power, or Deck/macOS validation.
+The linked executable was staged into `build/deploy-x64-release-local` and its
+SHA-256 matches the build output. Application `--help` startup checks stalled
+before producing output, so application startup is not verified here. The
+Chase-specific build helper/toolchain and ChaseShare are unavailable in this
+environment; no ChaseShare publication is established.
+
 Original Moonlight `master` merge (2026-09-25, `032529d7`): D3D11VA now
 logs the adapter driver version and uses upstream's vendor and driver checks
 when choosing separate decode and render devices. This fork's texture bind
@@ -87,9 +126,8 @@ of a session working on streaming, decoding, rendering, VRR, latency, or replay.
 It explains the implementation and the reasoning needed to investigate it;
 it does not establish that a particular deployed executable matches the source.
 
-Current source review baseline: `b33a8f9a` plus the 2026-09-27 buffer recovery
-and Linux PyroWave completion, graphics-queue, and coalesced coefficient-store
-changes in this worktree. Deployment and live
+Current source review baseline: `d8fa2d3d` plus the 2026-10-04 downscaling
+preference, libplacebo selection, and D3D11 filtering changes in this worktree. Deployment and live
 smoothness must be verified separately from this source description.
 
 Linux Vulkan FSR1 integration (2026-09-24, based on upstream PR #1557): the

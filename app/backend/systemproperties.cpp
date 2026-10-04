@@ -151,8 +151,10 @@ SystemProperties::SystemProperties()
     // renderers ignore the preference, so hide it where neither can run.
 #if defined(Q_OS_WIN32) || defined(HAVE_LIBPLACEBO_VULKAN)
     supportsVideoDithering = true;
+    supportsDownscalingFilters = true;
 #else
     supportsVideoDithering = false;
+    supportsDownscalingFilters = false;
 #endif
 
     // Debanding is libplacebo's, with a port of its shader in the D3D11VA

@@ -85,6 +85,16 @@ public:
     };
     Q_ENUM(RendererSelection)
 
+    // Persisted IDs must remain stable. Bicubic is the smooth B-spline variant.
+    enum DownscalingFilter
+    {
+        DF_BILINEAR = 0,
+        DF_BICUBIC = 1,
+        DF_MITCHELL = 2,
+        DF_LANCZOS = 3
+    };
+    Q_ENUM(DownscalingFilter)
+
     enum WindowMode
     {
         WM_FULLSCREEN,
@@ -329,6 +339,7 @@ public:
     Q_PROPERTY(bool temporalDithering MEMBER temporalDithering NOTIFY temporalDitheringChanged)
     Q_PROPERTY(int ditherGrainMode MEMBER ditherGrainMode NOTIFY ditherGrainModeChanged)
     Q_PROPERTY(int debandMode MEMBER debandMode NOTIFY debandModeChanged)
+    Q_PROPERTY(int downscalingFilter MEMBER downscalingFilter NOTIFY downscalingFilterChanged)
     Q_PROPERTY(bool fsr1Upscaling MEMBER fsr1Upscaling NOTIFY fsr1UpscalingChanged)
     Q_PROPERTY(double fsr1RcasSharpness MEMBER fsr1RcasSharpness NOTIFY fsr1RcasSharpnessChanged)
     Q_PROPERTY(bool ls1Upscaling MEMBER ls1Upscaling NOTIFY ls1UpscalingChanged)
@@ -449,6 +460,7 @@ public:
     int debandMode;
     // FSR1 upscaling (D3D11 on Windows, Vulkan on Linux). Takes effect on the next stream.
     bool fsr1Upscaling;
+    int downscalingFilter;
     // RCAS sharpness slider (0-100) in steps of 10, defaulting to 20 (1.6 stops).
     double fsr1RcasSharpness;
     // LS1 (D3D11 on Windows, Vulkan on Linux) uses the user's Lossless Scaling DLL at runtime.
@@ -498,6 +510,7 @@ signals:
     void ditherGrainModeChanged();
     void debandModeChanged();
     void fsr1UpscalingChanged();
+    void downscalingFilterChanged();
     void fsr1RcasSharpnessChanged();
     void ls1UpscalingChanged();
     void ls1SharpnessChanged();

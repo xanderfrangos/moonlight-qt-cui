@@ -3,6 +3,7 @@
 #include "dxgipresent.h"
 #include "d3d11composition.h"
 #include "d3d11upscaler.h"
+#include "d3d11downscaler.h"
 #include "d3d11pyrowave.h"
 #include "ivrrframepresenter.h"
 #include "renderer.h"
@@ -340,6 +341,7 @@ private:
 
     // FSR1 or LS1. Null unless one was requested and could be loaded.
     std::unique_ptr<D3D11Upscaler> m_Upscaler;
+    std::unique_ptr<D3D11Downscaler> m_Downscaler;
     // Whether the last frame went through m_Upscaler, for the stats overlay
     std::atomic<bool> m_UpscalerRunning{false};
 

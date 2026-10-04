@@ -84,7 +84,7 @@ bool D3D11Fsr1Upscaler::configureOutput(ID3D11Device* device, ID3D11DeviceContex
     return true;
 }
 
-void D3D11Fsr1Upscaler::upscale(ID3D11DeviceContext* context, ID3D11RenderTargetView* target,
+void D3D11Fsr1Upscaler::scale(ID3D11DeviceContext* context, ID3D11RenderTargetView* target,
                                 bool pq, bool dither, float ditherLevels,
                                 const D3D11_VIEWPORT& fullViewport)
 {

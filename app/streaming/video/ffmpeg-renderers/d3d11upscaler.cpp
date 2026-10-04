@@ -129,14 +129,12 @@ bool D3D11Upscaler::configure(ID3D11Device* device, ID3D11DeviceContext* context
                               int dstX, int dstY, int dstWidth, int dstHeight,
                               float uMax, float vMax)
 {
-    // Only run when the output has more pixels than the stream, like the
-    // Vulkan renderer. Otherwise the renderer's ordinary bilinear draw is used.
-    const bool enlarged = srcWidth > 0 && srcHeight > 0 &&
-                          (int64_t)dstWidth * dstHeight > (int64_t)srcWidth * srcHeight;
-    if (!enlarged) {
+    const bool selected = srcWidth > 0 && srcHeight > 0 && dstWidth > 0 && dstHeight > 0 &&
+                          needsScaling(srcWidth, srcHeight, dstWidth, dstHeight);
+    if (!selected) {
         if (m_Active.exchange(false, std::memory_order_relaxed)) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "%s inactive: %dx%d stream is not enlarged in a %dx%d area",
+                        "%s inactive: %dx%d stream does not need scaling in a %dx%d area",
                         name(), srcWidth, srcHeight, dstWidth, dstHeight);
         }
         return true;
@@ -167,7 +165,7 @@ bool D3D11Upscaler::configure(ID3D11Device* device, ID3D11DeviceContext* context
 
     m_Active.store(true, std::memory_order_relaxed);
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "%s active: %dx%d stream upscaled to %dx%d",
+                "%s active: %dx%d stream scaled to %dx%d",
                 name(), srcWidth, srcHeight, dstWidth, dstHeight);
     return true;
 }

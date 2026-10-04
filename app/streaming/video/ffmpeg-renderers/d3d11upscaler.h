@@ -6,10 +6,10 @@
 #include <atomic>
 #include <cstdint>
 
-// Base for the D3D11 renderer's optional upscalers. When the video is drawn
-// larger than the stream, the renderer converts the frame to RGB at stream
+// Shared resources for the D3D11 renderer's optional scaling passes. The
+// renderer converts the frame to RGB at stream
 // size in an intermediate texture owned by this class, and the subclass then
-// upscales that into the destination rectangle of the back buffer.
+// scales that into the destination rectangle of the back buffer.
 //
 // The passes are drawn with the renderer's vertex shader, input layout, index
 // buffer and pixel sampler, which stay bound. Pixel shader constants go in b2
@@ -22,7 +22,7 @@ public:
     // Short name for logs and the stream info overlay
     virtual const char* name() const = 0;
 
-    // Whether upscale() can take PQ frames. Others are drawn directly.
+    // Whether scale() can take PQ frames. Others are drawn directly.
     virtual bool handlesPq() const = 0;
 
     // Called whenever the frame size or the window size changes. The
@@ -35,7 +35,7 @@ public:
                    int dstX, int dstY, int dstWidth, int dstHeight,
                    float uMax, float vMax);
 
-    // True when the last configure() found the video enlarged. Safe to call
+    // True when the last configure() selected this scaler. Safe to call
     // from any thread.
     bool active() const { return m_Active.load(std::memory_order_relaxed); }
 
@@ -43,14 +43,19 @@ public:
     // conversion draw.
     void beginSourcePass(ID3D11DeviceContext* context);
 
-    // Upscales the intermediate into the destination rectangle of target, then
-    // restores target and fullViewport for the overlays. Dithering applies to
-    // SDR output only.
-    virtual void upscale(ID3D11DeviceContext* context, ID3D11RenderTargetView* target,
+    // Scales the intermediate into the destination rectangle of target, then
+    // restores target and fullViewport for the overlays.
+    virtual void scale(ID3D11DeviceContext* context, ID3D11RenderTargetView* target,
                          bool pq, bool dither, float ditherLevels,
                          const D3D11_VIEWPORT& fullViewport) = 0;
 
 protected:
+    // Upscalers retain the existing enlargement rule. Downscalers override it.
+    virtual bool needsScaling(int srcWidth, int srcHeight,
+                              int dstWidth, int dstHeight) const {
+        return (int64_t)dstWidth * dstHeight > (int64_t)srcWidth * srcHeight;
+    }
+
     struct Target {
         int width = 0;
         int height = 0;

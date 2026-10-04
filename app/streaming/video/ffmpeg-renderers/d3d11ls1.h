@@ -26,7 +26,7 @@ public:
 
     const char* name() const override { return "LS1"; }
     bool handlesPq() const override { return false; }
-    void upscale(ID3D11DeviceContext* context, ID3D11RenderTargetView* target,
+    void scale(ID3D11DeviceContext* context, ID3D11RenderTargetView* target,
                  bool pq, bool dither, float ditherLevels,
                  const D3D11_VIEWPORT& fullViewport) override;
 
