@@ -6,6 +6,7 @@
 #include <QStringList>
 #include <QVariantList>
 #include <QVector>
+#include "vrrtimingoptions.h"
 
 class StreamingPreferences : public QObject
 {
@@ -25,6 +26,16 @@ public:
     Q_INVOKABLE void save();
 
     void reload();
+    Q_INVOKABLE void applyVrrPreset(int mode);
+    int vrrBufferPerMille() const { return m_VrrTimingOptions.bufferPerMille; }
+    int vrrTargetHundredths() const { return m_VrrTimingOptions.targetHundredths; }
+    int vrrHistorySeconds() const { return m_VrrTimingOptions.historySeconds; }
+    void setVrrBufferPerMille(int value);
+    void setVrrTargetHundredths(int value);
+    void setVrrHistorySeconds(int value);
+    int vrrToleranceUs() const { return m_VrrTimingOptions.toleranceUs; }
+    void setVrrToleranceUs(int value);
+    VrrTimingOptions vrrTimingOptions() const { return m_VrrTimingOptions; }
 
     // These preferences must be applied before the QGuiApplication is created,
     // so they can be read directly from storage without a preferences instance.
@@ -302,7 +313,12 @@ public:
     Q_PROPERTY(bool enableVsync MEMBER enableVsync NOTIFY enableVsyncChanged)
     Q_PROPERTY(bool enableVrr MEMBER enableVrr NOTIFY enableVrrChanged)
     Q_PROPERTY(int vrrLatencyMode MEMBER vrrLatencyMode NOTIFY vrrLatencyModeChanged)
+    Q_PROPERTY(int vrrBufferPerMille READ vrrBufferPerMille WRITE setVrrBufferPerMille NOTIFY vrrTimingChanged)
+    Q_PROPERTY(int vrrTargetHundredths READ vrrTargetHundredths WRITE setVrrTargetHundredths NOTIFY vrrTimingChanged)
+    Q_PROPERTY(int vrrHistorySeconds READ vrrHistorySeconds WRITE setVrrHistorySeconds NOTIFY vrrTimingChanged)
+    Q_PROPERTY(int vrrToleranceUs READ vrrToleranceUs WRITE setVrrToleranceUs NOTIFY vrrTimingChanged)
     Q_PROPERTY(bool smoothVrrFrameTiming MEMBER smoothVrrFrameTiming NOTIFY smoothVrrFrameTimingChanged)
+    Q_PROPERTY(bool highPerformanceGpuPower MEMBER highPerformanceGpuPower NOTIFY highPerformanceGpuPowerChanged)
     Q_PROPERTY(bool traceVrrFrames MEMBER traceVrrFrames NOTIFY traceVrrFramesChanged)
     Q_PROPERTY(bool exportingDiagnostics MEMBER m_ExportingDiagnostics NOTIFY diagnosticsChanged)
     Q_PROPERTY(QString diagnosticsStatus MEMBER m_DiagnosticsStatus NOTIFY diagnosticsChanged)
@@ -328,6 +344,7 @@ public:
     Q_PROPERTY(int performanceGraphOpacity MEMBER performanceGraphOpacity NOTIFY performanceGraphOpacityChanged)
     Q_PROPERTY(int performanceGraphHistory MEMBER performanceGraphHistory NOTIFY performanceGraphHistoryChanged)
     Q_PROPERTY(int performanceGraphPosition MEMBER performanceGraphPosition NOTIFY performanceGraphPositionChanged)
+    Q_PROPERTY(bool showFrametimeGraph MEMBER showFrametimeGraph NOTIFY showFrametimeGraphChanged)
     Q_PROPERTY(AudioConfig audioConfig MEMBER audioConfig NOTIFY audioConfigChanged)
     Q_PROPERTY(int audioBufferMs MEMBER audioBufferMs NOTIFY audioBufferMsChanged)
     Q_PROPERTY(QString audioDriver MEMBER audioDriver NOTIFY audioDriverChanged)
@@ -386,6 +403,7 @@ public:
     // adaptive-refresh floor, so the panel never engages its own
     // low-framerate compensation.
     bool smoothVrrFrameTiming;
+    bool highPerformanceGpuPower;
     bool traceVrrFrames;
     bool gameOptimizations;
     bool playAudioOnHost;
@@ -426,6 +444,7 @@ public:
     // Seconds of history plotted
     int performanceGraphHistory;
     int performanceGraphPosition;
+    bool showFrametimeGraph;
     bool swapMouseButtons;
     bool muteOnFocusLoss;
     bool backgroundGamepad;
@@ -479,6 +498,9 @@ public:
     CaptureSysKeysMode captureSysKeysMode;
     RendererSelection rendererSelection;
 
+private:
+    VrrTimingOptions m_VrrTimingOptions = VrrTimingOptions::preset(1);
+
 signals:
     void displayModeChanged();
     void bitrateChanged();
@@ -487,7 +509,9 @@ signals:
     void enableVsyncChanged();
     void enableVrrChanged();
     void vrrLatencyModeChanged();
+    void vrrTimingChanged();
     void smoothVrrFrameTimingChanged();
+    void highPerformanceGpuPowerChanged();
     void traceVrrFramesChanged();
     void diagnosticsChanged();
     void gameOptimizationsChanged();
@@ -533,6 +557,7 @@ signals:
     void performanceGraphOpacityChanged();
     void performanceGraphHistoryChanged();
     void performanceGraphPositionChanged();
+    void showFrametimeGraphChanged();
     void mouseButtonsChanged();
     void muteOnFocusLossChanged();
     void backgroundGamepadChanged();

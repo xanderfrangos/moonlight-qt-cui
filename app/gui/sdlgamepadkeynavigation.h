@@ -4,6 +4,8 @@
 #include <QEvent>
 #include <QVariantList>
 #include <QColor>
+#include <QHash>
+#include <QPair>
 
 #include "SDL_compat.h"
 
@@ -129,4 +131,7 @@ private:
     Uint32 m_HeldDirectionStartTime;
     Uint32 m_LastRepeatTime;
     int m_RepeatCount;
+    // Popups can change navigation mode during a button press. Its release
+    // must still match the key and modifiers sent for that same press.
+    QHash<quint64, QPair<Qt::Key, Qt::KeyboardModifiers>> m_PressedControllerKeys;
 };

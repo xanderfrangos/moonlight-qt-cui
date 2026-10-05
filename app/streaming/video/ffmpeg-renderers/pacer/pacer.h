@@ -46,6 +46,7 @@ public:
     void shutdown();
 
     PacerTelemetrySnapshot telemetrySnapshot() const;
+    Overlay::TimingGraphSnapshot timingGraphSnapshot() const;
 
     // Counters only, without the percentile computation telemetrySnapshot()
     // performs. Used by the high-rate stats graph sampler.
@@ -72,7 +73,7 @@ public:
                     bool enableVrr, int vrrDisplayRefreshHz,
                     bool smoothVrrFrameTiming = true,
                     const QString& calibrationKey = QString(),
-                    int vrrLatencyMode = 0);
+                    int vrrLatencyMode = 0, VrrTimingOptions vrrTimingOptions = {});
 
     void notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info);
 

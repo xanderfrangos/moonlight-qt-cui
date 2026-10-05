@@ -822,11 +822,12 @@ bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)
     HRESULT hr;
 
     m_DecoderParams = *params;
-    // The composition API supplies display events, but it does not implement
-    // the controller's per-frame tearing/synchronized presentation choice.
-    // Keep it available for capture comparisons without replacing DXGI VRR.
+    // Prefer native display events and synchronized independent flip when the
+    // OS/driver support it. The worker resolves this presenter's constant
+    // synchronized mode after initialization; DXGI retains per-frame selection.
+    // An explicit zero remains available for diagnostic DXGI comparisons.
     m_CompositionRequested = params->enableVrr &&
-        qgetenv("MOONLIGHT_VRR_COMPOSITION") == "1";
+        qgetenv("MOONLIGHT_VRR_COMPOSITION") != "0";
 
     if (qgetenv("D3D11VA_ENABLED") == "0") {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -1018,7 +1019,7 @@ bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "D3D11 VRR backend enabled: refresh=%d Hz, presentation=%s",
                     m_DecoderParams.vrrDisplayRefreshHz,
-                    m_CompositionPresenter.active() ? "composition diagnostic (native ordering)" :
+                    m_CompositionPresenter.active() ? "composition (synchronized, native display events)" :
                         "DXGI (per-frame tearing/synchronized, estimated timing)");
     }
 
@@ -2160,7 +2161,9 @@ void D3D11VARenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         return;
     }
 
-    // Released once we drop the lock at the end of this function
+    // Keep the published resources intact while building their replacement.
+    // In particular, the 10 Hz graph updates must not leave frames with no
+    // overlay during texture upload, or erase it if resource creation fails.
     ComPtr<ID3D11Texture2D> oldTexture;
     ComPtr<ID3D11Buffer> oldVertexBuffer;
     ComPtr<ID3D11ShaderResourceView> oldTextureResourceView;
@@ -2172,7 +2175,6 @@ void D3D11VARenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         oldVertexBuffer = std::move(m_OverlayVertexBuffers[type]);
         oldTextureResourceView = std::move(m_OverlayTextureResourceViews[type]);
         SDL_AtomicUnlock(&m_OverlayLock);
-
         SDL_FreeSurface(newSurface);
         return;
     }
@@ -2233,8 +2235,10 @@ void D3D11VARenderer::notifyOverlayUpdated(Overlay::OverlayType type)
     // two frames, and a failure above leaves the old overlay up rather than
     // blanking it.
     SDL_AtomicLock(&m_OverlayLock);
-    oldVertexBuffer = std::move(m_OverlayVertexBuffers[type]);
+    // Retire the previous set outside the lock; COM destruction can call into
+    // the driver. Publish the complete replacement as one consistent set.
     oldTexture = std::move(m_OverlayTextures[type]);
+    oldVertexBuffer = std::move(m_OverlayVertexBuffers[type]);
     oldTextureResourceView = std::move(m_OverlayTextureResourceViews[type]);
     m_OverlayVertexBuffers[type] = std::move(newVertexBuffer);
     m_OverlayTextures[type] = std::move(newTexture);

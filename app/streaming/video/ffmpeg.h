@@ -166,7 +166,8 @@ private:
     // sampling starts rather than on every sample.
     uint32_t m_StatsGraphPacketWireBytes;
     ClientPacingWarning m_ClientPacingWarning;
-    int m_VrrLatencyMode = 0;
+    uint64_t m_LastTimingGraphUs = 0;
+    bool m_VrrUsesMaximumBuffer = false;
     std::set<IFFmpegRenderer::RendererType> m_FailedRenderers;
 
     int m_FramesIn;

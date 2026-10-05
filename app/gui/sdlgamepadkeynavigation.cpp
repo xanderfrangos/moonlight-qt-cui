@@ -117,6 +117,7 @@ void SdlGamepadKeyNavigation::disable()
     }
 
     m_Enabled = false;
+    m_PressedControllerKeys.clear();
     updateTimerState();
     Q_ASSERT(!m_PollingTimer->isActive());
 
@@ -144,6 +145,7 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
     // Discard any pending button events on the first poll to avoid picking up
     // stale input data from the stream session (like the quit combo).
     if (m_FirstPoll) {
+        m_PressedControllerKeys.clear();
         SDL_FlushEvent(SDL_CONTROLLERBUTTONDOWN);
         SDL_FlushEvent(SDL_CONTROLLERBUTTONUP);
         m_FirstPoll = false;
@@ -175,6 +177,20 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
                     emit controllerInput(gamepad->id);
                 }
             }
+            const quint64 buttonId = (quint64(quint32(event.cbutton.which)) << 8) |
+                                      event.cbutton.button;
+            if (type == QEvent::KeyRelease && m_PressedControllerKeys.contains(buttonId)) {
+                const auto key = m_PressedControllerKeys.take(buttonId);
+                sendKey(type, key.first, key.second);
+                break;
+            }
+            const auto sendControllerKey = [&](Qt::Key key,
+                                               Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+                if (type == QEvent::KeyPress) {
+                    m_PressedControllerKeys.insert(buttonId, qMakePair(key, modifiers));
+                }
+                sendKey(type, key, modifiers);
+            };
 
             // Swap face buttons if needed
             if (m_Prefs->swapFaceButtons) {
@@ -219,24 +235,24 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
                 break;
             case SDL_CONTROLLER_BUTTON_A:
                 if (m_UiNavMode) {
-                    sendKey(type, Qt::Key_Space);
+                    sendControllerKey(Qt::Key_Space);
                 }
                 else {
-                    sendKey(type, Qt::Key_Return);
+                    sendControllerKey(Qt::Key_Return);
                 }
                 break;
             case SDL_CONTROLLER_BUTTON_B:
-                sendKey(type, Qt::Key_Escape);
+                sendControllerKey(Qt::Key_Escape);
                 break;
             case SDL_CONTROLLER_BUTTON_X:
-                sendKey(type, Qt::Key_Menu);
+                sendControllerKey(Qt::Key_Menu);
                 break;
             case SDL_CONTROLLER_BUTTON_Y:
             case SDL_CONTROLLER_BUTTON_START:
                 // HACK: We use this keycode to inform main.qml
                 // to show the settings when Key_Menu is handled
                 // by the control in focus.
-                sendKey(type, Qt::Key_Hangup);
+                sendControllerKey(Qt::Key_Hangup);
                 break;
             default:
                 break;

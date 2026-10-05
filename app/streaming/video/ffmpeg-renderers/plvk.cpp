@@ -2,6 +2,7 @@
 #include "plvkpresentation.h"
 #include "plvkswapchain.h"
 #include "streaming/video/debandpresets.h"
+#include "../videothreadpriority.h"
 
 #include "streaming/session.h"
 #include "streaming/streamutils.h"
@@ -2119,7 +2120,7 @@ void PlVkRenderer::updatePreparationTarget()
 int PlVkRenderer::preparationThreadProc(void* opaque)
 {
     auto self = static_cast<PlVkRenderer*>(opaque);
-    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH);
+    const VideoThreadPriority priority("VRRPrepare");
     for (;;) {
         std::shared_ptr<PreparedImage> image;
         {

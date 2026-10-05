@@ -728,6 +728,22 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         return;
     }
 
+    // Handle Select+L1+R1+Y (Triangle) as the frametime graph combo
+    if (state->buttons == (BACK_FLAG | LB_FLAG | RB_FLAG | Y_FLAG)) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Detected frametime graph toggle gamepad combo");
+
+        Session::get()->getOverlayManager().setTimingGraphState(
+            !Session::get()->getOverlayManager().isTimingGraphEnabled());
+
+        // Clear buttons down on this gamepad and keep the combo itself hidden
+        // from the host until the user lets go of it
+        state->suppressedButtons |= state->buttons;
+        LiSendMultiControllerEvent(state->index, m_GamepadMask,
+                                   0, 0, 0, 0, 0, 0, 0);
+        return;
+    }
+
     // Only send the gamepad state to the host if it's not in mouse emulation mode
     if (state->mouseEmulationTimer == 0) {
         sendGamepadState(state);

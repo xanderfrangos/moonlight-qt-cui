@@ -7,6 +7,7 @@
 
 #include <QMutex>
 #include "vrr/readinesswindow.h"
+#include "../../timinggraph.h"
 
 // Pacer work can happen on the decoder, render, V-sync, and VRR worker
 // threads. Keep its cumulative measurements separate from VIDEO_STATS, which
@@ -96,6 +97,7 @@ struct PacerFrametimeStats {
 };
 
 struct VrrTelemetrySample {
+    Overlay::TimingGraphInput graph;
     uint64_t queueResidenceUs = 0;
     uint64_t decodeWaitUs = 0;
     uint64_t bufferUs = 0;
@@ -135,6 +137,14 @@ struct VrrTelemetrySample {
 
 class PacerTelemetry {
 public:
+    Overlay::TimingGraphSnapshot timingGraphSnapshot() const
+    {
+        Overlay::TimingGraphSnapshot points;
+        points.reserve(Overlay::TimingGraphHistory::Capacity); // Allocate before locking.
+        QMutexLocker lock(&m_Lock);
+        m_TimingGraph.copyTo(points);
+        return points;
+    }
     PacerTelemetrySnapshot snapshot() const
     {
         QMutexLocker lock(&m_Lock);
@@ -229,6 +239,7 @@ public:
     void recordVrrFrame(const VrrTelemetrySample& sample)
     {
         QMutexLocker lock(&m_Lock);
+        m_TimingGraph.record(sample.graph);
 
         if (sample.motionDiscontinuity) {
             m_LastMotionSubmissionUs = m_LastMotionIntervalUs = 0;
@@ -434,6 +445,7 @@ private:
 
     mutable QMutex m_Lock;
     PacerTelemetrySnapshot m_Snapshot;
+    Overlay::TimingGraphHistory m_TimingGraph;
     PacerFrametimeStats m_Frametime;
     uint64_t m_LastPresentUs = 0;
     uint64_t m_LastMotionSubmissionUs = 0;

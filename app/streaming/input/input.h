@@ -188,6 +188,7 @@ private:
         KeyComboTogglePointerRegionLock,
         KeyComboQuitAndExit,
         KeyComboToggleKeyboardGrab,
+        KeyComboToggleTimingGraph,
         KeyComboMax
     };
 

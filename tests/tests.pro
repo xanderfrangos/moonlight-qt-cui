@@ -9,6 +9,13 @@ contains(CONFIG, tests) {
     SUBDIRS += haptics
     SUBDIRS += pyrowave
     win32: SUBDIRS += rendering
+    macx {
+        controllerNavigation.file = $$PWD/qml/controller-navigation.pro
+        SUBDIRS += controllerNavigation
+    } else:unix:packagesExist(sdl2) {
+        controllerNavigation.file = $$PWD/qml/controller-navigation.pro
+        SUBDIRS += controllerNavigation
+    }
 } else {
     message(VRR tests are disabled; rerun qmake with CONFIG+=tests)
 }

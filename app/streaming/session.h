@@ -264,7 +264,8 @@ private:
                        int vrrDisplayRefreshHz = 0,
                        bool* effectiveVrr = nullptr, bool smoothVrrFrameTiming = true,
                        bool gamescopeMailbox = false, int vrrLatencyMode = 0,
-                       bool gamescopeRepaint = false, int ditheringMode = 0,
+                       bool gamescopeRepaint = false,
+                       VrrTimingOptions vrrTimingOptions = {}, int ditheringMode = 0,
                        bool temporalDithering = false, int debandMode = 0,
                        int ditherGrainMode = 0);
 
@@ -330,6 +331,7 @@ private:
         bool enableFramePacing = false;
         bool enableVrr = false;
         int vrrLatencyMode = 0;
+        VrrTimingOptions vrrTimingOptions;
         bool gamescopeMailbox = false;
         bool gamescopeRepaint = false;
         bool smoothVrrFrameTiming = true;

@@ -57,6 +57,14 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
         Session::get()->toggleStatsOverlay();
         break;
 
+    case KeyComboToggleTimingGraph:
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Detected frametime graph toggle combo");
+
+        Session::get()->getOverlayManager().setTimingGraphState(
+            !Session::get()->getOverlayManager().isTimingGraphEnabled());
+        break;
+
     case KeyComboToggleMouseMode:
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected mouse mode toggle combo");

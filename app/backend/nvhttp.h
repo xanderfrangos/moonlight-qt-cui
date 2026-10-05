@@ -3,6 +3,8 @@
 #include "identitymanager.h"
 #include "nvapp.h"
 #include "nvaddress.h"
+#include "streaming/video/pyrowave/pyrowavelinkpolicy.h"
+#include <atomic>
 
 #include <Limelight.h>
 
@@ -126,6 +128,8 @@ public:
     // Downloads a fixed-size probe from the paired host over pinned HTTPS.
     // Returns measured Mbps, or throws on an unsupported/failed request.
     int probePyroWaveDownloadMbps();
+
+    PyroWaveLink::Result probePyroWaveUdp(int kbps, int packetSize, const std::atomic<bool>& cancelled);
 
     static
     void
