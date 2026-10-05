@@ -33,7 +33,13 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(inputs.build_macos && '["windows-2025", "macos-26"]' || '["windows-2025"]') }}
-        qt_version: ['6.11.2']
+        qt_version: ['6.12.0', '6.11.2']
+        exclude:
+          # Windows builds with Qt 6.12, macOS with 6.11
+          - os: windows-2025
+            qt_version: 6.11.2
+          - os: macos-26
+            qt_version: 6.12.0
 
     runs-on: ${{ matrix.os }}
 

@@ -166,8 +166,8 @@ void StreamingPreferences::reload()
     }
 #endif
 
-    width = settings.value(SER_WIDTH, 1280).toInt();
-    height = settings.value(SER_HEIGHT, 720).toInt();
+    width = settings.value(SER_WIDTH, 1920).toInt();
+    height = settings.value(SER_HEIGHT, 1080).toInt();
     fps = settings.value(SER_FPS, 60).toInt();
     nativeResolution = settings.value(SER_NATIVERESOLUTION, false).toBool();
     nativeFps = settings.value(SER_NATIVEFPS, false).toBool();
