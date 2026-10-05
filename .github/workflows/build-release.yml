@@ -8,10 +8,6 @@ on:
       - 'release/**'
   workflow_dispatch:
     inputs:
-      ci_version:
-        description: Release version without the leading v
-        required: true
-        type: string
       build_macos:
         description: Include the macOS build
         required: false
@@ -24,13 +20,20 @@ jobs:
     outputs:
       ci_version: ${{ steps.version.outputs.ci_version }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            app/version.txt
+            scripts/ci-version.sh
+          sparse-checkout-cone-mode: false
+
+      # Release builds are versioned by build time like every other workflow
+      # build, not by the release branch name.
       - name: Resolve release version
         id: version
-        env:
-          INPUT_VERSION: ${{ inputs.ci_version }}
         run: |
-          version="${INPUT_VERSION:-${GITHUB_REF_NAME#release/}}"
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-vrr[0-9]+(\.[0-9]+)?$ ]]
+          version="$(bash scripts/ci-version.sh)"
+          echo "Building version $version"
           echo "ci_version=$version" >> "$GITHUB_OUTPUT"
 
   windows-macos:

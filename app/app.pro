@@ -752,10 +752,10 @@ macx {
     }
 }
 
-# Displayed version stays CI_VERSION (e.g. 6.1.0-vrr17.1). Windows PE/MSI
-# ProductVersion can only use three numeric fields and must increase past
-# stock Moonlight 6.1.0, so VRR builds map 6.1.0-vrrN to 6.2.N and
-# 6.1.0-vrrN.P to 6.2.(N*10+P).
+# Displayed version stays CI_VERSION (e.g. 6.2.202610051530 for workflow
+# builds). Windows PE/MSI version fields stop at 65535, so build-arch.bat
+# passes a mapped MOONLIGHT_PE_VERSION (6.2.26278.1530); see
+# scripts/vrr-pe-version.ps1.
 VERSION = "$$BASE_VERSION"
 PE_VERSION = $$(MOONLIGHT_PE_VERSION)
 !isEmpty(PE_VERSION) {

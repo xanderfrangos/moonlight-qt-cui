@@ -123,8 +123,9 @@ if defined CI_VERSION (
     set /p VERSION=<%SOURCE_ROOT%\app\version.txt
 )
 
-rem MSI compares only the first three ProductVersion fields, so VRR releases
-rem cannot stay at 6.1.0.0. Map 6.1.0-vrrN to 6.2.N and 6.1.0-vrrN.P to 6.2.(N*10+P).
+rem PE version fields stop at 65535 and MSI compares only the first three, so
+rem map the CI version: 6.2.YYYYMMDDHHmm to 6.2.YYDDD.HHmm, and the older
+rem 6.1.0-vrrN tags to 6.2.N. See vrr-pe-version.ps1.
 if not defined MOONLIGHT_PE_VERSION if defined CI_VERSION (
     for /f "usebackq delims=" %%v in (`powershell -NoProfile -File "%SOURCE_ROOT%\scripts\vrr-pe-version.ps1" -CiVersion "%CI_VERSION%"`) do set MOONLIGHT_PE_VERSION=%%v
     if defined MOONLIGHT_PE_VERSION (

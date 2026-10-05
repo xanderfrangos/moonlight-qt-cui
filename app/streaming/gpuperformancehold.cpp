@@ -6,9 +6,18 @@
 #include <QFile>
 #include <QFileInfo>
 
-#if defined(__linux__) && __has_include(<drm/amdgpu_drm.h>)
-#define HAVE_AMDGPU_STABLE_PSTATE
+#if defined(__linux__)
+// Prefer libdrm's copy: LTS kernel uapi headers can predate the stable pstate
+// request (Ubuntu 22.04 ships 5.15 uapi headers but libdrm 2.4.113).
+#if __has_include(<libdrm/amdgpu_drm.h>)
+#include <libdrm/amdgpu_drm.h>
+#elif __has_include(<drm/amdgpu_drm.h>)
 #include <drm/amdgpu_drm.h>
+#endif
+#endif
+
+#ifdef AMDGPU_CTX_OP_SET_STABLE_PSTATE
+#define HAVE_AMDGPU_STABLE_PSTATE
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>

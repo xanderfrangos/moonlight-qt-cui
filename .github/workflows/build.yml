@@ -19,11 +19,19 @@ jobs:
     outputs:
       ci_version: ${{ steps.set-ci-version.outputs.ci_version }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            app/version.txt
+            scripts/ci-version.sh
+          sparse-checkout-cone-mode: false
+
       - name: Set CI version
         id: set-ci-version
         shell: bash
         run: |
-          CI_VERSION=`echo ${GITHUB_SHA} | cut -c1-6`
+          CI_VERSION="$(bash scripts/ci-version.sh)"
+          echo "Building version ${CI_VERSION}"
           echo "ci_version=${CI_VERSION}" >> "${GITHUB_OUTPUT}"
 
   build-appimage:

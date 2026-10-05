@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       ci_version:
-        description: Version string used for the release artifacts
+        description: Version string used for the release artifacts, normally major.minor.YYYYMMDDHHmm (scripts/ci-version.sh)
         required: true
         type: string
       build_macos:
@@ -230,7 +230,7 @@ jobs:
           $ci = $Env:CI_VERSION
           $bundle = "build/installer-release/MoonlightSetup-$ci.exe"
           if (!(Test-Path $bundle)) { throw "Missing installer bundle $bundle" }
-          if ($ci -match '-vrr\d+') {
+          if ($ci -match '^\d+\.\d+\.\d{12}$' -or $ci -match '-vrr\d+') {
             $expected = & ./scripts/vrr-pe-version.ps1 -CiVersion $ci
             if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($expected)) {
               throw "Could not map CI_VERSION '$ci' to a Windows PE/MSI version"
