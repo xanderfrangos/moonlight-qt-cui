@@ -4680,7 +4680,8 @@ waiter wakes early by the 95th percentile of its last 19 sleep overruns
 (`schedulerDelayUs`, at most 500 us) and spins the rest.
 - **V-Sync with a V-sync source:** the frame is released at the first V-blank
   at or after (target + trim), minus the learned release-to-present time, a
-  2 ms margin and any margin added by missed V-blank detection (below).
+  2 ms margin (4.5 ms under Gamescope; see below) and any margin added by
+  missed V-blank detection.
   - Frames assigned to the same V-blank are reduced to the newest (mailbox).
   - D3D11's non-VRR `Present(0)` already replaces a pending frame at the next
     V-blank.
@@ -4710,14 +4711,24 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
   - **Otherwise:** the newest commit at each refresh.
   - **Steam's frame limiter:** forces FIFO through the WSI layer regardless,
     `GAMESCOPE_WSI_FRAME_LIMITER_AWARE` or not.
-- **Present times:** with the Gamescope WSI layer (`ENABLE_GAMESCOPE_WSI=1`),
-  `VulkanTiming` is enabled for timestamp pacing as well as VRR. The fixed
+- **Present times:** `VulkanTiming` is enabled for timestamp pacing under
+  any Gamescope session whose device has `VK_GOOGLE_display_timing`
+  (not for test-only probes). Since 2026-10-08 that no longer requires the
+  Gamescope WSI layer (`ENABLE_GAMESCOPE_WSI=1`), which VRR's diagnostics
+  still require. A Steam Deck Game Mode capture on the `mailbox-test` branch
+  got display times for 99.9% of presents without it. The fixed
   path's `renderFrame()` arms it around each submit. Gamescope's actual
   present times (`VK_GOOGLE_display_timing`) reach the pacer through
   `IFFmpegRenderer::setDisplayEventSink()`, together with the compositor's
   refresh period (`vkGetRefreshCycleDurationGOOGLE`, queried at most once a
   second). These times build the V-blank grid when V-Sync is on and no
   V-sync source exists. The grid ignores repeated or slightly late reports.
+- **Submit margin:** starts at 4.5 ms instead of 2 ms
+  (`TimestampPacingOptions::GamescopeVsyncMarginUs`, 2026-10-08), unless the
+  `timestamptestvsyncmarginus` test key sets one. On a `mailbox-test` Deck
+  capture, frames handed over less than about 6 ms before a refresh mostly
+  missed it, and that branch's learned lead settled near 4.5 ms. Missed
+  V-blank detection still widens it from there.
 - **Display-mode probe:**
   [gamescopedisplaystate.cpp](app/streaming/video/ffmpeg-renderers/pacer/gamescopedisplaystate.cpp)
   opens a private Xlib connection to `DISPLAY` and reads root-window
@@ -4743,8 +4754,9 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
   - Windows (2026-10-08) uses the same detection; see "Windows missed V-blank
     detection" below.
 - **Not covered:** the Moonlight-side VRR request (`clientVrrRequested`) is
-  unchanged. EGL renderers and Gamescope sessions without the WSI layer get
-  no grid, and fall back to presenting at target.
+  unchanged. EGL renderers, and Gamescope sessions whose device lacks
+  `VK_GOOGLE_display_timing`, get no grid and fall back to presenting at
+  target.
 - **Validation:** none of this has run on SteamOS. It has been compiled for
   Windows and for Linux through the WSL AppImage build.
 

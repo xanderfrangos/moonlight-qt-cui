@@ -568,10 +568,16 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
         av_free((void*)vkParams.opt_extensions);
 #endif
 #ifdef Q_OS_LINUX
-    // VRR records Gamescope's present times for diagnostics. Timestamp pacing
-    // uses them as V-blank times on a fixed-refresh display.
-    const bool gamescopeTiming = (decoderParams->enableVrr || decoderParams->timestampPacing.enabled) &&
-        isGamescopeWsiPresentation(SDL_GetCurrentVideoDriver()) &&
+    // VRR records Gamescope's present times for diagnostics, with the
+    // Gamescope WSI layer. Timestamp pacing uses them as V-blank times on a
+    // fixed-refresh display, and needs only the extension: a Steam Deck Game
+    // Mode capture (2026-09-28, mailbox-test branch) got display times for
+    // 99.9% of presents without ENABLE_GAMESCOPE_WSI.
+    const char* videoDriver = SDL_GetCurrentVideoDriver();
+    const bool gamescopeTiming =
+        ((decoderParams->enableVrr && isGamescopeWsiPresentation(videoDriver)) ||
+         (decoderParams->timestampPacing.enabled && !decoderParams->testOnly &&
+          isGamescopePresentation(videoDriver))) &&
         isExtensionSupportedByPhysicalDevice(device, VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
     if (gamescopeTiming) {
         optionalExtensions.push_back(VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
@@ -625,7 +631,7 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         decoderParams->enableVrr ?
                             "Vulkan VRR: Gamescope WSI presentation timing enabled for diagnostics" :
-                            "Timestamp pacing: Gamescope WSI presentation timing enabled for the V-blank grid");
+                            "Timestamp pacing: Gamescope presentation timing enabled for the V-blank grid");
         }
     }
 #endif

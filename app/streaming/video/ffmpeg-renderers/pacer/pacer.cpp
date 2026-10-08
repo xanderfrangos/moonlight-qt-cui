@@ -604,6 +604,15 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                                    m_VsyncRenderer->supportsDisplayEvents();
 
         // Renderers that need forced pacing flip at once when they present
+        // Gamescope composites before each refresh: on a Steam Deck capture
+        // (2026-09-28, mailbox-test branch), frames handed over less than
+        // about 6 ms before a refresh mostly missed it, and a learned lead
+        // settled near 4.5 ms. Start there rather than learn it from misses.
+        // A margin set through the test key is kept.
+        if (GamescopeDisplayState::runningUnderGamescope() &&
+                timestampPacing.vsyncMarginUs == TimestampPacingOptions().vsyncMarginUs) {
+            timestampPacing.vsyncMarginUs = TimestampPacingOptions::GamescopeVsyncMarginUs;
+        }
         m_TimestampPacer = std::make_unique<TimestampPacer>(timestampPacing, m_MaxVideoFps, m_DisplayFps,
                                                             m_VsyncSource != nullptr || displayEvents,
                                                             (m_RendererAttributes & RENDERER_ATTRIBUTE_FORCE_PACING) != 0,

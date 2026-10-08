@@ -27,6 +27,9 @@ struct TimestampPacingOptions {
     // With V-Sync, how long before the chosen V-blank a frame is handed to
     // the renderer, on top of the learned rendering time
     int vsyncMarginUs = 2000;
+    // Under Gamescope, which composites before each refresh, the margin
+    // starts here instead unless a test key sets it
+    static constexpr int GamescopeVsyncMarginUs = 4500;
 
     TimestampPacingOptions resolved() const
     {

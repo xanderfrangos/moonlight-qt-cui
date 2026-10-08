@@ -173,6 +173,44 @@ Fixed-refresh skipped frames moved by at most 0.2 points for any of these.
   machine's render and compositor timing. Gamescope widens it automatically;
   Windows has no miss feedback yet, so the margin is still its only remedy.
 
+### 4.6 Against the Frame Pacing toggle (fixed refresh, 2026-10-08)
+
+The Frame Pacing toggle (`Pacer::handleVsync()`) ignores timestamps. At each
+V-sync it hands the oldest waiting frame to the renderer, to be shown at the
+following V-blank. With none waiting, it waits for one until 3 ms before the
+next V-sync. The queue is trimmed to one frame, or three while the stream rate
+can reach the display rate and recent V-syncs found the queue short. It was
+modelled the same way as the others: same captures, 8 phases, 1 ms render.
+
+| | Windows 110 FPS, 120 Hz | Deck 60 FPS, 60 Hz* | ~90 FPS, 120 Hz |
+|---|---|---|---|
+| Pacing off: skipped / held / delay | 1.25% / 12.2% / 5.2 ms | 1.07% / 3.5% / 9.3 ms | 4.06% / 35.3% / 5.2 ms |
+| Frame Pacing | 0.18% / 11.0% / 7.4 ms | 0.00% / 1.8% / 14.4 ms | 0.91% / 31.2% / 7.6 ms |
+| Timestamp: Light (defaults) | 0.20% / 11.2% / 12.0 ms | 0.27% / 2.3% / 13.5 ms | 1.30% / 32.3% / 13.6 ms |
+| Timestamp: Light, 95%, max 8 ms | 0.48% / 11.5% / 7.1 ms | 0.25% / 2.4% / 11.4 ms | 1.63% / 32.8% / 8.1 ms |
+
+\*Frame Pacing can't run in Steam Deck Game Mode. It needs a V-sync source,
+which exists only for SDL's Windows and Wayland backends, and Moonlight runs
+on Gamescope's Xwayland. This column is hypothetical.
+
+On a fixed-refresh display with a V-sync source, Frame Pacing was as smooth as
+timestamp pacing or smoother, with 4.6–6 ms less delay. Shrinking timestamp
+pacing's buffer to match its delay skipped 2–3× more frames. The reason:
+Frame Pacing delays a frame only when an earlier one already holds the coming
+refresh, while the timestamp buffer delays every frame by the lateness
+percentile. A refresh grid already absorbs sub-refresh jitter, so that buffer
+mostly adds latency there.
+
+Timestamp pacing's distinct value is therefore:
+- Gamescope Game Mode, where Frame Pacing can't run.
+- VRR displays used without VRR Pacing Mode (section 4.1).
+- V-Sync off, which Frame Pacing doesn't support.
+
+A grid-mode release that behaves like Frame Pacing's queue is worth replaying
+before more live testing on fixed-refresh Windows displays. Caveats as in
+section 3: neither model includes Windows' on-demand refresh, and real V-sync
+wakeup lateness is not modelled.
+
 ## 5. Conclusions
 
 - **The average frame rate is never changed.** It is whatever the host sends
@@ -271,12 +309,14 @@ to three gaps here.
      counters to verify it.
 2. **Gamescope display times don't need `ENABLE_GAMESCOPE_WSI=1`.** A Deck
    Game Mode capture got display times for 18,580 of 18,603 presents from
-   the timing extension alone. Timestamp pacing currently requires the
-   variable, so it may never get its V-blank grid on the Deck.
+   the timing extension alone. Timestamp pacing required the variable, so
+   it might never have got its V-blank grid on the Deck. Applied 2026-10-08:
+   the requirement is dropped for timestamp pacing.
 3. **A 2 ms margin is likely too small under Gamescope.** Frames handed over
    less than about 6 ms before a refresh mostly missed it, and the branch's
    learned lead settled near 4.5 ms. Timestamp pacing's self-widening margin
-   recovers only after it has missed refreshes.
+   recovers only after it has missed refreshes. Applied 2026-10-08: under
+   Gamescope the margin starts at 4.5 ms.
 
 Also from the branch:
 - On that Deck capture, host timestamps were 99.9% regular, so its scheduler
@@ -300,12 +340,13 @@ follows.
 | | Windows | Gamescope (Game Mode) |
 |---|---|---|
 | Renderer | D3D11 | Vulkan, preferred automatically |
-| V-blank times | `DxVsyncSource` wakeups, predictive | Gamescope's reported display times (`VK_GOOGLE_display_timing`). Currently requires `ENABLE_GAMESCOPE_WSI=1` (section 7) |
+| V-blank times | `DxVsyncSource` wakeups, predictive | Gamescope's reported display times (`VK_GOOGLE_display_timing`); needs only the extension since 2026-10-08 |
 | Without timing | Not expected | Frames released at their target |
 | Refresh period | Display mode, refined ±3% | Gamescope's own (`vkGetRefreshCycleDurationGOOGLE`) |
 | Frame replacement | DWM flip model, `Present(0)` | Mailbox present mode chosen by Moonlight |
 | VRR, tearing, limiter | Read once at start; fixed refresh assumed | Polled every 250 ms and followed |
 | Missed V-blank feedback | From DXGI frame statistics (2026-10-08) | From Gamescope's display times |
+| Starting submit margin | 2 ms | 4.5 ms (since 2026-10-08) |
 | Margin after a miss | +0.5 ms per miss up to +6 ms; released after 5 s clean | Same |
 | Exclusive fullscreen | Released at the V-blank | Not applicable |
 
@@ -321,9 +362,9 @@ SteamOS Desktop Mode:
    statistics; architecture.md, "Windows missed V-blank detection"). It shows
    whether frames miss their refresh, but not whether the display skipped a
    refresh nobody presented to.
-2. Drop the `ENABLE_GAMESCOPE_WSI` requirement for timestamp pacing's display
-   times.
-3. Start Gamescope at a submit margin of about 4.5 ms.
+2. ~~Drop the `ENABLE_GAMESCOPE_WSI` requirement for timestamp pacing's
+   display times.~~ Done 2026-10-08.
+3. ~~Start Gamescope at a submit margin of about 4.5 ms.~~ Done 2026-10-08.
 4. ~~Make Light the default smoothing; reword or remove Strong.~~ Done
    2026-10-08.
 5. Live captures with the current build, timestamp pacing on, the pacing log
