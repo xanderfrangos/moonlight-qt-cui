@@ -7,6 +7,9 @@ smoothing is on by default; host repeat frames are shown on arrival; and the
 queue is capped at three frames. Later the same day, ideas from VRR Pacing
 Mode were added: the offset is now slewed as 1.1 proposes; stalls and decoder
 backlog no longer size the buffer; and the waiter learns its wake-up lead.
+Evaluation against three captures, preset behavior, lessons from the
+`mailbox-test` branch and next steps are in
+[timestamp-pacing-findings.md](timestamp-pacing-findings.md).
 Original source baseline: `7e642e63`;
 the pacer sources are unchanged since the `vrr17` merge (`1b2ba09d`) that
 [architecture.md](../architecture.md) describes.

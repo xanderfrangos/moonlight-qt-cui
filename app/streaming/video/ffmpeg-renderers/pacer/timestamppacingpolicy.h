@@ -85,10 +85,6 @@ public:
             m_PhaseGain = 0.25;
             m_FrequencyGain = 0.01;
             break;
-        case TimestampPacingOptions::SmoothingStrong:
-            m_PhaseGain = 0.05;
-            m_FrequencyGain = 0.001;
-            break;
         default:
             m_PhaseGain = 0.1;
             m_FrequencyGain = 0.002;

@@ -240,7 +240,7 @@ void StreamingPreferences::reload()
         const TimestampPacingOptions defaults;
         m_TimestampPacing = TimestampPacingOptions{
             settings.value("timestamppacing", defaults.enabled).toBool(),
-            settings.value("timestampsmoothing", defaults.smoothing).toInt(),
+            settings.value("timestampsmoothinglevel", defaults.smoothing).toInt(),
             settings.value("timestamptargetpermille", defaults.targetPerMille).toInt(),
             settings.value("timestampminbufferms", defaults.minBufferMs).toInt(),
             settings.value("timestampmaxbufferms", defaults.maxBufferMs).toInt(),
@@ -632,7 +632,9 @@ void StreamingPreferences::save()
     settings.remove("gamescopeforcecomposition");
     settings.setValue(SER_SMOOTHVRRFRAMETIMING, smoothVrrFrameTiming);
     settings.setValue("timestamppacing", m_TimestampPacing.enabled);
-    settings.setValue("timestampsmoothing", m_TimestampPacing.smoothing);
+    // Renamed from timestampsmoothing when Light became the default and
+    // Strong was removed, so saved values from before don't apply
+    settings.setValue("timestampsmoothinglevel", m_TimestampPacing.smoothing);
     settings.setValue("timestamptargetpermille", m_TimestampPacing.targetPerMille);
     settings.setValue("timestampminbufferms", m_TimestampPacing.minBufferMs);
     settings.setValue("timestampmaxbufferms", m_TimestampPacing.maxBufferMs);
@@ -891,7 +893,7 @@ void StreamingPreferences::setTimestampPacing(bool enabled)
 
 void StreamingPreferences::setTimestampSmoothing(int value)
 {
-    value = qBound((int)TimestampPacingOptions::SmoothingOff, value, (int)TimestampPacingOptions::SmoothingStrong);
+    value = qBound((int)TimestampPacingOptions::SmoothingOff, value, (int)TimestampPacingOptions::SmoothingStandard);
     if (value == m_TimestampPacing.smoothing) return;
     m_TimestampPacing.smoothing = value;
     emit timestampPacingChanged();

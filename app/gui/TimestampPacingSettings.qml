@@ -5,7 +5,7 @@ import QtQuick.Layouts 1.2
 GroupBox {
     id: root
     title: qsTr("Timestamp pacing")
-    property int smoothing: 2
+    property int smoothing: 1
     property int targetPerMille: 990
     property int minBufferMs: 2
     property int maxBufferMs: 16
@@ -25,14 +25,14 @@ GroupBox {
         AutoResizingComboBox {
             objectName: "timestampSmoothing"
             Layout.fillWidth: true
-            model: [qsTr("Off (exact host timestamps)"), qsTr("Light"), qsTr("Standard"), qsTr("Strong")]
+            model: [qsTr("Off (exact host timestamps)"), qsTr("Light (recommended)"), qsTr("Standard")]
             currentIndex: root.smoothing
             onActivated: root.smoothingEdited(currentIndex)
         }
         Label {
             Layout.fillWidth: true
             wrapMode: Text.Wrap
-            text: qsTr("Host timestamps can be a few milliseconds uneven even when the game is steady. Smoothing follows the game's cadence instead, and still follows real changes in frame rate. Stronger smoothing is steadier but slower to follow changes.")
+            text: qsTr("Host timestamps can be a few milliseconds uneven even when the game is steady. Smoothing follows the game's cadence instead, and still follows real changes in frame rate. Standard is slightly steadier for games locked to one frame rate, but slower to follow a frame rate that changes.")
         }
 
         Label { text: qsTr("Frames ready on time (%)") }

@@ -82,7 +82,7 @@ std::vector<double> targetJerk(const std::vector<Policy::Decision>& decisions, s
 // early, as measured from a real host. Delivery itself is steady.
 void smoothingRemovesStampNoise()
 {
-    for (int smoothing = 0; smoothing <= 3; smoothing++) {
+    for (int smoothing = 0; smoothing <= 2; smoothing++) {
         Stream stream(options(smoothing), 110);
         for (int i = 0; i < 2000; i++) {
             stream.next(1000000.0 / 110, i % 10 == 5 ? -2000 : 0);

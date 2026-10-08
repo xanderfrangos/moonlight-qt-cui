@@ -101,7 +101,7 @@ void TimestampPacer::stop()
 
 QString TimestampPacer::describe() const
 {
-    static const char* const k_Smoothing[] = { "off", "light", "standard", "strong" };
+    static const char* const k_Smoothing[] = { "off", "light", "standard" };
     return QStringLiteral("smoothing %1, target %2%, buffer %3-%4 ms, %5%6")
         .arg(k_Smoothing[m_Options.smoothing])
         .arg(m_Options.targetPerMille / 10.0, 0, 'f', 1)

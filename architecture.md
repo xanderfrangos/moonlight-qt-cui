@@ -4596,7 +4596,8 @@ wrap, discontinuities and drift.
 
 An opt-in fourth presentation mode, built from
 [the proposal](docs/timestamp-pacing-proposal.md). It is not yet validated on
-a live stream.
+a live stream. Offline evaluation, known gaps and next steps are in
+[timestamp-pacing-findings.md](docs/timestamp-pacing-findings.md).
 
 **Selection.** The `timestamppacing` preference (Settings checkbox
 "Timestamp pacing", `--timestamp-pacing`) is snapshotted per session in
@@ -4618,8 +4619,12 @@ Pure and header-only; tested by `tst_timestamppacing`.
   reported nonzero latency recently, is a host repeat. Repeats are backdated by
   about one timeout, so they are shown on arrival and never learned from.
 - `Timeline`: a two-gain phase-locked loop on the RTP timeline, counting
-  frames by host frame number. Gains are phase/frequency 0.25/0.01 (light),
-  0.1/0.002 (standard), 0.05/0.001 (strong); "off" follows raw timestamps.
+  frames by host frame number. Gains are phase/frequency 0.25/0.01 (light,
+  the default) and 0.1/0.002 (standard); "off" follows raw timestamps.
+  A "strong" level (0.05/0.001) was removed on 2026-10-08 after it skipped
+  3.8% of frames on a Steam Deck capture whose rate kept changing. The
+  preference key became `timestampsmoothinglevel`, so values saved under the
+  old `timestampsmoothing` key no longer apply.
   - An error over max(8 ms, half a period) re-anchors to the raw timestamp.
   - The period is replaced outright only when the last nine single-frame gaps
     all agree to within 10% on a rate more than 15% away.
