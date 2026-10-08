@@ -48,13 +48,13 @@ struct Stream {
 
     // Advances the source by periodUs and delivers the frame
     Policy::Decision next(double periodUs, double stampNoiseUs = 0, double arrivalDelayUs = 0,
-                          uint32_t hostLatencyUs = 3000)
+                          uint32_t hostLatencyUs = 3000, uint64_t decoderQueueUs = 0)
     {
         sourceUs += periodUs;
         frame++;
         const uint32_t stamp = rtp + uint32_t(std::llround((sourceUs + stampNoiseUs) * 9 / 100));
         const uint64_t readyUs = epochUs + uint64_t(sourceUs) + 4000 + uint64_t(arrivalDelayUs);
-        const auto decision = policy.schedule(true, frame, stamp, readyUs, hostLatencyUs);
+        const auto decision = policy.schedule(true, frame, stamp, readyUs, hostLatencyUs, decoderQueueUs);
         decisions.push_back(decision);
         return decision;
     }
@@ -157,6 +157,81 @@ void bufferReleasesSlowly()
     const double releasedUs = stream.policy.bufferUs();
     check(releasedUs < grownUs && releasedUs > grownUs - 1500,
           "the buffer releases at about half a millisecond per second");
+}
+
+// The window minimum steps when an early arrival leaves the window. Targets
+// follow it at a bounded rate instead of jumping with it.
+void baselineSlewsInsteadOfStepping()
+{
+    const double periodUs = 1000000.0 / 60;
+    // A fixed 2 ms buffer, so only the baseline moves the targets
+    Stream stream(options(2, 990, 2, 2), 60);
+    for (int i = 0; i < 600; i++) {
+        stream.next(periodUs, 0, i % 30 == 0 ? 0 : 3000);
+    }
+    const double beforeUs = stream.policy.baselineUs();
+    for (int i = 0; i < 600; i++) {
+        stream.next(periodUs, 0, 3000);
+    }
+    const auto jerk = targetJerk(stream.decisions, 600);
+    check(*std::max_element(jerk.begin(), jerk.end()) < 100,
+          "targets move by a fraction of a millisecond per frame when the minimum steps");
+    check(std::fabs(stream.policy.baselineUs() - stream.policy.windowMinimumUs()) < 1,
+          "the baseline reaches the new minimum");
+    check(std::fabs(stream.policy.baselineUs() - beforeUs - 3000) < 50, "and moves by all of the step");
+
+    // At the start, an earlier arrival is adopted at once
+    Stream start(options(2), 60);
+    start.next(periodUs, 0, 6000);
+    for (int i = 0; i < 10; i++) {
+        start.next(periodUs);
+    }
+    check(start.policy.baselineUs() == start.policy.windowMinimumUs(),
+          "a new timeline's baseline isn't slewed");
+}
+
+// A delivery stall: 150 ms without frames, then the ones held up arrive
+// together. Without leaving most of them out, this one stall would hold the
+// buffer at its maximum for half a minute.
+void deliveryStallsDontGrowBuffer()
+{
+    const double periodUs = 1000000.0 / 60;
+    Stream stream(options(2), 60);
+    for (int i = 0; i < 600; i++) {
+        check(stream.next(periodUs).admitted || i == 0, "steady frames size the buffer");
+    }
+    for (int k = 0; k < 10; k++) {
+        const auto decision = stream.next(periodUs, 0, 150000 - k * periodUs);
+        check(decision.admitted == (decision.latenessUs <= 48000),
+              "frames late by more than three maximum buffers don't size it");
+    }
+    for (int i = 0; i < 120; i++) {
+        stream.next(periodUs);
+    }
+    check(stream.policy.bufferUs() == 2000, "a stall leaves the buffer at its minimum");
+}
+
+// A decoder that can't keep up: every frame waits longer than a period to
+// enter it. The lateness that follows grows the buffer no matter how large
+// it gets, so it is left out, and the buffer releases again.
+void overloadDoesntGrowBuffer()
+{
+    const double periodUs = 1000000.0 / 60;
+    for (const bool queueReported : { false, true }) {
+        Stream stream(options(2), 60);
+        for (int i = 0; i < 300; i++) {
+            stream.next(periodUs);
+        }
+        for (int i = 0; i < 1200; i++) {
+            stream.next(periodUs, 0, (i % 6) * 3000.0, 3000, queueReported ? 25000 : 0);
+        }
+        if (queueReported) {
+            check(stream.policy.bufferUs() < 10000, "a sustained decoder backlog doesn't hold the buffer up");
+        }
+        else {
+            check(stream.policy.bufferUs() > 15000, "the same lateness without a backlog does");
+        }
+    }
 }
 
 void repeatsAreShownOnArrival()
@@ -324,6 +399,9 @@ int main()
     smoothingRemovesStampNoise();
     bufferCoversArrivalJitter();
     bufferReleasesSlowly();
+    baselineSlewsInsteadOfStepping();
+    deliveryStallsDontGrowBuffer();
+    overloadDoesntGrowBuffer();
     repeatsAreShownOnArrival();
     followsRateChanges();
     recoversFromSlowdown();

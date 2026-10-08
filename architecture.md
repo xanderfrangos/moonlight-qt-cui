@@ -4628,10 +4628,29 @@ Pure and header-only; tested by `tst_timestamppacing`.
     stops brief game slowdowns from causing a run of re-anchors afterwards.
 - `PlayoutBuffer`: lateness is `(ready - smoothed source time)` minus its
   3 s rolling minimum (twelve 250 ms buckets), which also follows clock drift.
+  - Targets use a baseline that follows that minimum at 2.4 ms/s, at most
+    0.1 ms per frame, as VRR Pacing Mode's playout offset does. The raw
+    minimum steps whenever an old minimum leaves the window, and every target
+    used to step with it. For the first 64 frames of a timeline, an earlier
+    minimum is adopted at once.
   - The delay is the configured percentile of 3 s of lateness plus 0.5 ms,
     clamped to the configured minimum and maximum.
-  - It grows at once and releases at 0.5 ms/s.
+  - It grows at once and releases at 0.5 ms/s, toward the minimum when no
+    admitted frame is left in the window.
   - A frame's target uses the delay in force before it arrived.
+- Admission (2026-10-07): a paced frame's lateness sizes the delay only when
+  its timeline didn't restart or re-anchor, it is no more than three times the
+  maximum buffer late (a stall), and over the last second frames waited on
+  average no longer than a source period to enter the decoder
+  (`PacedFrame::decoderQueueUs()`; a sustained backlog only grows lateness).
+  - The overlay reports the share left out.
+  - VRR Pacing Mode's other exclusions were tried against the 2026-10-07
+    pacing log and rejected: delivery stalls over max(25 ms, 1.5 periods) with
+    their trailing backlog, and host intervals under 0.75 period. Both
+    shrank the buffer by 0.6–0.8 ms but raised jerk p99 from 1.08 to
+    1.2–1.5 ms and late frames from 0.65% to 0.77%. Frames late beyond the
+    maximum still count against the chosen share on time, so lower stall
+    multiples than three did the same.
 - `VblankGrid`: estimates V-blank phase and period from V-sync source wakeups.
   The earliest wakeup sets the phase; the period may move ±3% from nominal.
   The grid is stale 250 ms after the last real V-blank.
@@ -4643,7 +4662,9 @@ Pure and header-only; tested by `tst_timestamppacing`.
 The decoder thread schedules each frame into a queue of at most three; a full
 queue evicts the oldest. The pacing thread waits on a condition variable, then
 uses `VrrTargetWaiter` for the last 2 ms, and hands frames to the existing
-render queue, so every renderer works unchanged.
+render queue, so every renderer works unchanged. As in VRR Pacing Mode, the
+waiter wakes early by the 95th percentile of its last 19 sleep overruns
+(`schedulerDelayUs`, at most 500 us) and spins the rest.
 - **V-Sync with a V-sync source:** the frame is released at the first V-blank
   at or after (target + trim), minus the learned release-to-present time and
   the configured margin (default 2 ms).
@@ -4711,7 +4732,8 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
   Windows and for Linux through the WSL AppImage build.
 
 **Telemetry.** The text overlay shows a "Timestamp pacing" line: buffer, share
-of paced frames ready after their target, superseded frames, frames shown on
+of paced frames left out of sizing it, share of paced frames ready after their
+target, superseded frames, frames shown on
 arrival, and the V-blank grid's trim. The graphs card shows a "Timestamp
 pacing" chip. The pacing log (below) gains `scheduled` rows with target,
 buffer, lateness and repeat flag, plus two new drop reasons.

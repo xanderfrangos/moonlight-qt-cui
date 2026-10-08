@@ -4,7 +4,10 @@ Status: first implementation built (2026-10-07), not yet validated on a live
 stream. architecture.md ("Timestamp pacing") describes what was built. It
 differs from this proposal where the first pacing log required it:
 smoothing is on by default; host repeat frames are shown on arrival; and the
-queue is capped at three frames. Original source baseline: `7e642e63`;
+queue is capped at three frames. Later the same day, ideas from VRR Pacing
+Mode were added: the offset is now slewed as 1.1 proposes; stalls and decoder
+backlog no longer size the buffer; and the waiter learns its wake-up lead.
+Original source baseline: `7e642e63`;
 the pacer sources are unchanged since the `vrr17` merge (`1b2ba09d`) that
 [architecture.md](../architecture.md) describes.
 

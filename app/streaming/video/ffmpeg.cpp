@@ -1105,6 +1105,7 @@ void FFmpegVideoDecoder::addVideoStats(VIDEO_STATS& src, VIDEO_STATS& dst)
     dst.vrrTelemetryActive = dst.vrrTelemetryActive || src.vrrTelemetryActive;
     dst.timestampPacedFrames += src.timestampPacedFrames;
     dst.timestampLateFrames += src.timestampLateFrames;
+    dst.timestampIgnoredFrames += src.timestampIgnoredFrames;
     dst.timestampUnpacedFrames += src.timestampUnpacedFrames;
     dst.timestampSupersededFrames += src.timestampSupersededFrames;
     dst.timestampVblankHits += src.timestampVblankHits;
@@ -1397,6 +1398,8 @@ void FFmpegVideoDecoder::syncPacerTelemetry()
             delta(snapshot.timestampPacedFrames, m_LastPacerTelemetry.timestampPacedFrames);
         m_ActiveWndVideoStats.timestampLateFrames +=
             delta(snapshot.timestampLateFrames, m_LastPacerTelemetry.timestampLateFrames);
+        m_ActiveWndVideoStats.timestampIgnoredFrames +=
+            delta(snapshot.timestampIgnoredFrames, m_LastPacerTelemetry.timestampIgnoredFrames);
         m_ActiveWndVideoStats.timestampUnpacedFrames +=
             delta(snapshot.timestampUnpacedFrames, m_LastPacerTelemetry.timestampUnpacedFrames);
         m_ActiveWndVideoStats.timestampSupersededFrames +=
@@ -1773,8 +1776,10 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
                      stats.timestampExtraMarginUs / 1000.0);
         }
         ret = snprintf(&output[offset], length - offset,
-                       "Timestamp pacing: buffer %.2f ms | Ready late: %.2f%% | Replaced: %llu | Shown on arrival: %llu | %s\n",
+                       "Timestamp pacing: buffer %.2f ms (ignoring %.2f%% of frames) | Ready late: %.2f%% | Replaced: %llu | Shown on arrival: %llu | %s\n",
                        stats.timestampBufferUs / 1000.0,
+                       stats.timestampPacedFrames != 0 ?
+                           stats.timestampIgnoredFrames * 100.0 / stats.timestampPacedFrames : 0.0,
                        stats.timestampPacedFrames != 0 ?
                            stats.timestampLateFrames * 100.0 / stats.timestampPacedFrames : 0.0,
                        static_cast<unsigned long long>(stats.timestampSupersededFrames),

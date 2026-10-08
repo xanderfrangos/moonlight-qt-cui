@@ -76,6 +76,9 @@ struct PacerTelemetrySnapshot {
     // Frames scheduled to a target, and those ready only after it
     uint64_t timestampPacedFrames = 0;
     uint64_t timestampLateFrames = 0;
+    // Paced frames left out of sizing the buffer: re-anchored timelines,
+    // stalls, and frames while the decoder fell behind
+    uint64_t timestampIgnoredFrames = 0;
     // Host repeats and frames without a timestamp, shown when ready
     uint64_t timestampUnpacedFrames = 0;
     // Replaced by a newer frame due at the same time
@@ -177,6 +180,8 @@ struct PacerFrametimeStats {
 
 struct TimestampScheduleSample {
     bool paced = false;
+    // Its lateness counted toward the buffer
+    bool admitted = false;
     // Ready only after its target
     bool late = false;
     uint64_t latenessUs = 0;
@@ -295,6 +300,7 @@ public:
         if (sample.paced) {
             ++m_Snapshot.timestampPacedFrames;
             m_Snapshot.timestampLateFrames += sample.late;
+            m_Snapshot.timestampIgnoredFrames += !sample.admitted;
             m_Frametime.timestampLateness.add((int64_t)sample.latenessUs);
             m_Frametime.timestampCorrection.add(sample.correctionUs);
             m_Frametime.timestampReanchors += sample.reanchored;

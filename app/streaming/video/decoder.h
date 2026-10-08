@@ -69,6 +69,8 @@ typedef struct _VIDEO_STATS {
     bool timestampActive;
     uint64_t timestampPacedFrames;
     uint64_t timestampLateFrames;
+    // Paced frames whose lateness was left out of sizing the buffer
+    uint64_t timestampIgnoredFrames;
     uint64_t timestampUnpacedFrames;
     uint64_t timestampSupersededFrames;
     // Latest state rather than counters

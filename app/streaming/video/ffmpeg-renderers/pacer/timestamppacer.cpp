@@ -6,6 +6,7 @@
 #include <Limelight.h>
 #include <SDL.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 
@@ -120,7 +121,7 @@ void TimestampPacer::submit(PacedFrame&& paced)
                                                            : paced.decoderOutputUs();
     const TimestampPacing::Policy::Decision decision =
         m_Policy.schedule(paced.timestampValid(), paced.frameNumber(), paced.rtpTimestamp(),
-                          readyUs, paced.hostLatencyUs());
+                          readyUs, paced.hostLatencyUs(), paced.decoderQueueUs());
 
     if (PacingLog::active()) {
         PacingLog::Record record;
@@ -175,6 +176,7 @@ void TimestampPacer::submit(PacedFrame&& paced)
 
     TimestampScheduleSample sample;
     sample.paced = decision.paced;
+    sample.admitted = decision.admitted;
     sample.late = late;
     sample.latenessUs = decision.latenessUs;
     sample.bufferUs = decision.bufferUs;
@@ -364,7 +366,10 @@ void TimestampPacer::run()
         }
         if (releaseUs > nowUs) {
             lock.unlock();
-            m_Waiter.waitUntil(releaseUs);
+            const VrrTargetWaitResult wait = m_Waiter.waitUntil(releaseUs, m_WakeLeadUs);
+            if (wait.schedulerDelayValid) {
+                learnWakeLead(wait.schedulerDelayUs);
+            }
             lock.lock();
             if (m_Stopping || m_Queue.empty()) {
                 continue;
@@ -373,6 +378,20 @@ void TimestampPacer::run()
 
         releaseDueLocked(lock, vblankGrid);
     }
+}
+
+void TimestampPacer::learnWakeLead(uint64_t schedulerDelayUs)
+{
+    m_SchedulerDelays[m_NextSchedulerDelay] = schedulerDelayUs;
+    m_NextSchedulerDelay = (m_NextSchedulerDelay + 1) % m_SchedulerDelays.size();
+    m_SchedulerDelayCount = std::min(m_SchedulerDelayCount + 1, m_SchedulerDelays.size());
+
+    // The 95th percentile of recent oversleeps, as VRR Pacing Mode learns it
+    std::array<uint64_t, SchedulerSamples> sorted {};
+    std::copy_n(m_SchedulerDelays.begin(), m_SchedulerDelayCount, sorted.begin());
+    const size_t rank = (95 * (m_SchedulerDelayCount - 1) + 50) / 100;
+    std::nth_element(sorted.begin(), sorted.begin() + rank, sorted.begin() + m_SchedulerDelayCount);
+    m_WakeLeadUs = std::min(VrrTargetWaiter::kMaximumAdditionalWakeLeadUs, sorted[rank]);
 }
 
 void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool vblankGrid)

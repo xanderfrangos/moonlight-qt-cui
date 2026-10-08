@@ -108,6 +108,7 @@ private:
     uint64_t leadUsLocked(bool vblankGrid) const;
     uint64_t releaseTimeLocked(const Entry& entry, bool vblankGrid) const;
     void releaseDueLocked(std::unique_lock<std::mutex>& lock, bool vblankGrid);
+    void learnWakeLead(uint64_t schedulerDelayUs);
 
     const TimestampPacingOptions m_Options;
     const int m_StreamFps;
@@ -151,5 +152,12 @@ private:
     uint64_t m_DisplayModeCheckedUs = 0;
 
     VrrTargetWaiter m_Waiter;
+    // Pacing thread only. How far the precise waiter's sleeps have recently
+    // overrun, so it wakes that much earlier and spins the rest.
+    static constexpr size_t SchedulerSamples = 19;
+    std::array<uint64_t, SchedulerSamples> m_SchedulerDelays {};
+    size_t m_SchedulerDelayCount = 0;
+    size_t m_NextSchedulerDelay = 0;
+    uint64_t m_WakeLeadUs = 0;
     std::thread m_Thread;
 };

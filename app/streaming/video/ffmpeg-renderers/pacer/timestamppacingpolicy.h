@@ -224,6 +224,11 @@ private:
 // measured from the smallest offset of the last few seconds, which also
 // follows clock drift. The delay covers the chosen share of recent lateness
 // above that, grows at once when that share rises, and releases slowly.
+//
+// The smallest offset steps whenever an old minimum leaves the window, and
+// every following target would step with it. Targets instead follow a
+// baseline that moves toward it at a bounded rate, as VRR Pacing Mode's
+// playout offset does: fast next to clock drift, too slow to see.
 class PlayoutBuffer
 {
 public:
@@ -234,6 +239,12 @@ public:
     static constexpr double MarginUs = 500;
     // Release of 0.5 ms per second
     static constexpr double ReleasePerUs = 0.0005;
+    // 2.4 ms per second, and at most 0.1 ms between two frames
+    static constexpr double BaselineSlewPerUs = 0.0024;
+    static constexpr double BaselineMaximumStepUs = 100;
+    // Until this many frames have been seen on a timeline, an earlier
+    // arrival is adopted at once, so startup isn't paid for at the slew rate
+    static constexpr uint32_t BaselineWarmupFrames = 64;
 
     void configure(int targetPerMille, uint64_t minimumUs, uint64_t maximumUs)
     {
@@ -252,10 +263,13 @@ public:
         m_HistoryCount = 0;
         m_NextHistory = 0;
         m_BaselineUs = 0;
+        m_AppliedBaselineUs = 0;
+        m_BaselineFrames = 0;
+        m_LastSampleUs = 0;
     }
 
     // Records one frame's offset from source time to readiness and returns
-    // how late it was against the recent baseline.
+    // how late it was against the recent baseline
     uint64_t addSample(uint64_t readyUs, double offsetUs)
     {
         const uint64_t bucket = readyUs / BucketUs;
@@ -274,11 +288,34 @@ public:
             }
         }
 
-        const uint64_t latenessUs = uint64_t(std::llround(offsetUs - m_BaselineUs));
+        if (m_BaselineFrames == 0) {
+            m_AppliedBaselineUs = m_BaselineUs;
+        }
+        else if (m_BaselineFrames < BaselineWarmupFrames) {
+            m_AppliedBaselineUs = std::min(m_AppliedBaselineUs, m_BaselineUs);
+        }
+        else if (readyUs > m_LastSampleUs) {
+            // A pause buys one bounded step, not a jump
+            const double stepUs = std::min(BaselineMaximumStepUs, (readyUs - m_LastSampleUs) * BaselineSlewPerUs);
+            m_AppliedBaselineUs += std::max(-stepUs, std::min(stepUs, m_BaselineUs - m_AppliedBaselineUs));
+        }
+        if (m_BaselineFrames < BaselineWarmupFrames) {
+            m_BaselineFrames++;
+        }
+        m_LastSampleUs = std::max(m_LastSampleUs, readyUs);
+
+        // Measured against the true minimum, so a baseline still on its way
+        // to it doesn't count as lateness
+        return uint64_t(std::llround(offsetUs - m_BaselineUs));
+    }
+
+    // Counts a frame's lateness toward the delay. See Policy::schedule for
+    // the frames that aren't.
+    void admit(uint64_t readyUs, uint64_t latenessUs)
+    {
         m_History[m_NextHistory] = { readyUs, (uint32_t)std::min<uint64_t>(latenessUs, UINT32_MAX) };
         m_NextHistory = (m_NextHistory + 1) % HistoryCapacity;
         m_HistoryCount = std::min(m_HistoryCount + 1, HistoryCapacity);
-        return latenessUs;
     }
 
     // Moves the delay toward the configured share of recent lateness. Called
@@ -294,21 +331,27 @@ public:
             }
         }
 
+        // With no admitted frames in the window there is no evidence for
+        // holding a delay, so it releases toward the minimum
+        double wantUs = m_MinimumUs;
         if (count != 0) {
             const size_t rank = std::min(count - 1, (size_t(m_TargetPerMille) * (count - 1) + 500) / 1000);
             std::nth_element(m_Scratch.begin(), m_Scratch.begin() + rank, m_Scratch.begin() + count);
-            const double wantUs = std::max(m_MinimumUs, std::min(m_MaximumUs, m_Scratch[rank] + MarginUs));
-            if (wantUs > m_DelayUs) {
-                m_DelayUs = wantUs;
-            }
-            else if (m_LastUpdateUs != 0 && nowUs > m_LastUpdateUs) {
-                m_DelayUs = std::max(wantUs, m_DelayUs - (nowUs - m_LastUpdateUs) * ReleasePerUs);
-            }
+            wantUs = std::max(m_MinimumUs, std::min(m_MaximumUs, m_Scratch[rank] + MarginUs));
+        }
+        if (wantUs > m_DelayUs) {
+            m_DelayUs = wantUs;
+        }
+        else if (m_LastUpdateUs != 0 && nowUs > m_LastUpdateUs) {
+            m_DelayUs = std::max(wantUs, m_DelayUs - (nowUs - m_LastUpdateUs) * ReleasePerUs);
         }
         m_LastUpdateUs = nowUs;
     }
 
-    double baselineUs() const { return m_BaselineUs; }
+    // The baseline targets are placed from
+    double baselineUs() const { return m_AppliedBaselineUs; }
+    // The smallest offset in the window, which that baseline follows
+    double windowMinimumUs() const { return m_BaselineUs; }
     double delayUs() const { return m_DelayUs; }
 
 private:
@@ -332,7 +375,57 @@ private:
     double m_MaximumUs = 16000;
     double m_DelayUs = 2000;
     double m_BaselineUs = 0;
+    double m_AppliedBaselineUs = 0;
+    uint32_t m_BaselineFrames = 0;
+    uint64_t m_LastSampleUs = 0;
     uint64_t m_LastUpdateUs = 0;
+};
+
+// Whether the client keeps up with the stream: the mean time frames waited
+// to enter the decoder over the last second, against the source period. A
+// decoder slower than the stream makes every frame later than the last, and
+// a deeper buffer would only add that to the standing delay. Averaged over a
+// second, as VRR Pacing Mode's service gate is, so one slow frame doesn't
+// count as overload.
+class ServiceWindow
+{
+public:
+    static constexpr uint64_t BucketUs = 250000;
+    static constexpr size_t Buckets = 4;
+
+    void reset() { m_Slots = {}; }
+
+    void add(uint64_t atUs, uint64_t queueUs)
+    {
+        const uint64_t bucket = atUs / BucketUs;
+        Slot& slot = m_Slots[bucket % Buckets];
+        if (slot.count == 0 || slot.bucket != bucket) {
+            slot = { bucket, 0, 0 };
+        }
+        slot.sumUs += queueUs;
+        slot.count++;
+    }
+
+    bool keepsUp(uint64_t nowUs, double periodUs) const
+    {
+        const uint64_t bucket = nowUs / BucketUs;
+        uint64_t sumUs = 0, count = 0;
+        for (const Slot& slot : m_Slots) {
+            if (slot.count != 0 && slot.bucket + Buckets > bucket) {
+                sumUs += slot.sumUs;
+                count += slot.count;
+            }
+        }
+        return count == 0 || double(sumUs) <= periodUs * count;
+    }
+
+private:
+    struct Slot {
+        uint64_t bucket = 0;
+        uint64_t sumUs = 0;
+        uint32_t count = 0;
+    };
+    std::array<Slot, Buckets> m_Slots {};
 };
 
 // The display's V-blank times, estimated from V-sync source wakeups. A wakeup
@@ -484,11 +577,19 @@ public:
         bool repeat = false;
         bool restarted = false;
         bool reanchored = false;
+        // Whether its lateness counts toward the buffer
+        bool admitted = false;
         // From the timeline; see Timeline::Sample
         double correctionUs = 0;
         double hostJerkUs = 0;
         bool hostJerkValid = false;
     };
+
+    // Lateness past this many times the maximum buffer is a stall. On a real
+    // capture, any lower multiple shrank the buffer enough to show more
+    // frames late and less evenly: frames late by more than the maximum
+    // still count against the chosen share on time.
+    static constexpr double StallBufferMultiple = 3;
 
     void configure(const TimestampPacingOptions& options, int streamFps)
     {
@@ -498,17 +599,21 @@ public:
         m_Buffer.configure(resolved.targetPerMille,
                            uint64_t(resolved.minBufferMs) * 1000,
                            uint64_t(resolved.maxBufferMs) * 1000);
+        m_MaximumBufferUs = resolved.maxBufferMs * 1000.0;
         m_Repeats = {};
+        m_Service.reset();
     }
 
+    // decoderQueueUs is how long the frame waited to enter the decoder
     Decision schedule(bool timestampValid, int32_t frameNumber, uint32_t rtpTimestamp,
-                      uint64_t readyUs, uint32_t hostLatencyUs)
+                      uint64_t readyUs, uint32_t hostLatencyUs, uint64_t decoderQueueUs = 0)
     {
         Decision decision;
         if (!timestampValid) {
             decision.bufferUs = uint64_t(m_Buffer.delayUs());
             return decision;
         }
+        m_Service.add(readyUs, decoderQueueUs);
         if (m_Repeats.isRepeat(hostLatencyUs, readyUs)) {
             decision.repeat = true;
             decision.bufferUs = uint64_t(m_Buffer.delayUs());
@@ -526,6 +631,19 @@ public:
         decision.hostJerkValid = source.hostJerkValid;
 
         decision.latenessUs = m_Buffer.addSample(readyUs, double(readyUs) - source.sourceUs);
+
+        // Lateness that says nothing about the next frame doesn't size the
+        // buffer. Left out: a new or re-anchored timeline, whose lateness is
+        // against a phase that no longer applies; a stall, late by far more
+        // than the largest buffer could cover, whose handful of frames would
+        // otherwise pin it at its maximum for half a minute; and any frame
+        // while the decoder can't keep up with the stream.
+        decision.admitted = !source.restarted && !source.reanchored &&
+                            decision.latenessUs <= m_MaximumBufferUs * StallBufferMultiple &&
+                            m_Service.keepsUp(readyUs, m_Timeline.periodUs());
+        if (decision.admitted) {
+            m_Buffer.admit(readyUs, decision.latenessUs);
+        }
         const double targetUs = source.sourceUs + m_Buffer.baselineUs() + m_Buffer.delayUs();
         decision.targetUs = targetUs > 0 ? uint64_t(std::llround(targetUs)) : 0;
         decision.bufferUs = uint64_t(m_Buffer.delayUs());
@@ -536,11 +654,15 @@ public:
 
     double sourcePeriodUs() const { return m_Timeline.periodUs(); }
     double bufferUs() const { return m_Buffer.delayUs(); }
+    double baselineUs() const { return m_Buffer.baselineUs(); }
+    double windowMinimumUs() const { return m_Buffer.windowMinimumUs(); }
 
 private:
     RepeatDetector m_Repeats;
     Timeline m_Timeline;
     PlayoutBuffer m_Buffer;
+    ServiceWindow m_Service;
+    double m_MaximumBufferUs = 16000;
 };
 
 }
