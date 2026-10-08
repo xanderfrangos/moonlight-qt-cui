@@ -2035,16 +2035,8 @@ Flickable {
                     width: parent.width
                     visible: StreamingPreferences.timestampPacing
                     smoothing: StreamingPreferences.timestampSmoothing
-                    targetPerMille: StreamingPreferences.timestampTargetPerMille
-                    minBufferMs: StreamingPreferences.timestampMinBufferMs
-                    maxBufferMs: StreamingPreferences.timestampMaxBufferMs
-                    vsyncMarginUs: StreamingPreferences.timestampVsyncMarginUs
                     vsyncEnabled: StreamingPreferences.enableVsync
                     onSmoothingEdited: function(value) { StreamingPreferences.timestampSmoothing = value }
-                    onTargetEdited: function(value) { StreamingPreferences.timestampTargetPerMille = value }
-                    onMinBufferEdited: function(value) { StreamingPreferences.timestampMinBufferMs = value }
-                    onMaxBufferEdited: function(value) { StreamingPreferences.timestampMaxBufferMs = value }
-                    onVsyncMarginEdited: function(value) { StreamingPreferences.timestampVsyncMarginUs = value }
                 }
 
                 VrrTimingSettings {

@@ -1136,7 +1136,11 @@ void D3D11VARenderer::renderFrame(AVFrame* frame)
     // Keep the existing fixed/unpaced behavior intact while sharing the same
     // preparation and final Present helpers used by the opt-in VRR backend.
     bool prepared = prepareFrameForPresent(frame);
+    const uint64_t presentStartUs = LiGetMicroseconds();
     HRESULT hr = prepared ? presentPreparedFrame({0, legacyPresentFlags()}) : E_FAIL;
+    if (SUCCEEDED(hr) && m_FrameDisplayedSink) {
+        reportDisplayedFrame(presentStartUs);
+    }
 
     unlockPresentation();
 
@@ -1155,6 +1159,91 @@ void D3D11VARenderer::renderFrame(AVFrame* frame)
         queueRenderDeviceReset();
         return;
     }
+}
+
+bool D3D11VARenderer::supportsFrameDisplayedEvents()
+{
+    // Composition presents have no swapchain statistics
+    return m_SwapChain != nullptr && !m_CompositionPresenter.active();
+}
+
+void D3D11VARenderer::setFrameDisplayedSink(FrameDisplayedSink sink)
+{
+    if (!sink && m_FrameDisplayedSink) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "D3D11 display reports: %llu frames reported, statistics unavailable %llu times, refresh period %.1f us",
+                    static_cast<unsigned long long>(m_DisplayReports),
+                    static_cast<unsigned long long>(m_DisplayStatsUnavailable),
+                    m_DisplayPeriodUs);
+    }
+    m_FrameDisplayedSink = std::move(sink);
+    m_RecentPresents = {};
+    m_NextRecentPresent = 0;
+    m_LastDisplayedPresentCount = 0;
+    m_LastSyncRefreshCount = 0;
+    m_LastSyncUs = 0;
+    m_DisplayPeriodUs = 0;
+    m_DisplayReports = 0;
+    m_DisplayStatsUnavailable = 0;
+}
+
+// DXGI frame statistics name the most recently displayed present and the
+// refresh it appeared on, beside a sample of the refresh counter and its QPC
+// time. The refresh period comes from successive samples. Called right after
+// each present, so a report usually covers the previous frame.
+void D3D11VARenderer::reportDisplayedFrame(uint64_t presentStartUs)
+{
+    UINT presentCount = 0;
+    if (SUCCEEDED(m_SwapChain->GetLastPresentCount(&presentCount))) {
+        m_RecentPresents[m_NextRecentPresent] = { presentCount, presentStartUs };
+        m_NextRecentPresent = (m_NextRecentPresent + 1) % m_RecentPresents.size();
+    }
+
+    DXGI_FRAME_STATISTICS stats = {};
+    uint64_t syncUs = 0, qpcFrequency = 0;
+    if (m_SwapChain->GetFrameStatistics(&stats) != S_OK ||
+            !translateVrrSyncQpcTime(stats.SyncQPCTime, syncUs, qpcFrequency)) {
+        m_DisplayStatsUnavailable++;
+        return;
+    }
+
+    if (m_LastSyncUs != 0 && syncUs > m_LastSyncUs) {
+        const UINT refreshes = stats.SyncRefreshCount - m_LastSyncRefreshCount;
+        if (refreshes != 0 && refreshes <= 120) {
+            const double periodUs = double(syncUs - m_LastSyncUs) / refreshes;
+            if (periodUs > 2000 && periodUs < 100000) {
+                m_DisplayPeriodUs = m_DisplayPeriodUs == 0 ? periodUs :
+                                    m_DisplayPeriodUs + (periodUs - m_DisplayPeriodUs) / 16;
+            }
+        }
+    }
+    m_LastSyncUs = syncUs;
+    m_LastSyncRefreshCount = stats.SyncRefreshCount;
+
+    if (stats.PresentCount == m_LastDisplayedPresentCount) {
+        return;
+    }
+    m_LastDisplayedPresentCount = stats.PresentCount;
+
+    // The displayed present must be one of ours from just now; counts start
+    // over with a new swapchain
+    uint64_t displayedStartUs = 0;
+    for (const RecentPresent& recent : m_RecentPresents) {
+        if (recent.presentCount == stats.PresentCount && recent.startUs != 0 &&
+                presentStartUs - recent.startUs < 200000) {
+            displayedStartUs = recent.startUs;
+        }
+    }
+    const UINT refreshesSince = stats.SyncRefreshCount - stats.PresentRefreshCount;
+    if (displayedStartUs == 0 || refreshesSince > 16 || (refreshesSince != 0 && m_DisplayPeriodUs == 0)) {
+        return;
+    }
+    const double displayUs = double(syncUs) - refreshesSince * m_DisplayPeriodUs;
+    if (displayUs < double(displayedStartUs)) {
+        return;
+    }
+    m_DisplayReports++;
+    m_FrameDisplayedSink(displayedStartUs, uint64_t(displayUs), uint64_t(m_DisplayPeriodUs + 0.5));
 }
 
 void D3D11VARenderer::renderOverlay(Overlay::OverlayType type)

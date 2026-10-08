@@ -4602,6 +4602,14 @@ a live stream. Offline evaluation, known gaps and next steps are in
 **Selection.** The `timestamppacing` preference (Settings checkbox
 "Timestamp pacing", `--timestamp-pacing`) is snapshotted per session in
 `PresentationSettings::timestampPacing`.
+- The settings page offers only the smoothing level (`timestampsmoothinglevel`:
+  Off, Light (default) or Standard). Since 2026-10-08 the on-time target,
+  minimum and maximum buffer and V-blank margin have no controls. They are
+  read from never-written test keys (`timestamptesttargetpermille`,
+  `timestamptestminbufferms`, `timestamptestmaxbufferms`,
+  `timestamptestvsyncmarginus`), and the keys the settings page used to save
+  are removed on save. Their replayed effect is in the findings doc,
+  section 4.5.
 - VRR Pacing Mode and timestamp pacing are mutually exclusive. Enabling
   timestamp pacing clears `enableVrr`, and the VRR checkbox is disabled while
   it is on. The session also treats VRR as not requested when both are set
@@ -4671,8 +4679,8 @@ render queue, so every renderer works unchanged. As in VRR Pacing Mode, the
 waiter wakes early by the 95th percentile of its last 19 sleep overruns
 (`schedulerDelayUs`, at most 500 us) and spins the rest.
 - **V-Sync with a V-sync source:** the frame is released at the first V-blank
-  at or after (target + trim), minus the learned release-to-present time and
-  the configured margin (default 2 ms).
+  at or after (target + trim), minus the learned release-to-present time, a
+  2 ms margin and any margin added by missed V-blank detection (below).
   - Frames assigned to the same V-blank are reduced to the newest (mailbox).
   - D3D11's non-VRR `Present(0)` already replaces a pending frame at the next
     V-blank.
@@ -4726,15 +4734,41 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
 - **Missed V-blank detection:** each grid release records its planned
   V-blank. Each reported display time is matched to the release planned for
   the nearest V-blank at or before it (within −1.5 to +0.5 refresh).
-  - Shown more than half a refresh late is a miss: it adds 0.5 ms to the
-    submit margin, up to 6 ms.
+  - `TimestampPacing::MissDetector` rounds display minus planned V-blank to
+    whole refreshes. A frame has missed when that lag is above the least lag
+    among the last 128 frames, so a constant compositor delay is not counted.
+  - A miss adds 0.5 ms to the submit margin, up to 6 ms.
   - After 5 s without a miss, the margin releases 0.25 ms.
   - The text overlay shows the mode, the miss rate and the added margin.
+  - Windows (2026-10-08) uses the same detection; see "Windows missed V-blank
+    detection" below.
 - **Not covered:** the Moonlight-side VRR request (`clientVrrRequested`) is
   unchanged. EGL renderers and Gamescope sessions without the WSI layer get
   no grid, and fall back to presenting at target.
 - **Validation:** none of this has run on SteamOS. It has been compiled for
   Windows and for Linux through the WSL AppImage build.
+
+**Windows missed V-blank detection (2026-10-08).** On Windows the grid comes
+from `DxVsyncSource`, so display reports are used only to detect misses.
+- With V-Sync, a V-sync source and a renderer whose
+  `supportsFrameDisplayedEvents()` is true, `Pacer::initialize()` sets an
+  `IFFmpegRenderer::FrameDisplayedSink`. That is D3D11 with a swapchain and
+  no composition presenter.
+- `D3D11VARenderer::renderFrame()` stamps each fixed-path present's start
+  time and records its `GetLastPresentCount()`. Right after the present, it
+  reads `GetFrameStatistics()`.
+- A newly displayed `PresentCount` that is one of the last eight presents is
+  reported as (its present start, display time, refresh period).
+  - The display time is `SyncQPCTime` (translated with the VRR path's QPC
+    correlation) minus `SyncRefreshCount - PresentRefreshCount` refreshes.
+  - The refresh period is averaged from successive statistics samples.
+- `TimestampPacer::onFrameDisplayed()` matches the report to the last release
+  before that present began. It then applies the same miss rule and margin
+  as Gamescope.
+- Teardown logs how many frames were reported and how often statistics were
+  unavailable. Untested on hardware: whether DWM's composed (non-independent)
+  presentation reports usable statistics for windowed flip-model swapchains
+  is not yet confirmed.
 
 **Telemetry.** The text overlay shows a "Timestamp pacing" line: buffer, share
 of paced frames left out of sizing it, share of paced frames ready after their

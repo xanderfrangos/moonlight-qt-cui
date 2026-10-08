@@ -145,6 +145,10 @@ live capture decides.
 
 ### 4.5 Sensitivity of the other settings (Light, 2026-10-08)
 
+Following these results, the target, buffer limits and margin were removed
+from the settings page on 2026-10-08. Only test keys in the settings file can
+change them now (architecture.md, "Timestamp pacing", Selection).
+
 VRR model, share of frame pairs off by more than 2 ms / mean delay / late:
 
 | Setting | Windows 110/120 | Deck 60/60 | Windows ~90 FPS, 240 Hz |
@@ -301,7 +305,8 @@ follows.
 | Refresh period | Display mode, refined ±3% | Gamescope's own (`vkGetRefreshCycleDurationGOOGLE`) |
 | Frame replacement | DWM flip model, `Present(0)` | Mailbox present mode chosen by Moonlight |
 | VRR, tearing, limiter | Read once at start; fixed refresh assumed | Polled every 250 ms and followed |
-| Missed V-blank feedback | None; fixed 2 ms margin | +0.5 ms per miss up to +6 ms; released after 5 s clean |
+| Missed V-blank feedback | From DXGI frame statistics (2026-10-08) | From Gamescope's display times |
+| Margin after a miss | +0.5 ms per miss up to +6 ms; released after 5 s clean | Same |
 | Exclusive fullscreen | Released at the V-blank | Not applicable |
 
 SteamOS Desktop Mode:
@@ -312,7 +317,10 @@ SteamOS Desktop Mode:
 ## 9. Next steps, in priority order
 
 1. Re-present the last frame on empty refreshes (Windows D3D11, V-Sync on).
-   Add repeated/skipped/missed refresh counters.
+   Missed V-blank detection on Windows was added 2026-10-08 (DXGI frame
+   statistics; architecture.md, "Windows missed V-blank detection"). It shows
+   whether frames miss their refresh, but not whether the display skipped a
+   refresh nobody presented to.
 2. Drop the `ENABLE_GAMESCOPE_WSI` requirement for timestamp pacing's display
    times.
 3. Start Gamescope at a submit margin of about 4.5 ms.
@@ -332,6 +340,10 @@ SteamOS Desktop Mode:
 8. Later: render before waiting, and `Present(1,0)` for exclusive fullscreen.
 
 ## 10. Open questions
+
+- Does `GetFrameStatistics()` report usable display times for a windowed
+  flip-model swapchain that DWM composes, as well as for independent flip?
+  The teardown log line "D3D11 display reports" answers this per session.
 
 - Does Gamescope report display times for Moonlight in Game Mode with
   timestamp pacing's Mailbox swapchain? The branch measured FIFO presents.

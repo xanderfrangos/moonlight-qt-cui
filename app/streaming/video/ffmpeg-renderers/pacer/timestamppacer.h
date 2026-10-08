@@ -82,8 +82,14 @@ public:
     void onVsync(uint64_t atUs);
 
     // The renderer reports a frame was displayed at this time, with the
-    // display's refresh period when known (zero otherwise)
+    // display's refresh period when known (zero otherwise). Builds the
+    // V-blank grid and checks for missed V-blanks.
     void onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs);
+
+    // The renderer reports when the frame whose present began at
+    // presentStartUs was displayed. Only checks for missed V-blanks, for
+    // renderers whose grid comes from a V-sync source (Windows).
+    void onFrameDisplayed(uint64_t presentStartUs, uint64_t displayUs, uint64_t refreshPeriodUs);
 
     // The renderer finished presenting the most recently released frame
     void notePresented(uint64_t presentUs);
@@ -109,6 +115,7 @@ private:
     uint64_t releaseTimeLocked(const Entry& entry, bool vblankGrid) const;
     void releaseDueLocked(std::unique_lock<std::mutex>& lock, bool vblankGrid);
     void learnWakeLead(uint64_t schedulerDelayUs);
+    void noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs);
 
     const TimestampPacingOptions m_Options;
     const int m_StreamFps;
@@ -135,9 +142,10 @@ private:
     bool m_Stopping = false;
     bool m_WarnedQueueFull = false;
 
-    // With display events, which V-blank each released frame was meant for,
-    // so a frame shown a refresh late can be caught. Each miss widens the
-    // submit margin; a clean stretch narrows it again.
+    // With display reports (Gamescope's display times, or D3D11's frame
+    // statistics), which V-blank each released frame was meant for, so a
+    // frame shown a refresh late can be caught. Each miss widens the submit
+    // margin; a clean stretch narrows it again.
     struct Release {
         uint64_t releaseUs = 0;
         uint64_t vblankUs = 0;
@@ -146,6 +154,7 @@ private:
     size_t m_NextRelease = 0;
     uint64_t m_ExtraMarginUs = 0;
     uint64_t m_MarginChangedUs = 0;
+    TimestampPacing::MissDetector m_Misses;
 
     DisplayModeProbe m_DisplayModeProbe;
     DisplayMode m_DisplayMode = DisplayMode::Unknown;

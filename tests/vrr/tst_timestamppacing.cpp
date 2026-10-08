@@ -394,6 +394,37 @@ void phaseLockAvoidsBoundaryFlicker()
 }
 }
 
+// Only frames later than the usual lag count as missed: a compositor that
+// always adds a refresh costs latency, not smoothness
+void missesAreJudgedAgainstUsualLag()
+{
+    const double periodUs = 1000000.0 / 120;
+    MissDetector composed;
+    int misses = 0;
+    for (int i = 0; i < 600; i++) {
+        misses += composed.observe(periodUs + 300, periodUs);
+    }
+    check(misses == 0, "a constant extra refresh of lag is not a miss");
+
+    MissDetector direct;
+    misses = 0;
+    for (int i = 0; i < 600; i++) {
+        misses += direct.observe(i % 20 == 10 ? periodUs + 200 : 200, periodUs);
+    }
+    check(misses == 30, "a frame a refresh later than the rest is a miss");
+
+    // After a lasting change, the new lag becomes the usual one
+    MissDetector shifted;
+    for (int i = 0; i < 200; i++) {
+        shifted.observe(0, periodUs);
+    }
+    misses = 0;
+    for (int i = 0; i < 400; i++) {
+        misses += shifted.observe(periodUs, periodUs);
+    }
+    check(misses == int(MissDetector::Window) - 1, "a lasting extra refresh stops counting once it fills the window");
+}
+
 int main()
 {
     smoothingRemovesStampNoise();
@@ -408,6 +439,7 @@ int main()
     survivesWrapAndRestart();
     vblankGridFollowsWakeups();
     phaseLockAvoidsBoundaryFlicker();
+    missesAreJudgedAgainstUsualLag();
 
     if (failures == 0) {
         std::printf("tst_timestamppacing: all checks passed\n");

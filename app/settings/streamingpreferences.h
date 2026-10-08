@@ -45,14 +45,9 @@ public:
     void setTimestampPacing(bool enabled);
     int timestampSmoothing() const { return m_TimestampPacing.smoothing; }
     void setTimestampSmoothing(int value);
-    int timestampTargetPerMille() const { return m_TimestampPacing.targetPerMille; }
-    void setTimestampTargetPerMille(int value);
-    int timestampMinBufferMs() const { return m_TimestampPacing.minBufferMs; }
-    void setTimestampMinBufferMs(int value);
-    int timestampMaxBufferMs() const { return m_TimestampPacing.maxBufferMs; }
-    void setTimestampMaxBufferMs(int value);
-    int timestampVsyncMarginUs() const { return m_TimestampPacing.vsyncMarginUs; }
-    void setTimestampVsyncMarginUs(int value);
+    // The buffer target, its limits and the V-blank margin have no settings
+    // page controls; they are still read from and written back to the
+    // settings file, so they can be changed there for testing
     TimestampPacingOptions timestampPacingOptions() const { return m_TimestampPacing; }
 
     // These preferences must be applied before the QGuiApplication is created,
@@ -346,10 +341,6 @@ public:
     Q_PROPERTY(bool smoothVrrFrameTiming MEMBER smoothVrrFrameTiming NOTIFY smoothVrrFrameTimingChanged)
     Q_PROPERTY(bool timestampPacing READ timestampPacing WRITE setTimestampPacing NOTIFY timestampPacingChanged)
     Q_PROPERTY(int timestampSmoothing READ timestampSmoothing WRITE setTimestampSmoothing NOTIFY timestampPacingChanged)
-    Q_PROPERTY(int timestampTargetPerMille READ timestampTargetPerMille WRITE setTimestampTargetPerMille NOTIFY timestampPacingChanged)
-    Q_PROPERTY(int timestampMinBufferMs READ timestampMinBufferMs WRITE setTimestampMinBufferMs NOTIFY timestampPacingChanged)
-    Q_PROPERTY(int timestampMaxBufferMs READ timestampMaxBufferMs WRITE setTimestampMaxBufferMs NOTIFY timestampPacingChanged)
-    Q_PROPERTY(int timestampVsyncMarginUs READ timestampVsyncMarginUs WRITE setTimestampVsyncMarginUs NOTIFY timestampPacingChanged)
     Q_PROPERTY(bool highPerformanceGpuPower MEMBER highPerformanceGpuPower NOTIFY highPerformanceGpuPowerChanged)
     Q_PROPERTY(bool traceVrrFrames MEMBER traceVrrFrames NOTIFY traceVrrFramesChanged)
     Q_PROPERTY(bool exportingDiagnostics MEMBER m_ExportingDiagnostics NOTIFY diagnosticsChanged)

@@ -557,6 +557,38 @@ private:
     double m_TrimUs = 0;
 };
 
+// Judges, from when frames actually reached the screen, which ones missed
+// their planned V-blank. A compositor can add a constant refresh or more of
+// lag (Windows composing a windowed frame), which costs latency but not
+// smoothness, so a frame has only missed when its lag is above the least lag
+// seen over the last second or so.
+class MissDetector
+{
+public:
+    static constexpr size_t Window = 128;
+
+    void reset()
+    {
+        m_Count = 0;
+        m_Next = 0;
+    }
+
+    // Returns whether a frame shown lagUs after its planned V-blank missed it
+    bool observe(double lagUs, double periodUs)
+    {
+        const int lag = int(std::max(0.0, std::min(8.0, std::round(lagUs / periodUs))));
+        m_Lags[m_Next] = uint8_t(lag);
+        m_Next = (m_Next + 1) % Window;
+        m_Count = std::min(m_Count + 1, Window);
+        return lag > *std::min_element(m_Lags.begin(), m_Lags.begin() + m_Count);
+    }
+
+private:
+    std::array<uint8_t, Window> m_Lags {};
+    size_t m_Count = 0;
+    size_t m_Next = 0;
+};
+
 // Chooses each frame's target from its timestamp and readiness
 class Policy
 {

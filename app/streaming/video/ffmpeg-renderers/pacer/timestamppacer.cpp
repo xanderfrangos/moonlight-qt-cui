@@ -210,7 +210,7 @@ void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs
     m_Grid.observe(displayUs);
 
     // Match the display time to the release planned for the nearest V-blank
-    // at or before it. Shown a refresh or more after that V-blank, it missed.
+    // at or before it
     const double periodUs = m_Grid.periodUs();
     Release* match = nullptr;
     for (Release& release : m_Releases) {
@@ -226,8 +226,39 @@ void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs
     if (match == nullptr) {
         return;
     }
-    const bool missed = double(displayUs) - double(match->vblankUs) > periodUs / 2;
+    noteDisplayLagLocked(displayUs, match->vblankUs, periodUs);
     match->vblankUs = 0;
+}
+
+void TimestampPacer::onFrameDisplayed(uint64_t presentStartUs, uint64_t displayUs, uint64_t refreshPeriodUs)
+{
+    std::lock_guard<std::mutex> lock(m_Lock);
+    if (m_DisplayMode != DisplayMode::Unknown && m_DisplayMode != DisplayMode::FixedRefresh) {
+        return;
+    }
+
+    // The frame is the one released last before its present began
+    Release* match = nullptr;
+    for (Release& release : m_Releases) {
+        if (release.vblankUs == 0 || release.releaseUs > presentStartUs ||
+                presentStartUs - release.releaseUs > 100000) {
+            continue;
+        }
+        if (match == nullptr || release.releaseUs > match->releaseUs) {
+            match = &release;
+        }
+    }
+    if (match == nullptr) {
+        return;
+    }
+    noteDisplayLagLocked(displayUs, match->vblankUs,
+                         refreshPeriodUs != 0 ? double(refreshPeriodUs) : m_Grid.periodUs());
+    match->vblankUs = 0;
+}
+
+void TimestampPacer::noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs)
+{
+    const bool missed = m_Misses.observe(double(displayUs) - double(vblankUs), periodUs);
 
     if (missed) {
         m_ExtraMarginUs = std::min<uint64_t>(6000, m_ExtraMarginUs + 500);
@@ -271,6 +302,7 @@ void TimestampPacer::refreshDisplayMode(std::unique_lock<std::mutex>& lock, uint
     m_Grid.configure(m_Grid.nominalPeriodUs());
     m_PhaseLock.reset();
     m_Releases = {};
+    m_Misses.reset();
     m_Telemetry->recordTimestampDisplayMode(uint8_t(mode));
 }
 

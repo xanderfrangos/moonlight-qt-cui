@@ -241,10 +241,13 @@ void StreamingPreferences::reload()
         m_TimestampPacing = TimestampPacingOptions{
             settings.value("timestamppacing", defaults.enabled).toBool(),
             settings.value("timestampsmoothinglevel", defaults.smoothing).toInt(),
-            settings.value("timestamptargetpermille", defaults.targetPerMille).toInt(),
-            settings.value("timestampminbufferms", defaults.minBufferMs).toInt(),
-            settings.value("timestampmaxbufferms", defaults.maxBufferMs).toInt(),
-            settings.value("timestampvsyncmarginus", defaults.vsyncMarginUs).toInt()
+            // Test overrides only: never written, and named apart from the
+            // keys the settings page used to save, so an old value can't
+            // linger unseen
+            settings.value("timestamptesttargetpermille", defaults.targetPerMille).toInt(),
+            settings.value("timestamptestminbufferms", defaults.minBufferMs).toInt(),
+            settings.value("timestamptestmaxbufferms", defaults.maxBufferMs).toInt(),
+            settings.value("timestamptestvsyncmarginus", defaults.vsyncMarginUs).toInt()
         }.resolved();
         // The two never run together; timestamp pacing is the newer choice
         if (m_TimestampPacing.enabled) {
@@ -635,10 +638,13 @@ void StreamingPreferences::save()
     // Renamed from timestampsmoothing when Light became the default and
     // Strong was removed, so saved values from before don't apply
     settings.setValue("timestampsmoothinglevel", m_TimestampPacing.smoothing);
-    settings.setValue("timestamptargetpermille", m_TimestampPacing.targetPerMille);
-    settings.setValue("timestampminbufferms", m_TimestampPacing.minBufferMs);
-    settings.setValue("timestampmaxbufferms", m_TimestampPacing.maxBufferMs);
-    settings.setValue("timestampvsyncmarginus", m_TimestampPacing.vsyncMarginUs);
+    // Keys from before; the test overrides that replace the last four are
+    // read in load() but never written
+    settings.remove("timestampsmoothing");
+    settings.remove("timestamptargetpermille");
+    settings.remove("timestampminbufferms");
+    settings.remove("timestampmaxbufferms");
+    settings.remove("timestampvsyncmarginus");
     settings.setValue(SER_HIGHPERFORMANCEGPUPOWER, highPerformanceGpuPower);
     settings.setValue(SER_TRACEVRRFRAMES, traceVrrFrames);
     settings.remove("v2queue"); // The interval queue is now the production policy.
@@ -896,41 +902,6 @@ void StreamingPreferences::setTimestampSmoothing(int value)
     value = qBound((int)TimestampPacingOptions::SmoothingOff, value, (int)TimestampPacingOptions::SmoothingStandard);
     if (value == m_TimestampPacing.smoothing) return;
     m_TimestampPacing.smoothing = value;
-    emit timestampPacingChanged();
-}
-
-void StreamingPreferences::setTimestampTargetPerMille(int value)
-{
-    value = qBound(900, value, 999);
-    if (value == m_TimestampPacing.targetPerMille) return;
-    m_TimestampPacing.targetPerMille = value;
-    emit timestampPacingChanged();
-}
-
-void StreamingPreferences::setTimestampMinBufferMs(int value)
-{
-    value = qBound(0, value, 20);
-    if (value == m_TimestampPacing.minBufferMs) return;
-    m_TimestampPacing.minBufferMs = value;
-    // Keep the range ordered by moving the other end with it
-    m_TimestampPacing.maxBufferMs = qMax(m_TimestampPacing.maxBufferMs, qMax(1, value));
-    emit timestampPacingChanged();
-}
-
-void StreamingPreferences::setTimestampMaxBufferMs(int value)
-{
-    value = qBound(1, value, 50);
-    if (value == m_TimestampPacing.maxBufferMs) return;
-    m_TimestampPacing.maxBufferMs = value;
-    m_TimestampPacing.minBufferMs = qMin(m_TimestampPacing.minBufferMs, value);
-    emit timestampPacingChanged();
-}
-
-void StreamingPreferences::setTimestampVsyncMarginUs(int value)
-{
-    value = ((qBound(250, value, 8000) + 125) / 250) * 250;
-    if (value == m_TimestampPacing.vsyncMarginUs) return;
-    m_TimestampPacing.vsyncMarginUs = value;
     emit timestampPacingChanged();
 }
 

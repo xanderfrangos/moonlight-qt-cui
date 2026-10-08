@@ -207,6 +207,22 @@ public:
     virtual void setDisplayEventSink(DisplayEventSink) {
     }
 
+    // When a frame presented through renderFrame() reached the screen,
+    // identified by when its present call began, so a pacer can tell which
+    // frame it was. Both times are on the LiGetMicroseconds() clock; the
+    // refresh period is zero when unknown. Reports may skip frames. Called on
+    // the rendering thread.
+    using FrameDisplayedSink = std::function<void(uint64_t presentStartUs, uint64_t displayUs,
+                                                  uint64_t refreshPeriodUs)>;
+
+    virtual bool supportsFrameDisplayedEvents() {
+        return false;
+    }
+
+    // Passing an empty sink stops the events
+    virtual void setFrameDisplayedSink(FrameDisplayedSink) {
+    }
+
     // Called for threaded renderers to allow them to wait prior to us latching
     // the next frame for rendering (as opposed to waiting on buffer swap with
     // an older frame already queued for display).

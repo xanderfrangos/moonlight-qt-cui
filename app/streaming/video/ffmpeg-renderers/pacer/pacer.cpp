@@ -126,6 +126,7 @@ void Pacer::shutdown()
     // Nothing renders any more, so nothing can report a displayed frame
     if (m_TimestampPacer != nullptr) {
         m_VsyncRenderer->setDisplayEventSink(nullptr);
+        m_VsyncRenderer->setFrameDisplayedSink(nullptr);
     }
 
     // Delete any remaining unconsumed frames
@@ -613,6 +614,15 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                 m_TimestampPacer->onDisplayEvent(displayUs, refreshPeriodUs);
             });
         }
+        // Where the V-sync source builds the grid, a renderer that can say
+        // when each frame reached the screen (D3D11) still lets missed
+        // V-blanks widen the submit margin
+        else if (enableVsync && m_VsyncSource != nullptr && m_VsyncRenderer->supportsFrameDisplayedEvents()) {
+            m_VsyncRenderer->setFrameDisplayedSink([this](uint64_t presentStartUs, uint64_t displayUs,
+                                                          uint64_t refreshPeriodUs) {
+                m_TimestampPacer->onFrameDisplayed(presentStartUs, displayUs, refreshPeriodUs);
+            });
+        }
 
         // Gamescope can switch between fixed refresh, VRR, tearing and a
         // FIFO frame limit from Steam's quick access menu mid-stream. Follow
@@ -643,6 +653,7 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
 
         if (!m_TimestampPacer->start()) {
             m_VsyncRenderer->setDisplayEventSink(nullptr);
+            m_VsyncRenderer->setFrameDisplayedSink(nullptr);
             m_TimestampPacer.reset();
             return false;
         }

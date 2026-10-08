@@ -12,6 +12,7 @@
 #include <d3dkmthk.h>
 #include <dxgi1_6.h>
 
+#include <array>
 #include <atomic>
 #include <memory>
 
@@ -60,6 +61,8 @@ public:
     virtual bool prepareDecoderContext(AVCodecContext* context, AVDictionary**) override;
     virtual bool prepareDecoderContextInGetFormat(AVCodecContext* context, AVPixelFormat pixelFormat) override;
     virtual void renderFrame(AVFrame* frame) override;
+    virtual bool supportsFrameDisplayedEvents() override;
+    virtual void setFrameDisplayedSink(FrameDisplayedSink sink) override;
     virtual IVrrFramePresenter* getVrrFramePresenter() override;
 
     // DXGI can switch to interval one; composition always provides native
@@ -303,6 +306,23 @@ private:
     uint64_t m_VrrPriorFrameStatsTimeUs;
     uint64_t m_VrrPriorFrameStatsPresentRefreshSequence;
     uint64_t m_VrrPriorFrameStatsRefreshSequence;
+
+    // Fixed presentation's display reports, from DXGI frame statistics. Only
+    // used while a sink is set, on the rendering thread.
+    void reportDisplayedFrame(uint64_t presentStartUs);
+    FrameDisplayedSink m_FrameDisplayedSink;
+    struct RecentPresent {
+        UINT presentCount = 0;
+        uint64_t startUs = 0;
+    };
+    std::array<RecentPresent, 8> m_RecentPresents {};
+    size_t m_NextRecentPresent = 0;
+    UINT m_LastDisplayedPresentCount = 0;
+    UINT m_LastSyncRefreshCount = 0;
+    uint64_t m_LastSyncUs = 0;
+    double m_DisplayPeriodUs = 0;
+    uint64_t m_DisplayReports = 0;
+    uint64_t m_DisplayStatsUnavailable = 0;
 
     // Dithering is decided per display, so both shader sets stay resident and
     // a display change only flips which one bindColorConversion() picks.
