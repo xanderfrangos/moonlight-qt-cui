@@ -790,8 +790,19 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Refresh rate unavailable; assuming 60 Hz for legacy pacing");
     }
-    m_PresentationSettings.effectiveVsync = m_Preferences->enableVsync;
-    if (m_PresentationSettings.effectiveVsync && vsyncRefreshRate + 5 < m_StreamConfig.fps) {
+    // Gamescope owns V-Sync: renderers hand it each frame without blocking,
+    // and its Allow Tearing setting decides whether frames tear. A stream
+    // faster than the display then costs only dropped frames, never a queue.
+    // There is no V-sync source for Gamescope's Xwayland, so fixed frame
+    // pacing would render frames on arrival anyway.
+    const bool gamescope = GamescopeDisplayState::runningUnderGamescope();
+    m_PresentationSettings.effectiveVsync = m_Preferences->effectiveVsync();
+    if (gamescope) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Gamescope controls V-Sync; V-Sync preference %s, frame pacing unused",
+                    m_Preferences->enableVsync ? "on" : "off");
+    }
+    else if (m_PresentationSettings.effectiveVsync && vsyncRefreshRate + 5 < m_StreamConfig.fps) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Disabling V-sync because refresh rate limit exceeded");
         m_PresentationSettings.effectiveVsync = false;
@@ -800,7 +811,7 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     // Timestamp pacing replaces fixed frame pacing, with or without V-Sync
     m_PresentationSettings.enableFramePacing = m_PresentationSettings.effectiveVsync &&
                                                m_Preferences->framePacing &&
-                                               !timestampPacing;
+                                               !timestampPacing && !gamescope;
     m_PresentationSettings.enableVrr = false;
     m_PresentationSettings.vrrLatencyMode = m_Preferences->vrrLatencyMode;
     m_PresentationSettings.vrrTimingOptions = m_Preferences->vrrTimingOptions();
@@ -858,7 +869,8 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     // is off, matching renderer-level VRR rejection later in initialization.
     if (requestedVrr &&
             !m_PresentationSettings.enableVrr &&
-            m_PresentationSettings.effectiveVsync) {
+            m_PresentationSettings.effectiveVsync &&
+            !gamescope) {
         m_PresentationSettings.enableFramePacing = true;
     }
 

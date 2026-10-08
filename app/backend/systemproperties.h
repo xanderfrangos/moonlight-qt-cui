@@ -19,6 +19,8 @@ public:
     // Static properties queried synchronously during the constructor
     Q_PROPERTY(bool isRunningWayland MEMBER isRunningWayland CONSTANT)
     Q_PROPERTY(bool isRunningXWayland MEMBER isRunningXWayland CONSTANT)
+    // Gamescope owns V-Sync, so the settings page hides its own controls
+    Q_PROPERTY(bool isGamescope MEMBER isGamescope CONSTANT)
     Q_PROPERTY(bool isWow64 MEMBER isWow64 CONSTANT)
     Q_PROPERTY(bool isDarwin MEMBER isDarwin CONSTANT)
     Q_PROPERTY(bool supportsVideoDithering MEMBER supportsVideoDithering CONSTANT)
@@ -108,6 +110,7 @@ private:
     // Properties set by the constructor
     bool isRunningWayland;
     bool isRunningXWayland;
+    bool isGamescope;
     bool isWow64;
     QString friendlyNativeArchName;
     bool hasDesktopEnvironment;

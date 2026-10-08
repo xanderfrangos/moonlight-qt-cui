@@ -1,4 +1,5 @@
 #include "sdlvid.h"
+#include "pacer/gamescopedisplaystate.h"
 
 #include "streaming/session.h"
 #include "streaming/streamutils.h"
@@ -175,8 +176,10 @@ bool SdlRenderer::initialize(PDECODER_PARAMETERS params)
         // Wayland is always tear-free in all modes
         break;
     default:
-        // For other subsystems, just set SDL_RENDERER_PRESENTVSYNC if asked
-        if (params->enableVsync) {
+        // For other subsystems, just set SDL_RENDERER_PRESENTVSYNC if asked.
+        // Gamescope is tear-free unless its Allow Tearing setting is on, even
+        // for its Xwayland clients, so it owns V-Sync.
+        if (params->enableVsync && !GamescopeDisplayState::runningUnderGamescope()) {
             rendererFlags |= SDL_RENDERER_PRESENTVSYNC;
         }
         break;

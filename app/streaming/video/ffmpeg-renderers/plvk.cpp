@@ -1118,28 +1118,46 @@ void PlVkRenderer::updateUpscalingNeeded()
 }
 
 
-void PlVkRenderer::selectLegacyPresentMode(PDECODER_PARAMETERS params)
+VkPresentModeKHR PlVkRenderer::vsyncPresentMode(bool timestampPacing)
 {
-    // Timestamp pacing chooses which frame each refresh shows, so a newer
-    // frame must replace one still waiting rather than queue behind it. On
-    // Gamescope and Wayland, Mailbox does that without tearing. Gamescope
-    // still decides whether to tear (Allow Tearing), flip on arrival (VRR) or
-    // force FIFO (Steam's frame limiter); the pacer follows those settings.
-    if (params->enableVsync && params->timestampPacing.enabled) {
-        const char* videoDriver = SDL_GetCurrentVideoDriver();
-        if ((isGamescopePresentation(videoDriver) || isWaylandPresentation(videoDriver)) &&
-                isPresentModeSupportedByPhysicalDevice(m_Vulkan->phys_device, VK_PRESENT_MODE_MAILBOX_KHR)) {
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "Timestamp pacing: using Mailbox present mode with V-Sync");
-            m_VkPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
-            return;
+    const char* videoDriver = SDL_GetCurrentVideoDriver();
+
+    // Gamescope composites every frame and decides how it reaches the
+    // display: tearing (Allow Tearing), a flip on arrival (VRR), the newest
+    // frame at each refresh, or a queue (Steam's frame limit). FIFO would
+    // only add a queue in front of that, so V-Sync hands Gamescope the newest
+    // frame and leaves syncing to it. Gamescope treats Mailbox and Immediate
+    // alike; neither tears unless Allow Tearing is on.
+    if (isGamescopePresentation(videoDriver)) {
+        for (VkPresentModeKHR mode : {VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR}) {
+            if (isPresentModeSupportedByPhysicalDevice(m_Vulkan->phys_device, mode)) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "Gamescope: using %s present mode; Gamescope controls V-Sync",
+                            vulkanPresentModeName(mode));
+                return mode;
+            }
         }
     }
 
+    // Timestamp pacing chooses which frame each refresh shows, so a newer
+    // frame must replace one still waiting rather than queue behind it. On
+    // Wayland, Mailbox does that without tearing.
+    if (timestampPacing && isWaylandPresentation(videoDriver) &&
+            isPresentModeSupportedByPhysicalDevice(m_Vulkan->phys_device, VK_PRESENT_MODE_MAILBOX_KHR)) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Timestamp pacing: using Mailbox present mode with V-Sync");
+        return VK_PRESENT_MODE_MAILBOX_KHR;
+    }
+
+    // FIFO mode improves frame pacing compared with Mailbox, especially for
+    // platforms like X11 that lack a VSyncSource implementation for Pacer.
+    return VK_PRESENT_MODE_FIFO_KHR;
+}
+
+void PlVkRenderer::selectLegacyPresentMode(PDECODER_PARAMETERS params)
+{
     if (params->enableVsync) {
-        // FIFO mode improves frame pacing compared with Mailbox, especially for
-        // platforms like X11 that lack a VSyncSource implementation for Pacer.
-        m_VkPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+        m_VkPresentMode = vsyncPresentMode(params->timestampPacing.enabled);
         return;
     }
 
@@ -1216,7 +1234,7 @@ void PlVkRenderer::selectPresentationMode(PDECODER_PARAMETERS params)
     // display again here: the adapter must make the same decision as session
     // setup for its entire lifetime.
     if (params->vrrDisplayRefreshHz <= 0) {
-        m_VkPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+        m_VkPresentMode = vsyncPresentMode(false);
         m_VrrFallbackReason = VrrFallbackReason::InvalidRefresh;
         return;
     }
@@ -1228,7 +1246,7 @@ void PlVkRenderer::selectPresentationMode(PDECODER_PARAMETERS params)
     }
 
     if (!isRenderThreadSupported()) {
-        m_VkPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+        m_VkPresentMode = vsyncPresentMode(false);
         m_VrrFallbackReason = VrrFallbackReason::MainThreadRenderer;
         return;
     }
@@ -1269,7 +1287,7 @@ void PlVkRenderer::selectPresentationMode(PDECODER_PARAMETERS params)
 
     // A FIFO fallback is deliberately not passed to the VRR worker: it would
     // move presentation timing downstream of the worker's target wait.
-    m_VkPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+    m_VkPresentMode = vsyncPresentMode(false);
     m_VrrFallbackReason = VrrFallbackReason::AdaptivePresentationUnavailable;
 #endif
 }
@@ -2816,18 +2834,19 @@ bool PlVkRenderer::restoreFixedPresentation(VrrFallbackReason reason)
 {
     // Pacer calls this synchronously after it failed to create the VRR worker,
     // before any frame or legacy render thread exists. Restore the ordinary
-    // fixed FIFO renderer rather than retaining the adaptive VRR swapchain.
+    // fixed V-Sync renderer rather than retaining the adaptive VRR swapchain.
     cancelVrrFrame();
     m_VrrRequested = false;
     m_VrrSuspended = false;
     m_VrrWindowChangePending.store(false);
     m_VrrFallbackReason = reason == VrrFallbackReason::NoFallback ?
         VrrFallbackReason::InitializationFailed : reason;
-    m_VkPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+    m_VkPresentMode = vsyncPresentMode(false);
 
     if (!createSwapchain(1)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "Failed to recreate Vulkan FIFO swapchain after VRR worker startup failure");
+                     "Failed to recreate Vulkan %s swapchain after VRR worker startup failure",
+                     vulkanPresentModeName(m_VkPresentMode));
         return false;
     }
 

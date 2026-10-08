@@ -12,6 +12,7 @@
 
 #include "streaming/session.h"
 #include "streaming/streamutils.h"
+#include "streaming/video/ffmpeg-renderers/pacer/gamescopedisplaystate.h"
 
 #ifdef Q_OS_DARWIN
 #include "streaming/video/ffmpeg-renderers/macdisplaytiming.h"
@@ -122,6 +123,7 @@ SystemProperties::SystemProperties()
     hasDesktopEnvironment = WMUtils::isRunningDesktopEnvironment();
     isRunningWayland = WMUtils::isRunningWayland();
     isRunningXWayland = isRunningWayland && QGuiApplication::platformName() == "xcb";
+    isGamescope = GamescopeDisplayState::runningUnderGamescope();
     usesMaterial3Theme = QLibraryInfo::version() >= QVersionNumber(6, 5, 0);
 
     // GUI scaling is applied at startup via QT_SCALE_FACTOR (see main.cpp),

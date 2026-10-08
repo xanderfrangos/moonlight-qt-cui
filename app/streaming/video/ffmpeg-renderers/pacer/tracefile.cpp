@@ -137,7 +137,8 @@ bool TraceFile::open(const QString& path, const char* header, const char* label,
         }
         m_BytesWritten = headerBytes;
     }
-    m_DecodedHash.addData(QByteArrayView(header, qsizetype(headerBytes)));
+    // Qt 6.2 (Ubuntu 22.04 AppImage builds) has no QByteArrayView overload
+    m_DecodedHash.addData(QByteArray::fromRawData(header, qsizetype(headerBytes)));
 
     m_StartUs = startUs;
     m_LatestUs = startUs;

@@ -2,6 +2,7 @@
 #include "streaming/video/pyrowave/pyrowavebitrate.h"
 #include "utils.h"
 #include "streaming/vrrratepolicy.h"
+#include "streaming/video/ffmpeg-renderers/pacer/gamescopedisplaystate.h"
 #include "diagnostics/diagnosticcapture.h"
 
 #include <QSettings>
@@ -750,6 +751,11 @@ void StreamingPreferences::exportLatestDiagnostics()
     thread->start();
 }
 
+bool StreamingPreferences::effectiveVsync() const
+{
+    return enableVsync || GamescopeDisplayState::runningUnderGamescope();
+}
+
 QVariantList StreamingPreferences::getFpsChoices(const QVariantList& refreshRates) const
 {
     std::vector<int> rates;
@@ -763,7 +769,7 @@ QVariantList StreamingPreferences::getFpsChoices(const QVariantList& refreshRate
     }
 
     const std::vector<VrrFpsChoice> choices = VrrRatePolicy::buildChoices(
-        rates, fps, enableVsync && enableVrr);
+        rates, fps, effectiveVsync() && enableVrr);
     QVariantList result;
     for (const VrrFpsChoice& choice : choices) {
         QVariantMap item;

@@ -81,12 +81,6 @@ GamescopeDisplayState::~GamescopeDisplayState()
     }
 }
 
-bool GamescopeDisplayState::runningUnderGamescope()
-{
-    const char* wayland = SDL_getenv("GAMESCOPE_WAYLAND_DISPLAY");
-    return wayland != nullptr && wayland[0] != '\0';
-}
-
 bool GamescopeDisplayState::open()
 {
     if (m_Impl != nullptr) {
@@ -167,11 +161,6 @@ GamescopeDisplayState::GamescopeDisplayState() = default;
 GamescopeDisplayState::~GamescopeDisplayState()
 {
     delete m_Impl;
-}
-
-bool GamescopeDisplayState::runningUnderGamescope()
-{
-    return false;
 }
 
 bool GamescopeDisplayState::open()

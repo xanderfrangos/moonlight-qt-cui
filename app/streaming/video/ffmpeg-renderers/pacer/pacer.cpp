@@ -520,8 +520,10 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
 
         // VRR requires V-sync at the session boundary, so its rejection still
         // has a valid fixed-pacing fallback even if the user did not select
-        // the older frame-pacing checkbox.
-        enablePacing = enablePacing || enableVsync;
+        // the older frame-pacing checkbox. Gamescope paces its own
+        // presentation and has no V-sync source for us.
+        enablePacing = enablePacing ||
+                       (enableVsync && !GamescopeDisplayState::runningUnderGamescope());
     }
 
     // The VRR success path uses its strict session refresh snapshot and

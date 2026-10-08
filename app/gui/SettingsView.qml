@@ -1929,7 +1929,7 @@ Flickable {
                     }
 
                     id: windowModeComboBox
-                    property bool vrrForced: StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
+                    property bool vrrForced: StreamingPreferences.effectiveVsync && StreamingPreferences.enableVrr
                     onVrrForcedChanged: reinitialize()
                     visible: SystemProperties.hasDesktopEnvironment
                     enabled: !SystemProperties.rendererAlwaysFullScreen && !vrrForced
@@ -1955,8 +1955,19 @@ Flickable {
                     spacing: 5
                     width: parent.width
 
+                    // Gamescope owns V-Sync, and Moonlight has no V-sync source
+                    // to pace frames by there
+                    Label {
+                        width: parent.width
+                        visible: SystemProperties.isGamescope
+                        text: qsTr("Gamescope controls V-Sync. To allow tearing, use Allow Tearing in Steam's Quick Access menu.")
+                        font.pointSize: 9
+                        wrapMode: Text.Wrap
+                    }
+
                     CheckBox {
                         id: vsyncCheck
+                        visible: !SystemProperties.isGamescope
                         hoverEnabled: !SystemProperties.hoverEffectsDisabled
                         text: qsTr("V-Sync")
                         font.pointSize:  12
@@ -1973,6 +1984,7 @@ Flickable {
 
                     CheckBox {
                         id: framePacingCheck
+                        visible: !SystemProperties.isGamescope
                         hoverEnabled: !SystemProperties.hoverEffectsDisabled
                         text: qsTr("Frame pacing")
                         font.pointSize:  12
@@ -1996,7 +2008,7 @@ Flickable {
                         text: qsTr("VRR")
                         font.pointSize: 12
                         // VRR and timestamp pacing are mutually exclusive
-                        enabled: StreamingPreferences.enableVsync && !StreamingPreferences.timestampPacing
+                        enabled: StreamingPreferences.effectiveVsync && !StreamingPreferences.timestampPacing
                         checked: StreamingPreferences.enableVrr
                         onCheckedChanged: {
                             StreamingPreferences.enableVrr = checked
@@ -2035,14 +2047,14 @@ Flickable {
                     width: parent.width
                     visible: StreamingPreferences.timestampPacing
                     smoothing: StreamingPreferences.timestampSmoothing
-                    vsyncEnabled: StreamingPreferences.enableVsync
+                    vsyncEnabled: StreamingPreferences.effectiveVsync
                     onSmoothingEdited: function(value) { StreamingPreferences.timestampSmoothing = value }
                 }
 
                 VrrTimingSettings {
                     width: parent.width
                     visible: StreamingPreferences.enableVrr
-                    enabled: StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
+                    enabled: StreamingPreferences.effectiveVsync && StreamingPreferences.enableVrr
                     bufferPerMille: StreamingPreferences.vrrBufferPerMille
                     targetHundredths: StreamingPreferences.vrrTargetHundredths
                     historySeconds: StreamingPreferences.vrrHistorySeconds
@@ -2058,7 +2070,7 @@ Flickable {
                     hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     text: qsTr("Reduce judder")
                     font.pointSize: 12
-                    visible: StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
+                    visible: StreamingPreferences.effectiveVsync && StreamingPreferences.enableVrr
                     checked: StreamingPreferences.smoothVrrFrameTiming
                     onCheckedChanged: StreamingPreferences.smoothVrrFrameTiming = checked
 
@@ -4107,7 +4119,7 @@ Flickable {
                                     // Lateness is measured by fixed pacing only,
                                     // and the timestamp pacing graphs need it on.
                                     visible: {
-                                        const vrr = StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
+                                        const vrr = StreamingPreferences.effectiveVsync && StreamingPreferences.enableVrr
                                         switch (modelData.bit) {
                                         case StreamingPreferences.PG_VRR_SMOOTHNESS:
                                             return vrr
@@ -4120,7 +4132,7 @@ Flickable {
                                         case StreamingPreferences.PG_TS_RELEASE:
                                             return StreamingPreferences.timestampPacing
                                         case StreamingPreferences.PG_TS_VBLANK:
-                                            return StreamingPreferences.timestampPacing && StreamingPreferences.enableVsync
+                                            return StreamingPreferences.timestampPacing && StreamingPreferences.effectiveVsync
                                         default:
                                             return true
                                         }

@@ -1,5 +1,6 @@
 // vim: noai:ts=4:sw=4:softtabstop=4:expandtab
 #include "eglvid.h"
+#include "pacer/gamescopedisplaystate.h"
 
 #include "path.h"
 #include "utils.h"
@@ -583,7 +584,10 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
     // the Wayland viewport can be stale when using Super+Left/Right/Up
     // to resize the window. This seems to happen significantly more often
     // with vsync enabled, so this also mitigates that problem too.
-    if (params->enableVsync
+    //
+    // Gamescope is tear-free the same way unless the user turns on its
+    // Allow Tearing setting, even for its Xwayland clients, so it owns V-Sync.
+    if (params->enableVsync && !GamescopeDisplayState::runningUnderGamescope()
 #ifdef SDL_VIDEO_DRIVER_WAYLAND
             && info.subsystem != SDL_SYSWM_WAYLAND
 #endif

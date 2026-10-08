@@ -42,6 +42,9 @@ public:
     // pacing on turns VRR off; the settings page keeps VRR unavailable while
     // it is on.
     bool timestampPacing() const { return m_TimestampPacing.enabled; }
+    // V-Sync as a session applies it. Gamescope owns V-Sync (its Allow
+    // Tearing setting decides), so it is always on there, whatever was saved.
+    bool effectiveVsync() const;
     void setTimestampPacing(bool enabled);
     int timestampSmoothing() const { return m_TimestampPacing.smoothing; }
     void setTimestampSmoothing(int value);
@@ -332,6 +335,7 @@ public:
     Q_PROPERTY(bool unlockBitrate MEMBER unlockBitrate NOTIFY unlockBitrateChanged)
     Q_PROPERTY(bool autoAdjustBitrate MEMBER autoAdjustBitrate NOTIFY autoAdjustBitrateChanged)
     Q_PROPERTY(bool enableVsync MEMBER enableVsync NOTIFY enableVsyncChanged)
+    Q_PROPERTY(bool effectiveVsync READ effectiveVsync NOTIFY enableVsyncChanged)
     Q_PROPERTY(bool enableVrr MEMBER enableVrr NOTIFY enableVrrChanged)
     Q_PROPERTY(int vrrLatencyMode MEMBER vrrLatencyMode NOTIFY vrrLatencyModeChanged)
     Q_PROPERTY(int vrrBufferPerMille READ vrrBufferPerMille WRITE setVrrBufferPerMille NOTIFY vrrTimingChanged)

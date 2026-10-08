@@ -132,6 +132,7 @@ private:
     void endRenderTiming();
     void selectPresentationMode(PDECODER_PARAMETERS params);
     void selectLegacyPresentMode(PDECODER_PARAMETERS params);
+    VkPresentModeKHR vsyncPresentMode(bool timestampPacing);
     bool acquirePendingSwapchainFrame(const char* earlyRenderFailureMessage);
     bool acquireVrrSwapchainFrame();
     bool submitPendingSwapchainFrame();

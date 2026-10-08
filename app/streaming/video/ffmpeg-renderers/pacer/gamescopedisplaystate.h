@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QtGlobal>
+
 #include <cstdint>
 
 // How Gamescope is presenting the focused app right now, from the root window
@@ -26,8 +28,12 @@ public:
     GamescopeDisplayState(const GamescopeDisplayState&) = delete;
     GamescopeDisplayState& operator=(const GamescopeDisplayState&) = delete;
 
-    // Whether this process runs under Gamescope at all
-    static bool runningUnderGamescope();
+    // Whether this process runs under Gamescope at all, on any build. Header
+    // only, so settings code can ask without linking the X11 probe.
+    static bool runningUnderGamescope()
+    {
+        return !qEnvironmentVariableIsEmpty("GAMESCOPE_WAYLAND_DISPLAY");
+    }
 
     // Opens a private connection to Gamescope's first X server. Reads happen on
     // one thread only after this returns.

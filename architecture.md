@@ -2400,14 +2400,17 @@ A saved custom FPS remains selectable. Toggling VRR does not rewrite saved FPS;
    this launch. The saved preference is not rewritten.
 1. Query the actual window display refresh. An unavailable refresh may fall
    back to 60 Hz for legacy behavior, but that fallback cannot qualify VRR.
-2. Resolve effective V-sync. A requested FPS over refresh plus 5 disables it.
+2. Resolve effective V-sync. Under Gamescope it is always on and never
+   disabled, and fixed frame pacing is off (see "Gamescope owns V-Sync" below).
+   Elsewhere, a requested FPS over refresh plus 5 disables it.
 3. Require readable refresh, effective V-sync, and stream FPS no greater than
    display refresh for VRR.
 4. Force effective desktop fullscreen when VRR is accepted, keeping the saved
    window preference intact. macOS uses native Cocoa fullscreen/Spaces for it;
    Windows/Linux retain the borderless desktop path.
 5. If VRR was requested but rejected and effective V-sync remains enabled,
-   enable fixed pacing even if the separate legacy pacing checkbox is off.
+   enable fixed pacing even if the separate legacy pacing checkbox is off
+   (not under Gamescope).
 
 On macOS, the strict refresh query first uses `NSScreen.maximumFramesPerSecond`.
 The FPS picker uses the same native maximum; a ProMotion mode whose SDL refresh
@@ -4715,9 +4718,10 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
 - **Renderer:** it prefers the Vulkan renderer, through the same
   `preferVrrRenderer` path as VRR, in both the startup probe and playback.
   This keeps the negotiated color range consistent.
-- **Present mode:** with V-Sync, `PlVkRenderer::selectLegacyPresentMode()`
-  picks Mailbox on Gamescope or native Wayland instead of FIFO, so a newer
-  frame replaces one still waiting. Gamescope treats both Immediate and
+- **Present mode:** with V-Sync, `PlVkRenderer::vsyncPresentMode()` picks
+  Mailbox on native Wayland instead of FIFO, so a newer frame replaces one
+  still waiting. Under Gamescope it picks Mailbox (or Immediate) whether or
+  not timestamp pacing is on; see "Gamescope owns V-Sync" below. Gamescope treats both Immediate and
   Mailbox as "async" (`wlserver_surface_is_async`). Its own settings then
   decide presentation:
   - **Allow Tearing:** async flips that tear.
@@ -4780,6 +4784,36 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
   target.
 - **Validation:** none of this has run on SteamOS. It has been compiled for
   Windows and for Linux through the WSL AppImage build.
+
+**Gamescope owns V-Sync (2026-10-08).** Gamescope composites every frame
+and decides how it reaches the display: async flips that tear (Allow Tearing),
+a flip on arrival (VRR), the newest commit at each refresh, or a queue
+(Steam's frame limit). Application V-Sync only queued frames in front of that,
+so under Gamescope (`GamescopeDisplayState::runningUnderGamescope()`, which is
+now header-only and checks `GAMESCOPE_WAYLAND_DISPLAY`) Moonlight no longer
+syncs itself:
+- `StreamingPreferences::effectiveVsync()` (QML `effectiveVsync`) is always
+  true; the saved `vsync` preference is kept and logged but ignored. VRR
+  Pacing Mode and the timestamp pacing V-blank grid therefore remain eligible.
+- The session no longer disables V-Sync for a stream more than 5 FPS over
+  refresh: nothing blocks, so surplus frames are only dropped.
+- Fixed frame pacing is off, including the VRR Pacing Mode rejection
+  fallback in the session and in `Pacer::initialize()`. Qt and SDL run on
+  Gamescope's Xwayland, which has no V-sync source, so it had rendered frames
+  on arrival anyway.
+- Vulkan: `PlVkRenderer::vsyncPresentMode()` returns Mailbox, else Immediate,
+  instead of FIFO, for ordinary V-Sync and for every fixed fallback of VRR
+  Pacing Mode (invalid refresh, main-thread renderer, no adaptive mode, worker
+  start failure). Gamescope treats both as async, so neither tears unless
+  Allow Tearing is on. FIFO remains only when neither is supported.
+- EGL uses swap interval 0 and the SDL renderer omits
+  `SDL_RENDERER_PRESENTVSYNC`, as on native Wayland.
+- Settings hide the V-Sync and Frame pacing checkboxes under Gamescope
+  (`SystemProperties.isGamescope`) and say tearing is set in Steam's Quick
+  Access menu.
+- Not validated on SteamOS. In particular, that Mailbox and Immediate behave
+  alike for Xwayland clients with Allow Tearing off comes from the timestamp
+  pacing notes above, not a fresh capture.
 
 **Windows VRR detection (2026-10-08).** On a display refreshing as frames
 arrive, snapping targets to a V-blank grid only adds jitter and delay. Windows
