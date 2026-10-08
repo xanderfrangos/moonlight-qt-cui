@@ -4678,6 +4678,17 @@ uses `VrrTargetWaiter` for the last 2 ms, and hands frames to the existing
 render queue, so every renderer works unchanged. As in VRR Pacing Mode, the
 waiter wakes early by the 95th percentile of its last 19 sleep overruns
 (`schedulerDelayUs`, at most 500 us) and spins the rest.
+- **Queue-full logging (2026-10-08, `c5d8884b` plus logger fix):** the
+  one-time warning is emitted after releasing the pacing mutex, waking the
+  worker and returning the evicted decoder surface. A Windows capture showed
+  a logger worker-start warning recursively entering the locked Qt thread
+  pool from an MMCSS decoder thread, freezing frame delivery. The logger now
+  starts workers at normal priority. `LogDispatch` writes nested startup
+  warnings directly; warnings from the writer itself go to stderr without
+  taking the logger locks. Both queued writes and final flush use that guard.
+  `tst_logdispatch` covers startup and writer re-entry, including a real Qt
+  worker. This fixes the captured lock cycle; live streaming validation is
+  still required.
 - **V-Sync with a V-sync source:** the frame is released at the first V-blank
   at or after (target + trim), minus the learned release-to-present time, a
   2 ms margin (4.5 ms under Gamescope; see below) and any margin added by

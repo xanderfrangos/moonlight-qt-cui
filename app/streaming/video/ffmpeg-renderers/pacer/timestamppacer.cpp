@@ -146,6 +146,7 @@ void TimestampPacer::submit(PacedFrame&& paced)
 
     AVFrame* evicted = nullptr;
     bool late = false;
+    bool warnQueueFull = false;
     {
         std::lock_guard<std::mutex> lock(m_Lock);
         if (m_Stopping) {
@@ -162,9 +163,7 @@ void TimestampPacer::submit(PacedFrame&& paced)
             m_Queue.pop_front();
             if (!m_WarnedQueueFull) {
                 m_WarnedQueueFull = true;
-                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                            "Timestamp pacing: queue full; the buffer is limited to %zu waiting frames",
-                            MaxQueuedFrames);
+                warnQueueFull = true;
             }
         }
         m_Queue.push_back(entry);
@@ -173,6 +172,13 @@ void TimestampPacer::submit(PacedFrame&& paced)
 
     if (evicted != nullptr) {
         m_Callbacks.drop(evicted, true);
+    }
+    if (warnQueueFull) {
+        // Logging may start its own worker; don't hold the pacing lock or
+        // retain the evicted decoder surface while doing so.
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Timestamp pacing: queue full; the buffer is limited to %zu waiting frames",
+                    MaxQueuedFrames);
     }
 
     TimestampScheduleSample sample;

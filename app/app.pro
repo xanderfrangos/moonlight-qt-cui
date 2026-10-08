@@ -236,6 +236,7 @@ SOURCES += \
     wm.cpp
 
 HEADERS += \
+    logdispatch.h \
     streaming/video/videothreadpriority.h \
     streaming/video/timinggraph.h \
     streaming/input/dualsensehid.h \

@@ -15,6 +15,7 @@
 #include <QElapsedTimer>
 #include <QTemporaryFile>
 #include <QRegularExpression>
+#include "logdispatch.h"
 
 #ifdef Q_OS_UNIX
 #include <sys/socket.h>
@@ -115,12 +116,14 @@ public:
         // only contend in synchronous logging mode or during a transition
         // between synchronous and asynchronous. Asynchronous won't contend in
         // the common case because we only have a single logging thread.
-        QMutexLocker locker(&s_SyncLoggerMutex);
-        if (m_NormalOutput) {
-            s_LoggerStream << m_Msg;
-            s_LoggerStream.flush();
-        }
-        DiagnosticCapture::appendLog(m_Msg);
+        LogDispatch::write([this] {
+            QMutexLocker locker(&s_SyncLoggerMutex);
+            if (m_NormalOutput) {
+                s_LoggerStream << m_Msg;
+                s_LoggerStream.flush();
+            }
+            DiagnosticCapture::appendLog(m_Msg);
+        });
     }
 
 private:
@@ -131,8 +134,10 @@ private:
 void Utils::flushLogs()
 {
     s_LoggerThread.waitForDone();
-    QMutexLocker locker(&s_SyncLoggerMutex);
-    s_LoggerStream.flush();
+    LogDispatch::write([] {
+        QMutexLocker locker(&s_SyncLoggerMutex);
+        s_LoggerStream.flush();
+    });
 }
 
 void logToLoggerStream(QString& message)
@@ -166,14 +171,15 @@ void logToLoggerStream(QString& message)
     }
 #endif
 
-    if (g_AsyncLoggingEnabled) {
-        // Queue the log message to be written asynchronously
-        s_LoggerThread.start(new LoggerTask(message, normalOutput));
-    }
-    else {
-        // Log the message immediately
-        LoggerTask(message, normalOutput).run();
-    }
+    LogDispatch::dispatch(g_AsyncLoggingEnabled.loadRelaxed() != 0,
+        [&] { s_LoggerThread.start(new LoggerTask(message, normalOutput)); },
+        [&] { LoggerTask(message, normalOutput).run(); },
+        [&] {
+            // Last resort for a warning from the writer itself. Re-entering
+            // QTextStream, DiagnosticCapture, or the pool would deadlock.
+            const QByteArray text = message.toUtf8();
+            fwrite(text.constData(), 1, size_t(text.size()), stderr);
+        });
 }
 
 void sdlLogToDiskHandler(void*, int category, SDL_LogPriority priority, const char* message)
@@ -629,6 +635,11 @@ int main(int argc, char *argv[])
 
     // Serialize log messages on a single thread
     s_LoggerThread.setMaxThreadCount(1);
+    // A cold/expired pool may start its worker on an MMCSS decoder thread.
+    // Its native priority is not necessarily a valid SetThreadPriority
+    // argument, so don't inherit it (and emit a warning while holding the
+    // pool lock).
+    s_LoggerThread.setThreadPriority(QThread::NormalPriority);
     s_LoggerTime.start();
 
     // Register our logger with all libraries
