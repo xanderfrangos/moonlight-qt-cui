@@ -39,6 +39,8 @@ struct Stream {
     uint32_t rtp;
     double sourceUs = 0;
     uint64_t epochUs = 5000000000ULL;
+    // When the latest frame was ready
+    uint64_t readyUs = 0;
     std::vector<Policy::Decision> decisions;
 
     Stream(const TimestampPacingOptions& o, int fps, uint32_t firstRtp = 12345) : rtp(firstRtp)
@@ -53,7 +55,7 @@ struct Stream {
         sourceUs += periodUs;
         frame++;
         const uint32_t stamp = rtp + uint32_t(std::llround((sourceUs + stampNoiseUs) * 9 / 100));
-        const uint64_t readyUs = epochUs + uint64_t(sourceUs) + 4000 + uint64_t(arrivalDelayUs);
+        readyUs = epochUs + uint64_t(sourceUs) + 4000 + uint64_t(arrivalDelayUs);
         const auto decision = policy.schedule(true, frame, stamp, readyUs, hostLatencyUs, decoderQueueUs);
         decisions.push_back(decision);
         return decision;
@@ -250,6 +252,64 @@ void repeatsAreShownOnArrival()
         const auto decision = silent.next(1000000.0 / 60, 0, 0, 0);
         check(decision.paced, "a host that never reports latency still has every frame paced");
     }
+}
+
+// A static screen: the host only re-sends the last picture, with zero host
+// latency, ~62 ms apart and stamped ~57 ms before it is sent, as on the
+// 2026-10-07 capture. Once the picture moves again, frames must be held for
+// the buffer only, not for the repeats' backdating.
+void staticScreenDoesntDelayResume()
+{
+    const double periodUs = 1000000.0 / 60;
+    const auto sendRepeats = [](Stream& stream, double seconds) {
+        bool allRepeats = true;
+        for (int i = 0; i < int(seconds * 1000000 / 62000); i++) {
+            allRepeats &= stream.next(62000, -57000, 0, 0).repeat;
+        }
+        return allRepeats;
+    };
+    // How far past its buffer each resumed frame is held, at most
+    const auto resumedExcessUs = [&](Stream& stream) {
+        int64_t worstUs = 0;
+        for (int i = 0; i < 30; i++) {
+            const auto decision = stream.next(periodUs);
+            if (i >= 3) {
+                worstUs = std::max(worstUs, int64_t(decision.targetUs) - int64_t(stream.readyUs) -
+                                                int64_t(decision.bufferUs));
+            }
+        }
+        return worstUs;
+    };
+
+    // A host that has shown it reports latency: its zeros stay repeats however
+    // long the screen is static
+    Stream reporting(options(1), 60);
+    for (int i = 0; i < 60; i++) {
+        reporting.next(periodUs);
+    }
+    check(sendRepeats(reporting, 90), "zeros from a reporting host are repeats for the whole idle");
+    check(resumedExcessUs(reporting) < 1000, "frames after a long idle are held only for the buffer");
+
+    // A host that went static before reporting enough: the repeats are
+    // followed, and the timeline starts over when it reports again
+    Stream early(options(1), 60);
+    for (int i = 0; i < 10; i++) {
+        early.next(periodUs);
+    }
+    check(!sendRepeats(early, 90), "zeros before the host has shown it reports aren't trusted");
+    const auto resumed = early.next(periodUs);
+    check(resumed.restarted, "the first reported frame after a long unreported run restarts the timeline");
+    check(resumedExcessUs(early) < 1000, "and frames after it are held only for the buffer");
+    check(std::fabs(early.policy.sourcePeriodUs() - periodUs) < periodUs * 0.05,
+          "the restart keeps the rate from before the run");
+
+    // A run shorter than the buffer's window doesn't restart
+    Stream brief(options(1), 60);
+    for (int i = 0; i < 10; i++) {
+        brief.next(periodUs);
+    }
+    sendRepeats(brief, 1);
+    check(!brief.next(periodUs).restarted, "a brief unreported run doesn't restart the timeline");
 }
 
 void followsRateChanges()
@@ -484,6 +544,7 @@ int main()
     deliveryStallsDontGrowBuffer();
     overloadDoesntGrowBuffer();
     repeatsAreShownOnArrival();
+    staticScreenDoesntDelayResume();
     followsRateChanges();
     recoversFromSlowdown();
     survivesWrapAndRestart();

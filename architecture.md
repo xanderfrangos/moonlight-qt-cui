@@ -4630,8 +4630,22 @@ a live stream. Offline evaluation, known gaps and next steps are in
 **Policy** ([timestamppacingpolicy.h](app/streaming/video/ffmpeg-renderers/pacer/timestamppacingpolicy.h)).
 Pure and header-only; tested by `tst_timestamppacing`.
 - `RepeatDetector`: a frame with zero host latency, from a host that has
-  reported nonzero latency recently, is a host repeat. Repeats are backdated by
-  about one timeout, so they are shown on arrival and never learned from.
+  reported nonzero latency 16 times this session, is a host repeat. Repeats are
+  backdated by about one timeout, so they are shown on arrival and never
+  learned from.
+  - Since 2026-10-08 the detection never expires. It used to lapse 30 s after
+    the last nonzero report, which a static screen (nothing but repeats)
+    always reached. The repeats were then followed, and the baseline crept up
+    to their ~57 ms backdating at 0.1 ms per repeat. When the picture moved,
+    every frame was held that much longer, past what the three-frame queue
+    covers, so frames were evicted unseen and the cursor stalled for tens of
+    seconds.
+  - Zero-latency frames before the detector has 16 reports are still
+    followed. When a run of them lasting at least the buffer's 3 s window
+    ends with a nonzero report, the policy restarts the timeline at the
+    period in force before the run (`Timeline::restart`), which also clears
+    the buffer's history and baseline. A shorter run can't replace the
+    window minimum, so it doesn't restart.
 - `Timeline`: a two-gain phase-locked loop on the RTP timeline, counting
   frames by host frame number. Gains are phase/frequency 0.25/0.01 (light,
   the default) and 0.1/0.002 (standard); "off" follows raw timestamps.

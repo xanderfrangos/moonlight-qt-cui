@@ -22,27 +22,30 @@ namespace TimestampPacing {
 // before they are sent, so following their timestamps would hold the stream
 // back by that much. A host that never reports the latency gives no way to
 // tell, so zero is only trusted after the host has shown it reports one.
+//
+// Once shown, it is trusted for the rest of the session. A static screen
+// sends nothing but repeats, for as long as it stays static; forgetting the
+// host reports latency after a while let those repeats in as real frames,
+// and their backdated timestamps dragged the baseline tens of milliseconds
+// late by the time the picture moved again.
 class RepeatDetector
 {
 public:
     static constexpr uint32_t ReportsNeeded = 16;
-    static constexpr uint64_t ReportMemoryUs = 30000000;
 
-    bool isRepeat(uint32_t hostLatencyUs, uint64_t nowUs)
+    bool isRepeat(uint32_t hostLatencyUs)
     {
         if (hostLatencyUs != 0) {
             if (m_Reports < ReportsNeeded) {
                 m_Reports++;
             }
-            m_LastReportUs = nowUs;
             return false;
         }
-        return m_Reports >= ReportsNeeded && nowUs - m_LastReportUs <= ReportMemoryUs;
+        return m_Reports >= ReportsNeeded;
     }
 
 private:
     uint32_t m_Reports = 0;
-    uint64_t m_LastReportUs = 0;
 };
 
 // The host's timeline, smoothed by a phase-locked loop. Individual host
@@ -169,6 +172,16 @@ public:
     }
 
     double periodUs() const { return m_PeriodUs; }
+
+    // Starts a new timeline at the next frame, at this period. For frames
+    // that were followed but shouldn't have been, so that neither their
+    // phase nor their rate carries over.
+    void restart(double periodUs)
+    {
+        m_Have = false;
+        m_PeriodUs = clampPeriod(periodUs);
+        m_SteadyPeriodUs = m_PeriodUs;
+    }
 
 private:
     double clampPeriod(double periodUs) const
@@ -691,6 +704,10 @@ public:
     // still count against the chosen share on time.
     static constexpr double StallBufferMultiple = 3;
 
+    // A run of unrecognized zero-latency frames shorter than the buffer's
+    // window can't have replaced its minimum, so it isn't worth a restart
+    static constexpr uint64_t UnreportedRestartUs = PlayoutBuffer::WindowUs;
+
     void configure(const TimestampPacingOptions& options, int streamFps)
     {
         const TimestampPacingOptions resolved = options.resolved();
@@ -702,6 +719,8 @@ public:
         m_MaximumBufferUs = resolved.maxBufferMs * 1000.0;
         m_Repeats = {};
         m_Service.reset();
+        m_UnreportedSinceUs = 0;
+        m_UnreportedPeriodUs = 0;
     }
 
     // decoderQueueUs is how long the frame waited to enter the decoder
@@ -714,10 +733,29 @@ public:
             return decision;
         }
         m_Service.add(readyUs, decoderQueueUs);
-        if (m_Repeats.isRepeat(hostLatencyUs, readyUs)) {
+        if (m_Repeats.isRepeat(hostLatencyUs)) {
             decision.repeat = true;
             decision.bufferUs = uint64_t(m_Buffer.delayUs());
             return decision;
+        }
+
+        // Zero host latency that wasn't recognized as a repeat: a host that
+        // went static before it had reported enough to trust its zeros. Those
+        // frames are followed, and given long enough to fill the buffer's
+        // window, their backdated timestamps move the baseline and the rate.
+        // When the host reports latency again, start over from the rate in
+        // force before them.
+        if (hostLatencyUs == 0) {
+            if (m_UnreportedSinceUs == 0) {
+                m_UnreportedSinceUs = readyUs;
+                m_UnreportedPeriodUs = m_Timeline.periodUs();
+            }
+        }
+        else if (m_UnreportedSinceUs != 0) {
+            if (readyUs >= m_UnreportedSinceUs + UnreportedRestartUs) {
+                m_Timeline.restart(m_UnreportedPeriodUs);
+            }
+            m_UnreportedSinceUs = 0;
         }
 
         const Timeline::Sample source = m_Timeline.observe(frameNumber, rtpTimestamp);
@@ -763,6 +801,10 @@ private:
     PlayoutBuffer m_Buffer;
     ServiceWindow m_Service;
     double m_MaximumBufferUs = 16000;
+    // When the current run of unrecognized zero-latency frames began, and
+    // the source period before it
+    uint64_t m_UnreportedSinceUs = 0;
+    double m_UnreportedPeriodUs = 0;
 };
 
 }
