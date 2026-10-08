@@ -4,10 +4,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 
 #include <QMutex>
 #include "vrr/readinesswindow.h"
 #include "../../timinggraph.h"
+#include "../../presentationlateness.h"
 
 // Pacer work can happen on the decoder, render, V-sync, and VRR worker
 // threads. Keep its cumulative measurements separate from VIDEO_STATS, which
@@ -68,6 +70,29 @@ struct PacerTelemetrySnapshot {
     uint64_t vrrGuardUs = 0;
     uint64_t vrrSourcePeriodUs = 0;
     uint64_t vrrAppliedBufferUs = 0, vrrBufferCapUs = 0, vrrGpuReadinessLeadUs = 0;
+
+    // Timestamp pacing. Counters are cumulative; the rest is the latest state.
+    bool timestampActive = false;
+    // Frames scheduled to a target, and those ready only after it
+    uint64_t timestampPacedFrames = 0;
+    uint64_t timestampLateFrames = 0;
+    // Host repeats and frames without a timestamp, shown when ready
+    uint64_t timestampUnpacedFrames = 0;
+    // Replaced by a newer frame due at the same time
+    uint64_t timestampSupersededFrames = 0;
+    uint64_t timestampBufferUs = 0;
+    uint64_t timestampSourcePeriodUs = 0;
+    int64_t timestampTrimUs = 0;
+    // Whether frames are being placed on a measured V-blank grid
+    bool timestampVblankGrid = false;
+    // TimestampPacer::DisplayMode from a compositor probe; 0 without one
+    uint8_t timestampDisplayMode = 0;
+    // From actual display times, where the renderer reports them: frames
+    // shown on their planned V-blank and those a refresh or more late, and
+    // the submit margin the misses added
+    uint64_t timestampVblankHits = 0;
+    uint64_t timestampVblankMisses = 0;
+    uint64_t timestampExtraMarginUs = 0;
 };
 
 // The stats graphs sample ten times a second and plot counters only. Copying
@@ -77,6 +102,27 @@ struct PacerTelemetrySnapshot {
 struct PacerTelemetryCounters {
     uint64_t renderedFrames = 0;
     uint64_t pacerDroppedFrames = 0;
+};
+
+// Per-sample statistics of one measure, in microseconds. Signed, since some
+// timestamp pacing measures fall either side of zero.
+struct PacerAccumulator {
+    uint32_t count = 0;
+    int64_t sumUs = 0;
+    int64_t minUs = 0;
+    int64_t maxUs = 0;
+
+    void add(int64_t valueUs)
+    {
+        if (count == 0 || valueUs < minUs) {
+            minUs = valueUs;
+        }
+        if (count == 0 || valueUs > maxUs) {
+            maxUs = valueUs;
+        }
+        sumUs += valueUs;
+        count++;
+    }
 };
 
 // Intervals between presented frames, accumulated since the last take. The
@@ -94,6 +140,52 @@ struct PacerFrametimeStats {
     uint64_t renderingSumUs = 0;
     uint64_t renderingMinUs = 0;
     uint64_t renderingMaxUs = 0;
+
+    // Change in the interval between presented frames from the previous
+    // interval. Frames more than 50 ms apart break the chain.
+    PacerAccumulator presentedJerk;
+
+    // Lateness against the host's RTP timeline of each frame the fixed
+    // pacing path presented, over the same window. VRR paces to those
+    // timestamps itself and doesn't report it.
+    uint32_t latenessCount = 0;
+    uint64_t latenessSumUs = 0;
+    uint64_t latenessMinUs = 0;
+    uint64_t latenessMaxUs = 0;
+
+    // Timestamp pacing over the same window. Lateness is measured at
+    // readiness against the buffer's baseline, for paced frames.
+    PacerAccumulator timestampLateness;
+    // Change in the raw spacing of host timestamps between consecutive frames
+    PacerAccumulator timestampHostJerk;
+    // Smoothed minus raw source time
+    PacerAccumulator timestampCorrection;
+    uint32_t timestampReanchors = 0;
+    // From a frame's target to the V-blank it was assigned, on the V-blank grid
+    PacerAccumulator timestampVblankWait;
+    // Present return minus when the pacer expected it, and the time from
+    // handing a frame to the renderer until its present returned
+    PacerAccumulator timestampScheduleError;
+    PacerAccumulator timestampReleaseToPresent;
+    // Latest state. Unlike the rest, it carries over from one take to the
+    // next, so it is never missing from an interval without frames.
+    bool timestampStateValid = false;
+    uint64_t timestampBufferUs = 0;
+    int64_t timestampTrimUs = 0;
+    uint64_t timestampRenderLeadUs = 0;
+};
+
+struct TimestampScheduleSample {
+    bool paced = false;
+    // Ready only after its target
+    bool late = false;
+    uint64_t latenessUs = 0;
+    uint64_t bufferUs = 0;
+    uint64_t sourcePeriodUs = 0;
+    int64_t correctionUs = 0;
+    bool reanchored = false;
+    int64_t hostJerkUs = 0;
+    bool hostJerkValid = false;
 };
 
 struct VrrTelemetrySample {
@@ -176,6 +268,10 @@ public:
         QMutexLocker lock(&m_Lock);
         const PacerFrametimeStats stats = m_Frametime;
         m_Frametime = {};
+        m_Frametime.timestampStateValid = stats.timestampStateValid;
+        m_Frametime.timestampBufferUs = stats.timestampBufferUs;
+        m_Frametime.timestampTrimUs = stats.timestampTrimUs;
+        m_Frametime.timestampRenderLeadUs = stats.timestampRenderLeadUs;
         return stats;
     }
 
@@ -183,6 +279,89 @@ public:
     {
         QMutexLocker lock(&m_Lock);
         m_Snapshot.vrrActive = true;
+        touchLocked();
+    }
+
+    void beginTimestampSession()
+    {
+        QMutexLocker lock(&m_Lock);
+        m_Snapshot.timestampActive = true;
+        touchLocked();
+    }
+
+    void recordTimestampSchedule(const TimestampScheduleSample& sample)
+    {
+        QMutexLocker lock(&m_Lock);
+        if (sample.paced) {
+            ++m_Snapshot.timestampPacedFrames;
+            m_Snapshot.timestampLateFrames += sample.late;
+            m_Frametime.timestampLateness.add((int64_t)sample.latenessUs);
+            m_Frametime.timestampCorrection.add(sample.correctionUs);
+            m_Frametime.timestampReanchors += sample.reanchored;
+            if (sample.hostJerkValid) {
+                m_Frametime.timestampHostJerk.add(sample.hostJerkUs);
+            }
+        }
+        else {
+            ++m_Snapshot.timestampUnpacedFrames;
+        }
+        m_Snapshot.timestampBufferUs = sample.bufferUs;
+        m_Snapshot.timestampSourcePeriodUs = sample.sourcePeriodUs;
+        m_Frametime.timestampStateValid = true;
+        m_Frametime.timestampBufferUs = sample.bufferUs;
+        touchLocked();
+    }
+
+    void recordTimestampRelease(int64_t trimUs, bool vblankGrid,
+                                bool vblankWaitValid, int64_t vblankWaitUs)
+    {
+        QMutexLocker lock(&m_Lock);
+        m_Snapshot.timestampTrimUs = trimUs;
+        m_Snapshot.timestampVblankGrid = vblankGrid;
+        m_Frametime.timestampTrimUs = trimUs;
+        if (vblankWaitValid) {
+            m_Frametime.timestampVblankWait.add(vblankWaitUs);
+        }
+        touchLocked();
+    }
+
+    void recordTimestampPresent(bool scheduleErrorValid, int64_t scheduleErrorUs,
+                                uint64_t releaseToPresentUs, uint64_t renderLeadUs)
+    {
+        QMutexLocker lock(&m_Lock);
+        if (scheduleErrorValid) {
+            m_Frametime.timestampScheduleError.add(scheduleErrorUs);
+        }
+        m_Frametime.timestampReleaseToPresent.add((int64_t)releaseToPresentUs);
+        m_Frametime.timestampRenderLeadUs = renderLeadUs;
+        touchLocked();
+    }
+
+    void recordTimestampVblankResult(bool missed, uint64_t extraMarginUs)
+    {
+        QMutexLocker lock(&m_Lock);
+        if (missed) {
+            ++m_Snapshot.timestampVblankMisses;
+        }
+        else {
+            ++m_Snapshot.timestampVblankHits;
+        }
+        m_Snapshot.timestampExtraMarginUs = extraMarginUs;
+        touchLocked();
+    }
+
+    void recordTimestampDisplayMode(uint8_t mode)
+    {
+        QMutexLocker lock(&m_Lock);
+        m_Snapshot.timestampDisplayMode = mode;
+        touchLocked();
+    }
+
+    void recordTimestampSuperseded()
+    {
+        QMutexLocker lock(&m_Lock);
+        ++m_Snapshot.pacerDroppedFrames;
+        ++m_Snapshot.timestampSupersededFrames;
         touchLocked();
     }
 
@@ -195,11 +374,24 @@ public:
 
     void recordLegacyFrame(uint64_t clientProcessingTimeUs,
                            uint64_t renderingTimeUs,
-                           uint64_t presentUs)
+                           uint64_t presentUs,
+                           bool rtpTimestampValid = false,
+                           uint32_t rtpTimestamp = 0)
     {
         QMutexLocker lock(&m_Lock);
         recordPresentedTimingLocked(clientProcessingTimeUs,
                                     renderingTimeUs, 0, presentUs);
+        if (rtpTimestampValid && presentUs != 0) {
+            const uint64_t latenessUs = m_Lateness.observe(rtpTimestamp, presentUs);
+            if (m_Frametime.latenessCount == 0 || latenessUs < m_Frametime.latenessMinUs) {
+                m_Frametime.latenessMinUs = latenessUs;
+            }
+            if (latenessUs > m_Frametime.latenessMaxUs) {
+                m_Frametime.latenessMaxUs = latenessUs;
+            }
+            m_Frametime.latenessSumUs += latenessUs;
+            m_Frametime.latenessCount++;
+        }
         touchLocked();
     }
 
@@ -352,6 +544,11 @@ private:
         if (presentUs != 0) {
             if (m_LastPresentUs != 0 && presentUs > m_LastPresentUs) {
                 const uint64_t intervalUs = presentUs - m_LastPresentUs;
+                if (intervalUs <= 50000 && m_LastPresentIntervalUs != 0) {
+                    m_Frametime.presentedJerk.add(
+                        std::llabs((int64_t)intervalUs - (int64_t)m_LastPresentIntervalUs));
+                }
+                m_LastPresentIntervalUs = intervalUs <= 50000 ? intervalUs : 0;
                 if (m_Frametime.count == 0 || intervalUs < m_Frametime.minUs) {
                     m_Frametime.minUs = intervalUs;
                 }
@@ -447,7 +644,9 @@ private:
     PacerTelemetrySnapshot m_Snapshot;
     Overlay::TimingGraphHistory m_TimingGraph;
     PacerFrametimeStats m_Frametime;
+    PresentationLateness m_Lateness;
     uint64_t m_LastPresentUs = 0;
+    uint64_t m_LastPresentIntervalUs = 0;
     uint64_t m_LastMotionSubmissionUs = 0;
     uint64_t m_LastMotionIntervalUs = 0;
     std::array<uint64_t, kPrepareLatenessSampleCount> m_PrepareLatenessSamples {};

@@ -95,6 +95,8 @@ public:
     virtual bool restoreFixedPresentation(VrrFallbackReason reason) override;
     virtual bool testRenderFrame(AVFrame* frame) override;
     virtual void waitToRender() override;
+    virtual bool supportsDisplayEvents() override;
+    virtual void setDisplayEventSink(DisplayEventSink sink) override;
     virtual void cleanupRenderContext() override;
     virtual void notifyOverlayUpdated(Overlay::OverlayType) override;
     virtual bool notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO) override;
@@ -324,6 +326,9 @@ private:
     bool m_LoggedPresentationFeedback = false;
 #ifdef Q_OS_LINUX
     std::unique_ptr<VulkanTiming> m_GamescopeTiming;
+    // Receives Gamescope's actual present times for frames presented by
+    // renderFrame(), for the timestamp pacer's V-blank grid
+    DisplayEventSink m_DisplayEventSink;
 #endif
 #ifdef HAS_WAYLAND
     std::unique_ptr<Vrr13::WaylandFeedback> m_PresentationFeedback;

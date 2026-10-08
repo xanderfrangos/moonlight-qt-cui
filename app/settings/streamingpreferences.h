@@ -7,6 +7,7 @@
 #include <QVariantList>
 #include <QVector>
 #include "vrrtimingoptions.h"
+#include "timestamppacingoptions.h"
 
 class StreamingPreferences : public QObject
 {
@@ -36,6 +37,23 @@ public:
     int vrrToleranceUs() const { return m_VrrTimingOptions.toleranceUs; }
     void setVrrToleranceUs(int value);
     VrrTimingOptions vrrTimingOptions() const { return m_VrrTimingOptions; }
+
+    // Timestamp pacing and VRR are mutually exclusive. Turning timestamp
+    // pacing on turns VRR off; the settings page keeps VRR unavailable while
+    // it is on.
+    bool timestampPacing() const { return m_TimestampPacing.enabled; }
+    void setTimestampPacing(bool enabled);
+    int timestampSmoothing() const { return m_TimestampPacing.smoothing; }
+    void setTimestampSmoothing(int value);
+    int timestampTargetPerMille() const { return m_TimestampPacing.targetPerMille; }
+    void setTimestampTargetPerMille(int value);
+    int timestampMinBufferMs() const { return m_TimestampPacing.minBufferMs; }
+    void setTimestampMinBufferMs(int value);
+    int timestampMaxBufferMs() const { return m_TimestampPacing.maxBufferMs; }
+    void setTimestampMaxBufferMs(int value);
+    int timestampVsyncMarginUs() const { return m_TimestampPacing.vsyncMarginUs; }
+    void setTimestampVsyncMarginUs(int value);
+    TimestampPacingOptions timestampPacingOptions() const { return m_TimestampPacing; }
 
     // These preferences must be applied before the QGuiApplication is created,
     // so they can be read directly from storage without a preferences instance.
@@ -248,6 +266,14 @@ public:
         PG_AUDIO_BUFFER = 15,
         PG_AUDIO_TROUBLE = 16,
         PG_AUDIO_DEVICE_INTERVAL = 17,
+        PG_PRESENTATION_LATENESS = 18,
+        // Timestamp pacing only
+        PG_TS_BUFFER = 19,
+        PG_TS_SMOOTHNESS = 20,
+        PG_TS_SCHEDULE_ERROR = 21,
+        PG_TS_CORRECTION = 22,
+        PG_TS_VBLANK = 23,
+        PG_TS_RELEASE = 24,
     };
     Q_ENUM(PerformanceGraph)
 
@@ -318,6 +344,12 @@ public:
     Q_PROPERTY(int vrrHistorySeconds READ vrrHistorySeconds WRITE setVrrHistorySeconds NOTIFY vrrTimingChanged)
     Q_PROPERTY(int vrrToleranceUs READ vrrToleranceUs WRITE setVrrToleranceUs NOTIFY vrrTimingChanged)
     Q_PROPERTY(bool smoothVrrFrameTiming MEMBER smoothVrrFrameTiming NOTIFY smoothVrrFrameTimingChanged)
+    Q_PROPERTY(bool timestampPacing READ timestampPacing WRITE setTimestampPacing NOTIFY timestampPacingChanged)
+    Q_PROPERTY(int timestampSmoothing READ timestampSmoothing WRITE setTimestampSmoothing NOTIFY timestampPacingChanged)
+    Q_PROPERTY(int timestampTargetPerMille READ timestampTargetPerMille WRITE setTimestampTargetPerMille NOTIFY timestampPacingChanged)
+    Q_PROPERTY(int timestampMinBufferMs READ timestampMinBufferMs WRITE setTimestampMinBufferMs NOTIFY timestampPacingChanged)
+    Q_PROPERTY(int timestampMaxBufferMs READ timestampMaxBufferMs WRITE setTimestampMaxBufferMs NOTIFY timestampPacingChanged)
+    Q_PROPERTY(int timestampVsyncMarginUs READ timestampVsyncMarginUs WRITE setTimestampVsyncMarginUs NOTIFY timestampPacingChanged)
     Q_PROPERTY(bool highPerformanceGpuPower MEMBER highPerformanceGpuPower NOTIFY highPerformanceGpuPowerChanged)
     Q_PROPERTY(bool traceVrrFrames MEMBER traceVrrFrames NOTIFY traceVrrFramesChanged)
     Q_PROPERTY(bool exportingDiagnostics MEMBER m_ExportingDiagnostics NOTIFY diagnosticsChanged)
@@ -500,6 +532,7 @@ public:
 
 private:
     VrrTimingOptions m_VrrTimingOptions = VrrTimingOptions::preset(1);
+    TimestampPacingOptions m_TimestampPacing;
 
 signals:
     void displayModeChanged();
@@ -511,6 +544,7 @@ signals:
     void vrrLatencyModeChanged();
     void vrrTimingChanged();
     void smoothVrrFrameTimingChanged();
+    void timestampPacingChanged();
     void highPerformanceGpuPowerChanged();
     void traceVrrFramesChanged();
     void diagnosticsChanged();

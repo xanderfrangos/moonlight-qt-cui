@@ -217,6 +217,40 @@ void StatsGraphs::appendSample(const StatsGraphCounters& counters, double interv
                   point.decodingTimeMs, point.decodingTimeMinMs, point.decodingTimeMaxMs);
     applyPerFrame(counters.renderingTime, previous.renderingTimeMs, 0,
                   point.renderingTimeMs, point.renderingTimeMinMs, point.renderingTimeMaxMs);
+    applyPerFrame(counters.presentationLateness, previous.presentationLatenessMs, 0,
+                  point.presentationLatenessMs, point.presentationLatenessMinMs,
+                  point.presentationLatenessMaxMs);
+    applyPerFrame(counters.presentedJerk, previous.presentedJerkMs, 0,
+                  point.presentedJerkMs, point.presentedJerkMinMs, point.presentedJerkMaxMs);
+    applyPerFrame(counters.timestampLateness, previous.timestampLatenessMs, 0,
+                  point.timestampLatenessMs, point.timestampLatenessMinMs,
+                  point.timestampLatenessMaxMs);
+    applyPerFrame(counters.timestampCorrection, previous.timestampCorrectionMs, 0,
+                  point.timestampCorrectionMs, point.timestampCorrectionMinMs,
+                  point.timestampCorrectionMaxMs);
+    applyPerFrame(counters.timestampVblankWait, previous.timestampVblankWaitMs, 0,
+                  point.timestampVblankWaitMs, point.timestampVblankWaitMinMs,
+                  point.timestampVblankWaitMaxMs);
+    applyPerFrame(counters.timestampScheduleError, previous.timestampScheduleErrorMs, 0,
+                  point.timestampScheduleErrorMs, point.timestampScheduleErrorMinMs,
+                  point.timestampScheduleErrorMaxMs);
+    applyPerFrame(counters.timestampReleaseToPresent, previous.timestampReleaseToPresentMs, 0,
+                  point.timestampReleaseToPresentMs, point.timestampReleaseToPresentMinMs,
+                  point.timestampReleaseToPresentMaxMs);
+    point.timestampHostJerkMs = counters.timestampHostJerk.count != 0 ?
+            counters.timestampHostJerk.average() : previous.timestampHostJerkMs;
+    point.timestampReanchors = counters.timestampReanchors;
+    // State held from the last frame, so it never drops out between frames
+    if (counters.timestampStateValid) {
+        point.timestampBufferMs = counters.timestampBufferMs;
+        point.timestampTrimMs = counters.timestampTrimMs;
+        point.timestampRenderLeadMs = counters.timestampRenderLeadMs;
+    }
+    else {
+        point.timestampBufferMs = previous.timestampBufferMs;
+        point.timestampTrimMs = previous.timestampTrimMs;
+        point.timestampRenderLeadMs = previous.timestampRenderLeadMs;
+    }
     applyPerFrame(counters.decodingFrametime, previous.decodingFrametimeMs, intervalMs,
                   point.decodingFrametimeMs, point.decodingFrametimeMinMs,
                   point.decodingFrametimeMaxMs);

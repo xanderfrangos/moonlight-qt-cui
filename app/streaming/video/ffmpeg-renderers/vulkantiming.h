@@ -21,6 +21,9 @@ public:
     bool initialize(VkDevice device);
     void begin(uint64_t id) { m_ArmedId = id; m_AcceptedId = 0; }
     void finish(VrrPresentFeedback& feedback);
+    // The compositor's refresh period in microseconds, or zero when unknown.
+    // Queried at most once a second; the value is cached between queries.
+    uint64_t refreshCycleUs();
     void reset();
     const Statistics& statistics() const { return m_Statistics; }
 private:
@@ -40,6 +43,8 @@ private:
     VkDevice m_Device = VK_NULL_HANDLE;
     VkSwapchainKHR m_Swapchain = VK_NULL_HANDLE;
     PFN_vkGetPastPresentationTimingGOOGLE m_GetTimings = nullptr;
+    PFN_vkGetRefreshCycleDurationGOOGLE m_GetRefreshCycle = nullptr;
+    uint64_t m_RefreshCycleUs = 0, m_RefreshCycleQueriedUs = 0;
     std::array<Pending, 256> m_Pending{};
     std::deque<Completed> m_Completed;
     size_t m_Next = 0;

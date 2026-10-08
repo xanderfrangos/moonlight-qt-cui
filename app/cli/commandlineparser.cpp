@@ -391,6 +391,7 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     parser.addToggleOption("vsync", "V-Sync");
     parser.addToggleOption("vrr", "VRR");
     parser.addToggleOption("vrr-smooth-frame-timing", "VRR frame timing smoothing");
+    parser.addToggleOption("timestamp-pacing", "frame pacing to smoothed host timestamps (not with VRR)");
     parser.addValueOption("fps", "FPS");
     parser.addValueOption("bitrate", "bitrate in Kbps");
     parser.addValueOption("packet-size", "video packet size");
@@ -499,6 +500,17 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     preferences->enableVrr = parser.getToggleOptionValue("vrr", preferences->enableVrr);
     preferences->smoothVrrFrameTiming = parser.getToggleOptionValue(
         "vrr-smooth-frame-timing", preferences->smoothVrrFrameTiming);
+
+    // Timestamp pacing and VRR are mutually exclusive. An explicit --vrr
+    // replaces a saved timestamp pacing choice, and --timestamp-pacing
+    // turns VRR off.
+    if (parser.getToggleOptionValue("timestamp-pacing", false)) {
+        preferences->setTimestampPacing(true);
+    }
+    else if (!parser.getToggleOptionValue("timestamp-pacing", true) ||
+             parser.getToggleOptionValue("vrr", false)) {
+        preferences->setTimestampPacing(false);
+    }
 
     // Resolve --audio-config option
     if (parser.isSet("audio-config")) {

@@ -65,6 +65,23 @@ typedef struct _VIDEO_STATS {
     uint64_t vrrGuardUs;
     uint64_t vrrSourcePeriodUs;
     uint64_t vrrAppliedBufferUs, vrrBufferCapUs, vrrGpuReadinessLeadUs;
+    // Timestamp pacing, merged the same way. Zero on other pacing paths.
+    bool timestampActive;
+    uint64_t timestampPacedFrames;
+    uint64_t timestampLateFrames;
+    uint64_t timestampUnpacedFrames;
+    uint64_t timestampSupersededFrames;
+    // Latest state rather than counters
+    bool timestampVblankGrid;
+    // TimestampPacer::DisplayMode; 0 without a compositor probe
+    uint8_t timestampDisplayMode;
+    // Counters of frames shown on, or a refresh after, their planned V-blank
+    uint64_t timestampVblankHits;
+    uint64_t timestampVblankMisses;
+    uint64_t timestampExtraMarginUs;
+    uint64_t timestampBufferUs;
+    uint64_t timestampSourcePeriodUs;
+    int64_t timestampTrimUs;
     uint16_t minHostProcessingLatency;         // low-res from RTP
     uint16_t maxHostProcessingLatency;         // low-res from RTP
     uint32_t totalHostProcessingLatency;       // low-res from RTP
@@ -103,6 +120,9 @@ typedef struct _DECODER_PARAMETERS {
     bool preferVrrRenderer = false;
     int vrrLatencyMode = 0;
     VrrTimingOptions vrrTimingOptions;
+    // Pace to smoothed host timestamps instead of fixed pacing. Never set
+    // together with enableVrr.
+    TimestampPacingOptions timestampPacing;
     bool gamescopeMailbox = false;
     bool gamescopeRepaint = false;
     bool smoothVrrFrameTiming;

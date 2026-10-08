@@ -72,7 +72,7 @@ bool DxVsyncSource::isAsync()
     return false;
 }
 
-void DxVsyncSource::waitForVsync()
+bool DxVsyncSource::waitForVsync()
 {
     NTSTATUS status;
 
@@ -85,7 +85,7 @@ void DxVsyncSource::waitForVsync()
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "GetMonitorInfo() failed: %d",
                          GetLastError());
-            return;
+            return false;
         }
 
         DEVMODEA monitorMode;
@@ -94,7 +94,7 @@ void DxVsyncSource::waitForVsync()
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "EnumDisplaySettings() failed: %d",
                          GetLastError());
-            return;
+            return false;
         }
 
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -115,7 +115,7 @@ void DxVsyncSource::waitForVsync()
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "CreateDC() failed: %d",
                          GetLastError());
-            return;
+            return false;
         }
 
         // Open the new adapter
@@ -126,7 +126,7 @@ void DxVsyncSource::waitForVsync()
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "D3DKMTOpenAdapterFromHdc() failed: %x",
                          status);
-            return;
+            return false;
         }
 
         m_WaitForVblankEventParams.hAdapter = openAdapterParams.hAdapter;
@@ -141,6 +141,7 @@ void DxVsyncSource::waitForVsync()
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "D3DKMTWaitForVerticalBlankEvent() failed: %x",
                      status);
-        return;
+        return false;
     }
+    return true;
 }

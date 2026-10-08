@@ -39,7 +39,7 @@ public:
 
     virtual bool isAsync() override;
 
-    virtual void waitForVsync() override;
+    virtual bool waitForVsync() override;
 
 private:
     Pacer* m_Pacer;

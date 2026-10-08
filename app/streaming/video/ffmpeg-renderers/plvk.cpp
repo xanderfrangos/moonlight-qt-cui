@@ -568,7 +568,10 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
         av_free((void*)vkParams.opt_extensions);
 #endif
 #ifdef Q_OS_LINUX
-    const bool gamescopeTiming = decoderParams->enableVrr && isGamescopeWsiPresentation(SDL_GetCurrentVideoDriver()) &&
+    // VRR records Gamescope's present times for diagnostics. Timestamp pacing
+    // uses them as V-blank times on a fixed-refresh display.
+    const bool gamescopeTiming = (decoderParams->enableVrr || decoderParams->timestampPacing.enabled) &&
+        isGamescopeWsiPresentation(SDL_GetCurrentVideoDriver()) &&
         isExtensionSupportedByPhysicalDevice(device, VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
     if (gamescopeTiming) {
         optionalExtensions.push_back(VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
@@ -620,7 +623,9 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
         if (enabled && timing->initialize(m_Vulkan->device)) {
             m_GamescopeTiming = std::move(timing);
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "Vulkan VRR: Gamescope WSI presentation timing enabled for diagnostics");
+                        decoderParams->enableVrr ?
+                            "Vulkan VRR: Gamescope WSI presentation timing enabled for diagnostics" :
+                            "Timestamp pacing: Gamescope WSI presentation timing enabled for the V-blank grid");
         }
     }
 #endif
@@ -1109,6 +1114,22 @@ void PlVkRenderer::updateUpscalingNeeded()
 
 void PlVkRenderer::selectLegacyPresentMode(PDECODER_PARAMETERS params)
 {
+    // Timestamp pacing chooses which frame each refresh shows, so a newer
+    // frame must replace one still waiting rather than queue behind it. On
+    // Gamescope and Wayland, Mailbox does that without tearing. Gamescope
+    // still decides whether to tear (Allow Tearing), flip on arrival (VRR) or
+    // force FIFO (Steam's frame limiter); the pacer follows those settings.
+    if (params->enableVsync && params->timestampPacing.enabled) {
+        const char* videoDriver = SDL_GetCurrentVideoDriver();
+        if ((isGamescopePresentation(videoDriver) || isWaylandPresentation(videoDriver)) &&
+                isPresentModeSupportedByPhysicalDevice(m_Vulkan->phys_device, VK_PRESENT_MODE_MAILBOX_KHR)) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Timestamp pacing: using Mailbox present mode with V-Sync");
+            m_VkPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+            return;
+        }
+    }
+
     if (params->enableVsync) {
         // FIFO mode improves frame pacing compared with Mailbox, especially for
         // platforms like X11 that lack a VSyncSource implementation for Pacer.
@@ -1700,6 +1721,25 @@ void PlVkRenderer::waitToRender()
     }
 
     acquirePendingSwapchainFrame("pl_render_image() failed during render wait");
+}
+
+bool PlVkRenderer::supportsDisplayEvents()
+{
+#ifdef Q_OS_LINUX
+    return m_GamescopeTiming != nullptr;
+#else
+    return false;
+#endif
+}
+
+void PlVkRenderer::setDisplayEventSink(DisplayEventSink sink)
+{
+#ifdef Q_OS_LINUX
+    // Set before the render thread starts and cleared after it stops
+    m_DisplayEventSink = std::move(sink);
+#else
+    (void)sink;
+#endif
 }
 
 void PlVkRenderer::cleanupRenderContext()
@@ -2903,6 +2943,10 @@ bool PlVkRenderer::renderMappedImage(pl_renderer renderer, const pl_frame& sourc
 void PlVkRenderer::renderFrame(AVFrame *frame)
 {
     pl_frame mappedFrame = {}, targetFrame = {};
+#ifdef Q_OS_LINUX
+    // Declared ahead of the gotos below, which may not skip an initializer
+    bool reportDisplayEvent = false;
+#endif
 
     // If waitToRender() failed to get the next swapchain frame, skip
     // rendering this frame. It probably means the window is occluded.
@@ -2990,6 +3034,12 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
 
     // Submit the frame for display and swap buffers
     m_HasPendingSwapchainFrame = false;
+#ifdef Q_OS_LINUX
+    reportDisplayEvent = m_GamescopeTiming && m_DisplayEventSink;
+    if (reportDisplayEvent) {
+        m_GamescopeTiming->begin(++m_PresentationId);
+    }
+#endif
     if (!submitSwapchainFrame()) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "pl_swapchain_submit_frame() failed");
@@ -3002,6 +3052,18 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
     }
 #if defined(HAS_WAYLAND) && defined(Q_OS_LINUX)
     if (m_GamescopeRepaint && frame && renderSucceeded) m_GamescopeRepaint->request();
+#endif
+#ifdef Q_OS_LINUX
+    if (reportDisplayEvent) {
+        // Gamescope reports a present some time after it happens, so this is
+        // usually an earlier frame's time. Each is still a real display time.
+        VrrPresentFeedback feedback;
+        feedback.presented = true;
+        m_GamescopeTiming->finish(feedback);
+        if (feedback.latchSampleValid) {
+            m_DisplayEventSink(feedback.latchTimeUs, m_GamescopeTiming->refreshCycleUs());
+        }
+    }
 #endif
 
 #ifndef PLVK_USE_EARLY_RENDER_TO_WAIT

@@ -267,7 +267,8 @@ private:
                        bool gamescopeRepaint = false,
                        VrrTimingOptions vrrTimingOptions = {}, int ditheringMode = 0,
                        bool temporalDithering = false, int debandMode = 0,
-                       int ditherGrainMode = 0);
+                       int ditherGrainMode = 0,
+                       TimestampPacingOptions timestampPacing = {});
 
     static
     void clStageStarting(int stage);
@@ -330,6 +331,8 @@ private:
         bool effectiveVsync = false;
         bool enableFramePacing = false;
         bool enableVrr = false;
+        // Pacing to smoothed host timestamps. Never enabled with VRR.
+        TimestampPacingOptions timestampPacing;
         int vrrLatencyMode = 0;
         VrrTimingOptions vrrTimingOptions;
         bool gamescopeMailbox = false;

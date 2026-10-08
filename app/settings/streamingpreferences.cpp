@@ -236,6 +236,21 @@ void StreamingPreferences::reload()
         settings.value("vrrtoleranceus", 0).toInt()
     }.resolved(vrrLatencyMode);
     smoothVrrFrameTiming = settings.value(SER_SMOOTHVRRFRAMETIMING, true).toBool();
+    {
+        const TimestampPacingOptions defaults;
+        m_TimestampPacing = TimestampPacingOptions{
+            settings.value("timestamppacing", defaults.enabled).toBool(),
+            settings.value("timestampsmoothing", defaults.smoothing).toInt(),
+            settings.value("timestamptargetpermille", defaults.targetPerMille).toInt(),
+            settings.value("timestampminbufferms", defaults.minBufferMs).toInt(),
+            settings.value("timestampmaxbufferms", defaults.maxBufferMs).toInt(),
+            settings.value("timestampvsyncmarginus", defaults.vsyncMarginUs).toInt()
+        }.resolved();
+        // The two never run together; timestamp pacing is the newer choice
+        if (m_TimestampPacing.enabled) {
+            enableVrr = false;
+        }
+    }
     highPerformanceGpuPower = settings.value(SER_HIGHPERFORMANCEGPUPOWER, false).toBool();
     traceVrrFrames = settings.value(SER_TRACEVRRFRAMES, false).toBool();
     settings.remove("vrrdiagnosticmode"); // Retired, unpublished timing comparison selector.
@@ -540,6 +555,13 @@ const QVector<StreamingPreferences::PerformanceGraphInfo>& StreamingPreferences:
         { PG_QUEUE_DEPTH, QT_TR_NOOP("Frame queue depth"), PGT_CLIENT, true },
         { PG_RENDERING_TIME, QT_TR_NOOP("Rendering time"), PGT_CLIENT, true },
         { PG_JITTER_DROPS, QT_TR_NOOP("Dropped by client pacer"), PGT_CLIENT, true },
+        { PG_PRESENTATION_LATENESS, QT_TR_NOOP("Lateness vs host timestamps"), PGT_CLIENT, false },
+        { PG_TS_BUFFER, QT_TR_NOOP("Pacing buffer vs lateness"), PGT_CLIENT, false },
+        { PG_TS_SMOOTHNESS, QT_TR_NOOP("Presented smoothness"), PGT_CLIENT, false },
+        { PG_TS_SCHEDULE_ERROR, QT_TR_NOOP("Pacing schedule error"), PGT_CLIENT, false },
+        { PG_TS_CORRECTION, QT_TR_NOOP("Smoothing shift"), PGT_CLIENT, false },
+        { PG_TS_VBLANK, QT_TR_NOOP("V-blank wait"), PGT_CLIENT, false },
+        { PG_TS_RELEASE, QT_TR_NOOP("Release to present"), PGT_CLIENT, false },
         { PG_VRR_SMOOTHNESS, QT_TR_NOOP("VRR cadence smoothness"), PGT_CLIENT, false },
         { PG_AUDIO_BUFFER, QT_TR_NOOP("Audio buffer"), PGT_AUDIO, false },
         { PG_AUDIO_TROUBLE, QT_TR_NOOP("Audio underruns/gaps"), PGT_AUDIO, false },
@@ -609,6 +631,12 @@ void StreamingPreferences::save()
     settings.remove("gamescoperepaint");
     settings.remove("gamescopeforcecomposition");
     settings.setValue(SER_SMOOTHVRRFRAMETIMING, smoothVrrFrameTiming);
+    settings.setValue("timestamppacing", m_TimestampPacing.enabled);
+    settings.setValue("timestampsmoothing", m_TimestampPacing.smoothing);
+    settings.setValue("timestamptargetpermille", m_TimestampPacing.targetPerMille);
+    settings.setValue("timestampminbufferms", m_TimestampPacing.minBufferMs);
+    settings.setValue("timestampmaxbufferms", m_TimestampPacing.maxBufferMs);
+    settings.setValue("timestampvsyncmarginus", m_TimestampPacing.vsyncMarginUs);
     settings.setValue(SER_HIGHPERFORMANCEGPUPOWER, highPerformanceGpuPower);
     settings.setValue(SER_TRACEVRRFRAMES, traceVrrFrames);
     settings.remove("v2queue"); // The interval queue is now the production policy.
@@ -848,6 +876,60 @@ void StreamingPreferences::setVrrHistorySeconds(int value)
     if (value == vrrHistorySeconds()) return;
     m_VrrTimingOptions.historySeconds = value;
     emit vrrTimingChanged();
+}
+
+void StreamingPreferences::setTimestampPacing(bool enabled)
+{
+    if (enabled && enableVrr) {
+        enableVrr = false;
+        emit enableVrrChanged();
+    }
+    if (enabled == m_TimestampPacing.enabled) return;
+    m_TimestampPacing.enabled = enabled;
+    emit timestampPacingChanged();
+}
+
+void StreamingPreferences::setTimestampSmoothing(int value)
+{
+    value = qBound((int)TimestampPacingOptions::SmoothingOff, value, (int)TimestampPacingOptions::SmoothingStrong);
+    if (value == m_TimestampPacing.smoothing) return;
+    m_TimestampPacing.smoothing = value;
+    emit timestampPacingChanged();
+}
+
+void StreamingPreferences::setTimestampTargetPerMille(int value)
+{
+    value = qBound(900, value, 999);
+    if (value == m_TimestampPacing.targetPerMille) return;
+    m_TimestampPacing.targetPerMille = value;
+    emit timestampPacingChanged();
+}
+
+void StreamingPreferences::setTimestampMinBufferMs(int value)
+{
+    value = qBound(0, value, 20);
+    if (value == m_TimestampPacing.minBufferMs) return;
+    m_TimestampPacing.minBufferMs = value;
+    // Keep the range ordered by moving the other end with it
+    m_TimestampPacing.maxBufferMs = qMax(m_TimestampPacing.maxBufferMs, qMax(1, value));
+    emit timestampPacingChanged();
+}
+
+void StreamingPreferences::setTimestampMaxBufferMs(int value)
+{
+    value = qBound(1, value, 50);
+    if (value == m_TimestampPacing.maxBufferMs) return;
+    m_TimestampPacing.maxBufferMs = value;
+    m_TimestampPacing.minBufferMs = qMin(m_TimestampPacing.minBufferMs, value);
+    emit timestampPacingChanged();
+}
+
+void StreamingPreferences::setTimestampVsyncMarginUs(int value)
+{
+    value = ((qBound(250, value, 8000) + 125) / 250) * 250;
+    if (value == m_TimestampPacing.vsyncMarginUs) return;
+    m_TimestampPacing.vsyncMarginUs = value;
+    emit timestampPacingChanged();
 }
 
 void StreamingPreferences::setVrrToleranceUs(int value)

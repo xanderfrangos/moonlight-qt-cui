@@ -33,6 +33,10 @@ unix:!macx:packagesExist(sdl2) {
 
 incomingtiming.file = $$PWD/incomingtiming.pro
 SUBDIRS += incomingtiming
+presentationlateness.file = $$PWD/presentationlateness.pro
+SUBDIRS += presentationlateness
+timestamppacing.file = $$PWD/timestamppacing.pro
+SUBDIRS += timestamppacing
 amddecodepolicy.file = $$PWD/amddecodepolicy.pro
 SUBDIRS += amddecodepolicy
 vrrrenderpolicy.file = $$PWD/vrrrenderpolicy.pro

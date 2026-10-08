@@ -23,6 +23,7 @@
 
 // Header-only; the reassembly deadline callback is installed for every decoder
 #include "video/ffmpeg-renderers/pacer/vrr/receivedeadline.h"
+#include "video/ffmpeg-renderers/pacer/gamescopedisplaystate.h"
 
 #ifdef HAVE_FFMPEG
 #include "video/ffmpeg.h"
@@ -293,6 +294,15 @@ void Session::clSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlag
     if (SDL_PushEvent(&setControllerLEDEvent) <= 0) SDL_free(state);
 }
 
+// Under Gamescope, timestamp pacing needs the Vulkan renderer: it presents
+// with Mailbox and reports Gamescope's present times for the V-blank grid.
+// Linux chooses the renderer through the same preference as VRR, which the
+// startup probe must share so the negotiated color range matches playback.
+static bool timestampPacingPrefersVulkan(bool timestampPacing)
+{
+    return timestampPacing && GamescopeDisplayState::runningUnderGamescope();
+}
+
 bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             StreamingPreferences::RendererSelection renderer,
                             SDL_Window* window, int videoFormat, int width, int height,
@@ -307,7 +317,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             bool gamescopeMailbox, int vrrLatencyMode, bool gamescopeRepaint,
                             VrrTimingOptions vrrTimingOptions,
                             int ditheringMode, bool temporalDithering, int debandMode,
-                            int ditherGrainMode)
+                            int ditherGrainMode, TimestampPacingOptions timestampPacing)
 {
     DECODER_PARAMETERS params = {};
 
@@ -330,6 +340,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.preferVrrRenderer = preferVrrRenderer || enableVrr;
     params.vrrLatencyMode = vrrLatencyMode;
     params.vrrTimingOptions = vrrTimingOptions;
+    params.timestampPacing = timestampPacing;
     params.gamescopeMailbox = gamescopeMailbox;
     params.gamescopeRepaint = gamescopeRepaint;
     params.smoothVrrFrameTiming = smoothVrrFrameTiming;
@@ -355,7 +366,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                 enableVrr ? "enabled" : "disabled");
     if (params.preferVrrRenderer && !enableVrr) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "VRR renderer policy active for probe; VRR presentation disabled");
+                    "VRR-capable renderer policy active; VRR presentation disabled");
     }
 
 #ifdef HAVE_SLVIDEO
@@ -656,7 +667,8 @@ bool Session::populateDecoderProperties(SDL_Window* window)
                        m_StreamConfig.fps,
                        false, false, true, decoder,
                        false,
-                       m_PresentationSettings.enableVrr,
+                       m_PresentationSettings.enableVrr ||
+                           timestampPacingPrefersVulkan(m_PresentationSettings.timestampPacing.enabled),
                        m_PresentationSettings.fsr1Upscaling,
                        m_PresentationSettings.fsr1RcasSharpness,
                        m_PresentationSettings.ls1Upscaling,
@@ -746,7 +758,15 @@ Session::~Session()
 
 void Session::snapshotPresentationSettings(SDL_Window* window)
 {
-    const bool requestedVrr = m_Preferences->enableVrr;
+    // Timestamp pacing and VRR are mutually exclusive, and timestamp pacing
+    // makes VRR unavailable. Its options are fixed for the session.
+    m_PresentationSettings.timestampPacing = m_Preferences->timestampPacingOptions().resolved();
+    const bool timestampPacing = m_PresentationSettings.timestampPacing.enabled;
+    if (timestampPacing && m_Preferences->enableVrr) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "VRR unavailable: timestamp pacing is enabled");
+    }
+    const bool requestedVrr = m_Preferences->enableVrr && !timestampPacing;
     m_PresentationSettings.decoderSelection = m_Preferences->videoDecoderSelection;
     m_PresentationSettings.rendererSelection = m_Preferences->rendererSelection;
     m_PresentationSettings.effectiveWindowMode = m_Preferences->windowMode;
@@ -777,8 +797,10 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
         m_PresentationSettings.effectiveVsync = false;
     }
 
+    // Timestamp pacing replaces fixed frame pacing, with or without V-Sync
     m_PresentationSettings.enableFramePacing = m_PresentationSettings.effectiveVsync &&
-                                               m_Preferences->framePacing;
+                                               m_Preferences->framePacing &&
+                                               !timestampPacing;
     m_PresentationSettings.enableVrr = false;
     m_PresentationSettings.vrrLatencyMode = m_Preferences->vrrLatencyMode;
     m_PresentationSettings.vrrTimingOptions = m_Preferences->vrrTimingOptions();
@@ -846,8 +868,9 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
                      !WMUtils::isRunningDesktopEnvironment();
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "Presentation snapshot: V-sync %s, VRR requested %s, VRR enabled %s, refresh %d Hz, window mode %d",
+                "Presentation snapshot: V-sync %s, timestamp pacing %s, VRR requested %s, VRR enabled %s, refresh %d Hz, window mode %d",
                 m_PresentationSettings.effectiveVsync ? "enabled" : "disabled",
+                timestampPacing ? "enabled" : "disabled",
                 requestedVrr ? "yes" : "no",
                 m_PresentationSettings.enableVrr ? "yes" : "no",
                 m_PresentationSettings.refreshRate,
@@ -960,7 +983,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
     // presentation needs native fullscreen, including on an external display;
     // the saved window preference or notch override must not select the older
     // borderless path for a requested VRR session.
-    if (m_Preferences->enableVrr && m_Preferences->enableVsync) {
+    if (m_Preferences->enableVrr && m_Preferences->enableVsync && !m_Preferences->timestampPacing()) {
         SDL_SetHint(SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES, "1");
     }
 #endif
@@ -3004,7 +3027,8 @@ void Session::exec()
                                false,
                                s_ActiveSession->m_VideoDecoder,
                                m_PresentationSettings.enableVrr,
-                               m_PresentationSettings.enableVrr,
+                               m_PresentationSettings.enableVrr ||
+                                   timestampPacingPrefersVulkan(m_PresentationSettings.timestampPacing.enabled),
                                m_PresentationSettings.fsr1Upscaling,
                                m_PresentationSettings.fsr1RcasSharpness,
                                m_PresentationSettings.ls1Upscaling,
@@ -3020,7 +3044,8 @@ void Session::exec()
                                m_PresentationSettings.ditheringMode,
                                m_PresentationSettings.temporalDithering,
                                m_PresentationSettings.debandMode,
-                               m_PresentationSettings.ditherGrainMode)) {
+                               m_PresentationSettings.ditherGrainMode,
+                               m_PresentationSettings.timestampPacing)) {
                 SDL_UnlockMutex(m_DecoderLock);
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                              "Failed to recreate decoder after reset");

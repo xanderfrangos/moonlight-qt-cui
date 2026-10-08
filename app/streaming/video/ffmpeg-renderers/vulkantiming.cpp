@@ -85,6 +85,7 @@ bool VulkanTiming::initialize(VkDevice device)
     if (!source) return false;
     m_GetTimings = reinterpret_cast<PFN_vkGetPastPresentationTimingGOOGLE>(source(device, "vkGetPastPresentationTimingGOOGLE"));
     if (!m_GetTimings) return false;
+    m_GetRefreshCycle = reinterpret_cast<PFN_vkGetRefreshCycleDurationGOOGLE>(source(device, "vkGetRefreshCycleDurationGOOGLE"));
     m_Device = device;
     std::lock_guard<std::mutex> lock(dispatchLock);
     observers[device] = this;
@@ -113,6 +114,21 @@ VKAPI_ATTR VkResult VKAPI_CALL VulkanTiming::present(VkQueue queue, const VkPres
     }
     auto next = reinterpret_cast<PFN_vkQueuePresentKHR>(deviceLoader.load()(device, "vkQueuePresentKHR"));
     return observer ? observer->presentFrame(next, queue, info) : next(queue, info);
+}
+
+uint64_t VulkanTiming::refreshCycleUs()
+{
+    const uint64_t now = LiGetMicroseconds();
+    if (!m_GetRefreshCycle || !m_Swapchain ||
+            (m_RefreshCycleQueriedUs && now - m_RefreshCycleQueriedUs < 1000000)) {
+        return m_RefreshCycleUs;
+    }
+    m_RefreshCycleQueriedUs = now;
+    VkRefreshCycleDurationGOOGLE cycle{};
+    if (m_GetRefreshCycle(m_Device, m_Swapchain, &cycle) == VK_SUCCESS && cycle.refreshDuration != 0) {
+        m_RefreshCycleUs = cycle.refreshDuration / 1000;
+    }
+    return m_RefreshCycleUs;
 }
 
 void VulkanTiming::reset()

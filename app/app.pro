@@ -226,6 +226,8 @@ SOURCES += \
     streaming/video/overlaymanager.cpp \
     streaming/video/overlaypainter.cpp \
     streaming/video/statsgraphs.cpp \
+    streaming/video/pacinglog.cpp \
+    streaming/video/ffmpeg-renderers/pacer/gamescopedisplaystate.cpp \
     streaming/video/videopacketsize.cpp \
     streaming/vrrratepolicy.cpp \
     streaming/video/pyrowave/pyrowavecalibrator.cpp \
@@ -264,6 +266,7 @@ HEADERS += \
     cli/startstream.h \
     settings/streamingpreferences.h \
     settings/vrrtimingoptions.h \
+    settings/timestamppacingoptions.h \
     diagnostics/diagnosticcapture.h \
     diagnostics/gputrace.h \
     diagnostics/diagnosticzip.h \
@@ -300,6 +303,8 @@ HEADERS += \
     streaming/video/overlaymanager.h \
     streaming/video/overlaypainter.h \
     streaming/video/statsgraphs.h \
+    streaming/video/pacinglog.h \
+    streaming/video/ffmpeg-renderers/pacer/gamescopedisplaystate.h \
     streaming/video/videopacketsize.h \
     streaming/video/clientpacingwarning.h \
     backend/systemproperties.h \
@@ -318,12 +323,14 @@ ffmpeg {
         streaming/video/ffmpeg-renderers/swframemapper.cpp \
         streaming/video/ffmpeg-renderers/pacer/pacer.cpp \
         streaming/video/ffmpeg-renderers/pacer/vrrpacingworker.cpp \
+        streaming/video/ffmpeg-renderers/pacer/timestamppacer.cpp \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtimingcontroller.cpp \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtargetwaiter.cpp
 
     HEADERS += \
         streaming/video/ffmpeg.h \
         streaming/video/incomingframetiming.h \
+        streaming/video/presentationlateness.h \
         streaming/video/ffmpeg-renderers/renderer.h \
         streaming/video/ffmpeg-renderers/genhwaccel.h \
         streaming/video/ffmpeg-renderers/sdlvid.h \
@@ -331,6 +338,8 @@ ffmpeg {
         streaming/video/ffmpeg-renderers/pacer/pacer.h \
         streaming/video/ffmpeg-renderers/pacer/pacertelemetry.h \
         streaming/video/ffmpeg-renderers/pacer/vrrpacingworker.h \
+        streaming/video/ffmpeg-renderers/pacer/timestamppacer.h \
+        streaming/video/ffmpeg-renderers/pacer/timestamppacingpolicy.h \
         streaming/video/ffmpeg-renderers/ivrrframepresenter.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtypes.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/presentationtiming.h \

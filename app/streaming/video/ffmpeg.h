@@ -162,6 +162,7 @@ private:
     // Decoder thread only, like the decoded-frame counters it sits beside
     uint64_t m_StatsGraphLastDecodeUs;
     Overlay::StatsGraphSyncMode m_StatsGraphSyncMode;
+    bool m_StatsGraphTimestampPacing = false;
     // Fixed once the connection has negotiated it, so it's worked out when
     // sampling starts rather than on every sample.
     uint32_t m_StatsGraphPacketWireBytes;

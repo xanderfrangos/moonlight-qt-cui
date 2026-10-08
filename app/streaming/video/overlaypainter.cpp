@@ -477,6 +477,12 @@ struct GraphSpec {
     float StatsGraphPoint::* secondaryField = nullptr;
     const char* secondaryName = nullptr;
     QColor secondaryColor;
+    // Values can be negative. The axis runs equally either side of zero,
+    // which sits on the midpoint gridline.
+    bool symmetric = false;
+    // The secondary series is a count shown only in the label, summed over
+    // the visible window, rather than drawn
+    bool secondaryWindowSum = false;
 };
 
 // Rounds a full-scale value up to the next 1/2/5 x 10^n so the axis label reads
@@ -510,6 +516,7 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
     // up in the band is never clipped off the plot.
     qreal scale = qMax(spec.minScale, target);
     qreal windowMin = 0, windowMax = 0;
+    const bool drawSecondary = spec.secondaryField && !spec.secondaryWindowSum;
     for (size_t i = 0; i < points.size(); i++) {
         const qreal low = spec.minField ? (qreal)(points[i].*spec.minField)
                                         : (qreal)(points[i].*spec.field);
@@ -521,9 +528,10 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
         if (i == 0 || high > windowMax) {
             windowMax = high;
         }
-        scale = qMax(scale, high);
-        if (spec.secondaryField) {
-            scale = qMax(scale, (qreal)(points[i].*spec.secondaryField));
+        scale = qMax(scale, spec.symmetric ? qMax(qAbs(low), qAbs(high)) : high);
+        if (drawSecondary) {
+            const qreal secondary = points[i].*spec.secondaryField;
+            scale = qMax(scale, spec.symmetric ? qAbs(secondary) : secondary);
         }
     }
     // All visible frametime graphs share one close view of their combined
@@ -536,6 +544,9 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
     }
     else {
         scale = niceCeil(scale);
+        if (spec.symmetric) {
+            baseline = -scale;
+        }
     }
     const qreal plotRange = scale - baseline;
 
@@ -597,12 +608,14 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
             painter.drawPolygon(band);
         }
         else {
-            // Nothing to shade between, so fill down to the baseline instead.
+            // Nothing to shade between, so fill down to the baseline instead,
+            // or to zero on a symmetric axis.
             QColor fill = spec.color;
             fill.setAlpha(0x4D);
+            const qreal fillY = spec.symmetric ? midY : plotRect.bottom();
             QPolygonF area = line;
-            area.append(QPointF(line.last().x(), plotRect.bottom()));
-            area.append(QPointF(line.first().x(), plotRect.bottom()));
+            area.append(QPointF(line.last().x(), fillY));
+            area.append(QPointF(line.first().x(), fillY));
 
             painter.setPen(Qt::NoPen);
             painter.setBrush(fill);
@@ -613,7 +626,7 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
         painter.setPen(QPen(spec.color, 1.5));
         painter.drawPolyline(line);
 
-        if (spec.secondaryField) {
+        if (drawSecondary) {
             QPolygonF secondaryLine;
             secondaryLine.reserve((int)points.size());
             for (size_t i = 0; i < points.size(); i++) {
@@ -670,6 +683,9 @@ QStringList streamInfoChips(const StatsGraphStreamInfo& info)
     }
     else if (info.syncMode == StatsGraphSyncMode::VSync) {
         chips.append(QStringLiteral("V-Sync"));
+    }
+    if (info.timestampPacing) {
+        chips.append(QStringLiteral("Timestamp pacing"));
     }
     if (info.videoFormat != 0) {
         chips.append(QString::fromUtf8(codecName(info.videoFormat)));
@@ -758,6 +774,45 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
         { StreamingPreferences::PG_RENDERING_TIME, &StatsGraphPoint::renderingTimeMs,
           &StatsGraphPoint::renderingTimeMinMs, &StatsGraphPoint::renderingTimeMaxMs,
           QColor(0xD4, 0xE1, 0x57), " ms", 1, 10 },
+        // Fixed pacing only. The spread's top edge is the buffer a pacer
+        // following host timestamps would have needed in that interval.
+        { StreamingPreferences::PG_PRESENTATION_LATENESS, &StatsGraphPoint::presentationLatenessMs,
+          &StatsGraphPoint::presentationLatenessMinMs, &StatsGraphPoint::presentationLatenessMaxMs,
+          QColor(0xFF, 0xCA, 0x28), " ms", 1, 5 },
+
+        // Opt-in, timestamp pacing only. Lateness poking above the buffer
+        // line is a frame ready after its target.
+        { StreamingPreferences::PG_TS_BUFFER, &StatsGraphPoint::timestampLatenessMs,
+          &StatsGraphPoint::timestampLatenessMinMs, &StatsGraphPoint::timestampLatenessMaxMs,
+          QColor(0xFF, 0x8A, 0x65), " ms", 1, 5, false,
+          &StatsGraphPoint::timestampBufferMs, "buffer", QColor(0xFF, 0xCC, 0xBC) },
+        // What the viewer sees against what the host's raw timestamps would
+        // have shown: the gap is what smoothing buys
+        { StreamingPreferences::PG_TS_SMOOTHNESS, &StatsGraphPoint::presentedJerkMs,
+          &StatsGraphPoint::presentedJerkMinMs, &StatsGraphPoint::presentedJerkMaxMs,
+          QColor(0x66, 0xBB, 0x6A), " ms", 2, 2, false,
+          &StatsGraphPoint::timestampHostJerkMs, "host", QColor(0xC8, 0xE6, 0xC9) },
+        // Positive is late
+        { StreamingPreferences::PG_TS_SCHEDULE_ERROR, &StatsGraphPoint::timestampScheduleErrorMs,
+          &StatsGraphPoint::timestampScheduleErrorMinMs, &StatsGraphPoint::timestampScheduleErrorMaxMs,
+          QColor(0xEF, 0x9A, 0x9A), " ms", 2, 1, false,
+          nullptr, nullptr, QColor(), true },
+        // How far smoothing moved frames from their raw timestamps. A
+        // re-anchor snaps back to the raw timestamp, so it is counted instead.
+        { StreamingPreferences::PG_TS_CORRECTION, &StatsGraphPoint::timestampCorrectionMs,
+          &StatsGraphPoint::timestampCorrectionMinMs, &StatsGraphPoint::timestampCorrectionMaxMs,
+          QColor(0x4D, 0xD0, 0xE1), " ms", 2, 2, false,
+          &StatsGraphPoint::timestampReanchors, "re-anchors", QColor(0xB2, 0xEB, 0xF2), true, true },
+        // Should sit near half a refresh. The trim keeps it there when the
+        // stream rate locks to the refresh rate.
+        { StreamingPreferences::PG_TS_VBLANK, &StatsGraphPoint::timestampVblankWaitMs,
+          &StatsGraphPoint::timestampVblankWaitMinMs, &StatsGraphPoint::timestampVblankWaitMaxMs,
+          QColor(0x95, 0x75, 0xCD), " ms", 1, 10, false,
+          &StatsGraphPoint::timestampTrimMs, "trim", QColor(0xD1, 0xC4, 0xE9), true },
+        { StreamingPreferences::PG_TS_RELEASE, &StatsGraphPoint::timestampReleaseToPresentMs,
+          &StatsGraphPoint::timestampReleaseToPresentMinMs, &StatsGraphPoint::timestampReleaseToPresentMaxMs,
+          QColor(0xA1, 0x88, 0x7F), " ms", 2, 2, false,
+          &StatsGraphPoint::timestampRenderLeadMs, "lead", QColor(0xD7, 0xCC, 0xC8) },
 
         // Opt-in scores. Always drawn against the full 0-100% range.
         { StreamingPreferences::PG_INCOMING_SMOOTHNESS, &StatsGraphPoint::incomingSmoothness,
@@ -1019,10 +1074,23 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
                                    QFontMetricsF(scaleFont).horizontalAdvance(rateText));
             }
             else if (!points.empty() && spec.secondaryField) {
-                // Named in its own line colour, which doubles as the legend
-                const QString secondaryText = QStringLiteral("  (%1 %2)")
-                        .arg(points.back().*spec.secondaryField, 0, 'f', spec.decimals)
-                        .arg(QString::fromUtf8(spec.secondaryName));
+                // Named in its own line colour, which doubles as the legend.
+                // A count is totalled over the window instead.
+                QString secondaryText;
+                if (spec.secondaryWindowSum) {
+                    qreal total = 0;
+                    for (const StatsGraphPoint& point : points) {
+                        total += point.*spec.secondaryField;
+                    }
+                    secondaryText = QStringLiteral("  (%1 %2)")
+                            .arg(qRound(total))
+                            .arg(QString::fromUtf8(spec.secondaryName));
+                }
+                else {
+                    secondaryText = QStringLiteral("  (%1 %2)")
+                            .arg(points.back().*spec.secondaryField, 0, 'f', spec.decimals)
+                            .arg(QString::fromUtf8(spec.secondaryName));
+                }
 
                 painter.setFont(scaleFont);
                 painter.setPen(spec.secondaryColor);
@@ -1031,12 +1099,17 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
                                    QFontMetricsF(scaleFont).horizontalAdvance(secondaryText));
             }
 
+            // A signed value too small to show reads as zero, not "-0.00"
+            qreal value = points.empty() ? 0 : (qreal)(points.back().*spec.field);
+            if (qAbs(value) < 0.5 * std::pow(10.0, -spec.decimals)) {
+                value = 0;
+            }
             painter.setFont(valueFont);
             painter.setPen(points.empty() ? palette.secondaryText : k_GraphValueColor);
             painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter,
                              points.empty() ? QStringLiteral("--")
                                             : QStringLiteral("%1%2")
-                                                .arg(points.back().*spec.field, 0, 'f', spec.decimals)
+                                                .arg(value, 0, 'f', spec.decimals)
                                                 .arg(QString::fromUtf8(spec.unit)));
 
             painter.setFont(scaleFont);

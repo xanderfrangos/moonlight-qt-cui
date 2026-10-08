@@ -3,6 +3,7 @@
 #include "SDL_compat.h"
 
 #include <array>
+#include <functional>
 
 #include "streaming/video/decoder.h"
 #include "streaming/video/overlaymanager.h"
@@ -190,6 +191,20 @@ public:
 
     virtual InitFailureReason getInitFailureReason() {
         return m_InitFailureReason;
+    }
+
+    // When frames presented through renderFrame() were actually shown, on the
+    // LiGetMicroseconds() clock, with the display's refresh period when known
+    // (zero otherwise). Pacers use these to place frames on the refresh grid
+    // where no V-sync source exists. Called on the rendering thread.
+    using DisplayEventSink = std::function<void(uint64_t displayUs, uint64_t refreshPeriodUs)>;
+
+    virtual bool supportsDisplayEvents() {
+        return false;
+    }
+
+    // Passing an empty sink stops the events
+    virtual void setDisplayEventSink(DisplayEventSink) {
     }
 
     // Called for threaded renderers to allow them to wait prior to us latching

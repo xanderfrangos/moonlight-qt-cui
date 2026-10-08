@@ -4573,6 +4573,196 @@ Each graph auto-scales to the window's maximum, rounded up to the next
 amplify noise. These are the same measurements the text overlay reports as
 running averages; the graphs add time resolution, not new instrumentation.
 
+The opt-in "Lateness vs host timestamps" graph (2026-10-07,
+`PG_PRESENTATION_LATENESS`) is the exception: it is new instrumentation, and
+only fixed pacing produces it. The settings page hides it while V-sync and VRR
+are both requested, and the session drops it while VRR Pacing Mode is active.
+`Pacer::renderFrame()` passes each presented frame's RTP timestamp, which the
+decoder stores in `frame->pts`, and the presentation-call return time to
+`PresentationLateness` ([presentationlateness.h](app/streaming/video/presentationlateness.h)).
+Lateness is that frame's `presentUs - rtpUs` minus the smallest such offset
+in the last 3 seconds (twelve 250 ms buckets), so the fastest recent frame
+reads zero and host/client clock drift is followed. RTP wraps are unwrapped. A
+repeated or backwards timestamp, or a step of more than 1 s in the offset
+between consecutive frames, starts a new baseline. The graph plots the
+per-interval mean, with min and max as the spread. The spread's top edge
+approximates the playout delay a timestamp-following pacer would have needed
+in that interval (see [the proposal](docs/timestamp-pacing-proposal.md)). It
+is a CPU presentation-call boundary, not scanout, and frames the pacer dropped
+are absent. `tst_presentationlateness` covers cadence, delay, baseline expiry,
+wrap, discontinuities and drift.
+
+### Timestamp pacing (2026-10-07)
+
+An opt-in fourth presentation mode, built from
+[the proposal](docs/timestamp-pacing-proposal.md). It is not yet validated on
+a live stream.
+
+**Selection.** The `timestamppacing` preference (Settings checkbox
+"Timestamp pacing", `--timestamp-pacing`) is snapshotted per session in
+`PresentationSettings::timestampPacing`.
+- VRR Pacing Mode and timestamp pacing are mutually exclusive. Enabling
+  timestamp pacing clears `enableVrr`, and the VRR checkbox is disabled while
+  it is on. The session also treats VRR as not requested when both are set
+  (an explicit `--vrr` on the command line clears timestamp pacing instead).
+- It replaces fixed frame pacing (`enableFramePacing` is false) and works with
+  V-Sync on or off.
+- `DECODER_PARAMETERS::timestampPacing` reaches `Pacer::initialize()`, which
+  creates a `TimestampPacer` instead of using `handleVsync()`.
+- The decoder then builds `PacedFrame`s as it does for VRR, adding the host's
+  per-frame processing latency (`setHostLatencyUs`).
+
+**Policy** ([timestamppacingpolicy.h](app/streaming/video/ffmpeg-renderers/pacer/timestamppacingpolicy.h)).
+Pure and header-only; tested by `tst_timestamppacing`.
+- `RepeatDetector`: a frame with zero host latency, from a host that has
+  reported nonzero latency recently, is a host repeat. Repeats are backdated by
+  about one timeout, so they are shown on arrival and never learned from.
+- `Timeline`: a two-gain phase-locked loop on the RTP timeline, counting
+  frames by host frame number. Gains are phase/frequency 0.25/0.01 (light),
+  0.1/0.002 (standard), 0.05/0.001 (strong); "off" follows raw timestamps.
+  - An error over max(8 ms, half a period) re-anchors to the raw timestamp.
+  - The period is replaced outright only when the last nine single-frame gaps
+    all agree to within 10% on a rate more than 15% away.
+  - Otherwise, after a re-anchor whose gap matches the long-run period (0.2%
+    per frame EMA) to within 10%, the loop snaps back to that period. This
+    stops brief game slowdowns from causing a run of re-anchors afterwards.
+- `PlayoutBuffer`: lateness is `(ready - smoothed source time)` minus its
+  3 s rolling minimum (twelve 250 ms buckets), which also follows clock drift.
+  - The delay is the configured percentile of 3 s of lateness plus 0.5 ms,
+    clamped to the configured minimum and maximum.
+  - It grows at once and releases at 0.5 ms/s.
+  - A frame's target uses the delay in force before it arrived.
+- `VblankGrid`: estimates V-blank phase and period from V-sync source wakeups.
+  The earliest wakeup sets the phase; the period may move ±3% from nominal.
+  The grid is stale 250 ms after the last real V-blank.
+- `PhaseLock`: active when the source period is within 2% of a whole multiple
+  of the refresh period. It trims targets (±half a refresh) to sit mid-interval,
+  so drift costs one deliberate repeat or skip per boundary crossing.
+
+**Execution** ([timestamppacer.cpp](app/streaming/video/ffmpeg-renderers/pacer/timestamppacer.cpp)).
+The decoder thread schedules each frame into a queue of at most three; a full
+queue evicts the oldest. The pacing thread waits on a condition variable, then
+uses `VrrTargetWaiter` for the last 2 ms, and hands frames to the existing
+render queue, so every renderer works unchanged.
+- **V-Sync with a V-sync source:** the frame is released at the first V-blank
+  at or after (target + trim), minus the learned release-to-present time and
+  the configured margin (default 2 ms).
+  - Frames assigned to the same V-blank are reduced to the newest (mailbox).
+  - D3D11's non-VRR `Present(0)` already replaces a pending frame at the next
+    V-blank.
+  - Renderers with `RENDERER_ATTRIBUTE_FORCE_PACING` (exclusive fullscreen)
+    flip at once, so for them the frame is released at the V-blank itself.
+- **V-Sync off, or no V-sync source:** frames are released at target minus the
+  learned release-to-present time.
+- The V-sync thread passes only real V-blanks to the grid.
+  `IVsyncSource::waitForVsync()` now reports success, and an async source's
+  100 ms timeout is ignored.
+- Release-to-present time is measured from release to `renderFrame()`
+  returning. It rises quickly and falls slowly, within 0.2–8 ms.
+
+**Gamescope (Linux, 2026-10-07).** In Game Mode, Qt and SDL normally run on
+Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
+(`GAMESCOPE_WAYLAND_DISPLAY` set), timestamp pacing adapts as follows:
+- **Renderer:** it prefers the Vulkan renderer, through the same
+  `preferVrrRenderer` path as VRR, in both the startup probe and playback.
+  This keeps the negotiated color range consistent.
+- **Present mode:** with V-Sync, `PlVkRenderer::selectLegacyPresentMode()`
+  picks Mailbox on Gamescope or native Wayland instead of FIFO, so a newer
+  frame replaces one still waiting. Gamescope treats both Immediate and
+  Mailbox as "async" (`wlserver_surface_is_async`). Its own settings then
+  decide presentation:
+  - **Allow Tearing:** async flips that tear.
+  - **VRR in use:** a flip on arrival (`adaptive_sync_uncapped`).
+  - **Otherwise:** the newest commit at each refresh.
+  - **Steam's frame limiter:** forces FIFO through the WSI layer regardless,
+    `GAMESCOPE_WSI_FRAME_LIMITER_AWARE` or not.
+- **Present times:** with the Gamescope WSI layer (`ENABLE_GAMESCOPE_WSI=1`),
+  `VulkanTiming` is enabled for timestamp pacing as well as VRR. The fixed
+  path's `renderFrame()` arms it around each submit. Gamescope's actual
+  present times (`VK_GOOGLE_display_timing`) reach the pacer through
+  `IFFmpegRenderer::setDisplayEventSink()`, together with the compositor's
+  refresh period (`vkGetRefreshCycleDurationGOOGLE`, queried at most once a
+  second). These times build the V-blank grid when V-Sync is on and no
+  V-sync source exists. The grid ignores repeated or slightly late reports.
+- **Display-mode probe:**
+  [gamescopedisplaystate.cpp](app/streaming/video/ffmpeg-renderers/pacer/gamescopedisplaystate.cpp)
+  opens a private Xlib connection to `DISPLAY` and reads root-window
+  properties. The pacing thread polls it every 250 ms with its lock released.
+  Precedence:
+  1. `GAMESCOPE_FPS_LIMIT` nonzero: frame limited (FIFO).
+  2. `GAMESCOPE_VRR_FEEDBACK`: VRR.
+  3. `GAMESCOPE_ALLOW_TEARING`: tearing.
+  4. Otherwise: fixed refresh.
+- **Pacing per mode:** only fixed refresh (or no probe) uses the grid; the
+  other modes present at target minus render lead. A mode change resets the
+  grid, phase lock and release records, and logs. Frame limited also warns,
+  because FIFO queues frames.
+- **Missed V-blank detection:** each grid release records its planned
+  V-blank. Each reported display time is matched to the release planned for
+  the nearest V-blank at or before it (within −1.5 to +0.5 refresh).
+  - Shown more than half a refresh late is a miss: it adds 0.5 ms to the
+    submit margin, up to 6 ms.
+  - After 5 s without a miss, the margin releases 0.25 ms.
+  - The text overlay shows the mode, the miss rate and the added margin.
+- **Not covered:** the Moonlight-side VRR request (`clientVrrRequested`) is
+  unchanged. EGL renderers and Gamescope sessions without the WSI layer get
+  no grid, and fall back to presenting at target.
+- **Validation:** none of this has run on SteamOS. It has been compiled for
+  Windows and for Linux through the WSL AppImage build.
+
+**Telemetry.** The text overlay shows a "Timestamp pacing" line: buffer, share
+of paced frames ready after their target, superseded frames, frames shown on
+arrival, and the V-blank grid's trim. The graphs card shows a "Timestamp
+pacing" chip. The pacing log (below) gains `scheduled` rows with target,
+buffer, lateness and repeat flag, plus two new drop reasons.
+
+Six opt-in stats graphs (bits 19–24) need timestamp pacing to be active. The
+settings page hides them while it is off, and the session drops them
+otherwise. "V-blank wait" is also dropped when there is no V-sync source.
+- **Pacing buffer vs lateness:** per-frame lateness against the buffer's
+  baseline (band), with the current buffer as a line. Lateness above the line
+  is a late frame.
+- **Presented smoothness:** change in presented interval from the previous
+  one (band; chain broken by gaps over 50 ms). A second line shows the same
+  measure on the host's raw timestamps for consecutive frames.
+- **Pacing schedule error:** present return minus the planned release plus
+  the learned release-to-present time. Signed; positive is late.
+- **Smoothing shift:** smoothed minus raw source time (signed), with
+  re-anchors totalled over the window in the label.
+- **V-blank wait:** assigned V-blank minus target (signed), with the phase
+  trim as a line.
+- **Release to present:** release to `renderFrame()` return, with the learned
+  lead as a line.
+
+The pacer telemetry accumulates each as a signed `PacerAccumulator` per
+100 ms sample. Buffer, trim and lead are state, carried across samples.
+Signed graphs use a symmetric axis centred on the midpoint gridline
+(`GraphSpec::symmetric`). A label-only window total uses
+`GraphSpec::secondaryWindowSum`. Presented smoothness is computed for every
+pacing mode but shown only with timestamp pacing.
+
+**Evidence and limits.**
+- `tst_timestamppacing` covers stamp-noise smoothing, buffer growth, release
+  and bounds, repeats, rate changes, recovery from a slowdown, RTP wrap and
+  restart, the V-blank grid and phase-lock behaviour.
+- Replaying the 2026-10-07 pacing log (110 FPS, frame pacing off) through the
+  C++ policy at Standard/99%:
+  - 0.69% of consecutive intervals change by over 2 ms, against 30.4% without
+    smoothing; jump p99 is 1.2 ms;
+  - 8.1 ms mean delay over readiness, and 0.64% of frames ready after target.
+- These are present-call times, not scanout. The V-blank path has no capture
+  yet and has only been checked against synthetic grids.
+
+Temporary per-frame logging for the same proposal (2026-10-07,
+[pacinglog.h](app/streaming/video/pacinglog.h)): with
+`MOONLIGHT_PACING_LOG=1`, each decoder instance writes
+`%TEMP%\moonlight-pacing-<time>.csv`. It has `decoded` rows (frame number,
+RTP, frame type, size, host latency, receive/reassembly/decode timestamps) in
+every pacing mode. The fixed path adds `presented`, `dropped` (with the drop
+site) and `vsync` rows. Producers only append a record under a mutex; a writer
+thread formats and writes every 250 ms. It is meant to be removed once the
+timestamp-pacing model exists.
+
 Overlay delivery keeps GPU work and waiting off the frame preparation and
 presentation threads (2026-09-26), because the graphs republish an overlay ten
 times a second. In the libplacebo renderer, the overlay worker creates or

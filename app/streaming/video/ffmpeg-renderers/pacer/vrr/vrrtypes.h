@@ -194,6 +194,19 @@ public:
         return queueUs - (std::min)(queueUs, m_DecodeHoldUs);
     }
 
+    // Host-reported capture-to-send time. Zero means the host reported none,
+    // which hosts that do report it use for frames re-sent without a new
+    // capture.
+    void setHostLatencyUs(uint32_t hostLatencyUs)
+    {
+        m_HostLatencyUs = hostLatencyUs;
+    }
+
+    uint32_t hostLatencyUs() const
+    {
+        return m_HostLatencyUs;
+    }
+
     void setDecodeBoundary(uint64_t decodeBoundary)
     {
         m_DecodeBoundary = decodeBoundary;
@@ -225,4 +238,5 @@ private:
     uint64_t m_DecodeSubmitUs = 0;
     uint64_t m_DecodeHoldUs = 0;
     uint64_t m_DecodeBoundary = 0;
+    uint32_t m_HostLatencyUs = 0;
 };

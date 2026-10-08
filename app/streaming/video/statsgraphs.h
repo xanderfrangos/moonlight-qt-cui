@@ -71,6 +71,8 @@ struct StatsGraphStreamInfo {
     // What the pacer actually runs, which is fixed V-sync when VRR was
     // requested but isn't available
     StatsGraphSyncMode syncMode = StatsGraphSyncMode::Off;
+    // Frames are paced to their host timestamps
+    bool timestampPacing = false;
 };
 
 // Cumulative counters read once per sampling interval. The graphs plot the
@@ -111,6 +113,27 @@ struct StatsGraphCounters {
     StatsGraphAccumulator decodingFrametime;
     StatsGraphAccumulator decodingTime;
     StatsGraphAccumulator renderingTime;
+    // How late each presented frame was against the host's RTP timeline,
+    // measured from the fastest recent frame. Fixed pacing only.
+    StatsGraphAccumulator presentationLateness;
+    // Change in the presented frame interval from the previous one
+    StatsGraphAccumulator presentedJerk;
+
+    // Timestamp pacing; see PacerFrametimeStats. Signed where noted.
+    StatsGraphAccumulator timestampLateness;
+    StatsGraphAccumulator timestampHostJerk;
+    // Smoothed minus raw host timestamp (signed)
+    StatsGraphAccumulator timestampCorrection;
+    float timestampReanchors = 0;
+    // Target to assigned V-blank (signed)
+    StatsGraphAccumulator timestampVblankWait;
+    // Present return minus plan (signed)
+    StatsGraphAccumulator timestampScheduleError;
+    StatsGraphAccumulator timestampReleaseToPresent;
+    bool timestampStateValid = false;
+    float timestampBufferMs = 0;
+    float timestampTrimMs = 0;
+    float timestampRenderLeadMs = 0;
 
     // Audio, from the session's AudioStats. The accumulators hold one value
     // per audio device request, in milliseconds: the audio left buffered
@@ -168,6 +191,32 @@ struct StatsGraphPoint {
     float renderingTimeMs = 0;
     float renderingTimeMinMs = 0;
     float renderingTimeMaxMs = 0;
+    float presentationLatenessMs = 0;
+    float presentationLatenessMinMs = 0;
+    float presentationLatenessMaxMs = 0;
+    float timestampLatenessMs = 0;
+    float timestampLatenessMinMs = 0;
+    float timestampLatenessMaxMs = 0;
+    float timestampBufferMs = 0;
+    float presentedJerkMs = 0;
+    float presentedJerkMinMs = 0;
+    float presentedJerkMaxMs = 0;
+    float timestampHostJerkMs = 0;
+    float timestampScheduleErrorMs = 0;
+    float timestampScheduleErrorMinMs = 0;
+    float timestampScheduleErrorMaxMs = 0;
+    float timestampCorrectionMs = 0;
+    float timestampCorrectionMinMs = 0;
+    float timestampCorrectionMaxMs = 0;
+    float timestampReanchors = 0;
+    float timestampVblankWaitMs = 0;
+    float timestampVblankWaitMinMs = 0;
+    float timestampVblankWaitMaxMs = 0;
+    float timestampTrimMs = 0;
+    float timestampReleaseToPresentMs = 0;
+    float timestampReleaseToPresentMinMs = 0;
+    float timestampReleaseToPresentMaxMs = 0;
+    float timestampRenderLeadMs = 0;
     float videoMbps = 0;
     // Everything the video stream puts on the network: payload, FEC parity,
     // shard padding and packet headers

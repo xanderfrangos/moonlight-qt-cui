@@ -3,9 +3,12 @@
 #include "path.h"
 #include <QCryptographicHash>
 #include "vrrpacingworker.h"
+#include "timestamppacer.h"
+#include "gamescopedisplaystate.h"
 #include "../ivrrframepresenter.h"
 #include "streaming/streamutils.h"
 #include "streaming/vrrratepolicy.h"
+#include "streaming/video/pacinglog.h"
 
 #ifdef Q_OS_WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -36,6 +39,26 @@ static_assert(PACER_MAX_OUTSTANDING_FRAMES == MAX_QUEUED_FRAMES + 2,
 // to do the render itself, so we can't render right before
 // V-sync happens.
 #define TIMER_SLACK_MS 3
+
+// TEMPORARY: see pacinglog.h
+static void logPacerFrame(PacingLog::Event event, const AVFrame* frame,
+                          PacingLog::DropReason reason, uint64_t eventUs,
+                          uint64_t renderBeginUs, uint32_t queueDepth)
+{
+    if (!PacingLog::active()) {
+        return;
+    }
+    PacingLog::Record record;
+    record.event = event;
+    record.reason = reason;
+    record.rtpValid = frame->pts >= 0 && frame->pts <= UINT32_MAX;
+    record.rtpTimestamp = record.rtpValid ? static_cast<uint32_t>(frame->pts) : 0;
+    record.decoderOutputUs = static_cast<uint64_t>(frame->pkt_dts);
+    record.eventUs = eventUs;
+    record.renderBeginUs = renderBeginUs;
+    record.queueDepth = queueDepth;
+    PacingLog::record(record);
+}
 
 Pacer::Pacer(IFFmpegRenderer* renderer) :
     m_RenderThread(nullptr),
@@ -70,6 +93,12 @@ void Pacer::shutdown()
         return;
     }
 
+    // The timestamp pacer feeds the render queue, so stop it before the
+    // render thread. Its V-sync input stops with the V-sync thread below.
+    if (m_TimestampPacer != nullptr) {
+        m_TimestampPacer->stop();
+    }
+
     m_Stopping = true;
 
     // Stop the V-sync thread
@@ -92,6 +121,11 @@ void Pacer::shutdown()
         // Notify the renderer that it is being destroyed soon
         // NB: This must happen on the same thread that calls renderFrame().
         m_VsyncRenderer->cleanupRenderContext();
+    }
+
+    // Nothing renders any more, so nothing can report a displayed frame
+    if (m_TimestampPacer != nullptr) {
+        m_VsyncRenderer->setDisplayEventSink(nullptr);
     }
 
     // Delete any remaining unconsumed frames
@@ -137,10 +171,13 @@ uint32_t Pacer::queueDepth()
         return (uint32_t)m_VrrWorker->queueDepth();
     }
 
+    const uint32_t timestampDepth = m_TimestampPacer != nullptr ?
+        (uint32_t)m_TimestampPacer->queueDepth() : 0;
+
     // This lock is only ever held across an individual enqueue or dequeue, so
     // sampling it ten times a second costs nothing measurable.
     QMutexLocker lock(&m_FrameQueueLock);
-    return (uint32_t)(m_PacingQueue.count() + m_RenderQueue.count());
+    return timestampDepth + (uint32_t)(m_PacingQueue.count() + m_RenderQueue.count());
 }
 
 void Pacer::renderOnMainThread()
@@ -175,19 +212,42 @@ int Pacer::vsyncThread(void *context)
 
     bool async = me->m_VsyncSource->isAsync();
     while (!me->m_Stopping) {
+        bool vblank;
         if (async) {
             // Wait for the VSync source to invoke signalVsync() or 100ms to elapse
             me->m_FrameQueueLock.lock();
-            me->m_VsyncSignalled.wait(&me->m_FrameQueueLock, 100);
+            vblank = me->m_VsyncSignalled.wait(&me->m_FrameQueueLock, 100);
             me->m_FrameQueueLock.unlock();
         }
         else {
             // Let the VSync source wait in the context of our thread
-            me->m_VsyncSource->waitForVsync();
+            vblank = me->m_VsyncSource->waitForVsync();
         }
 
         if (me->m_Stopping) {
             break;
+        }
+
+        const uint64_t vsyncUs = LiGetMicroseconds();
+        if (vblank && PacingLog::active()) {
+            PacingLog::Record record;
+            record.event = PacingLog::Event::Vsync;
+            record.eventUs = vsyncUs;
+            PacingLog::record(record);
+        }
+
+        // The timestamp pacer only needs the V-blank times; it decides
+        // which frame each one shows itself. A timeout or failed wait is not
+        // a V-blank time.
+        if (me->m_TimestampPacer != nullptr) {
+            if (vblank) {
+                me->m_TimestampPacer->onVsync(vsyncUs);
+            }
+            else if (!async) {
+                // Don't spin on a source that keeps failing
+                SDL_Delay(1);
+            }
+            continue;
         }
 
         me->handleVsync(1000 / me->m_DisplayFps);
@@ -291,9 +351,12 @@ void Pacer::handleVsync(int timeUntilNextVsyncMillis)
     // Catch up if we're several frames ahead
     while (m_PacingQueue.count() > frameDropTarget) {
         AVFrame* frame = m_PacingQueue.dequeue();
+        const uint32_t depth = (uint32_t)(m_PacingQueue.count() + m_RenderQueue.count());
 
         // Drop the lock while we call av_frame_free()
         m_FrameQueueLock.unlock();
+        logPacerFrame(PacingLog::Event::Dropped, frame, PacingLog::DropReason::VsyncCatchUp,
+                      LiGetMicroseconds(), 0, depth);
         m_Telemetry.recordLegacyDrop();
         av_frame_free(&frame);
         m_FrameQueueLock.lock();
@@ -321,7 +384,8 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                        bool enablePacing, bool enableVsync,
                        bool enableVrr, int vrrDisplayRefreshHz,
                        bool smoothVrrFrameTiming, const QString& calibrationKey,
-                       int vrrLatencyMode, VrrTimingOptions vrrTimingOptions)
+                       int vrrLatencyMode, VrrTimingOptions vrrTimingOptions,
+                       TimestampPacingOptions timestampPacing)
 {
     m_MaxVideoFps = maxVideoFps;
     m_RendererAttributes = m_VsyncRenderer->getRendererAttributes();
@@ -464,6 +528,13 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
     // cannot invent a 60 Hz value or produce an unrelated warning.
     m_DisplayFps = StreamUtils::getDisplayRefreshRate(window);
 
+    // Timestamp pacing replaces fixed pacing's frame selection. With V-Sync it
+    // still wants the V-sync source, for the V-blank times alone.
+    const bool timestampMode = timestampPacing.enabled;
+    if (timestampMode) {
+        enablePacing = enableVsync;
+    }
+
     if (enablePacing) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Frame pacing: target %d Hz with %d FPS stream",
@@ -512,6 +583,75 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                     m_DisplayFps, m_MaxVideoFps);
     }
 
+    if (timestampMode) {
+        TimestampPacer::Callbacks callbacks;
+        callbacks.release = [this](AVFrame* frame) {
+            m_FrameQueueLock.lock();
+            enqueueFrameForRenderingAndUnlock(frame);
+        };
+        callbacks.drop = [this](AVFrame* frame, bool queueFull) {
+            logPacerFrame(PacingLog::Event::Dropped, frame,
+                          queueFull ? PacingLog::DropReason::TimestampQueueFull :
+                                      PacingLog::DropReason::TimestampSuperseded,
+                          LiGetMicroseconds(), 0, 0);
+            m_Telemetry.recordTimestampSuperseded();
+            av_frame_free(&frame);
+        };
+        // The V-blank grid comes from a V-sync source or, where there is
+        // none (Gamescope), from the renderer's reports of displayed frames
+        const bool displayEvents = enableVsync && m_VsyncSource == nullptr &&
+                                   m_VsyncRenderer->supportsDisplayEvents();
+
+        // Renderers that need forced pacing flip at once when they present
+        m_TimestampPacer = std::make_unique<TimestampPacer>(timestampPacing, m_MaxVideoFps, m_DisplayFps,
+                                                            m_VsyncSource != nullptr || displayEvents,
+                                                            (m_RendererAttributes & RENDERER_ATTRIBUTE_FORCE_PACING) != 0,
+                                                            &m_Telemetry, std::move(callbacks));
+        if (displayEvents) {
+            // Cleared in shutdown() once the render thread has stopped
+            m_VsyncRenderer->setDisplayEventSink([this](uint64_t displayUs, uint64_t refreshPeriodUs) {
+                m_TimestampPacer->onDisplayEvent(displayUs, refreshPeriodUs);
+            });
+        }
+
+        // Gamescope can switch between fixed refresh, VRR, tearing and a
+        // FIFO frame limit from Steam's quick access menu mid-stream. Follow
+        // it: only a fixed refresh rate has a V-blank grid to place frames on.
+        if (GamescopeDisplayState::runningUnderGamescope()) {
+            auto gamescope = std::make_shared<GamescopeDisplayState>();
+            m_TimestampPacer->setDisplayModeProbe([gamescope, opened = false]() mutable {
+                if (!opened) {
+                    opened = true;
+                    gamescope->open();
+                }
+                const GamescopeDisplayState::State state = gamescope->read();
+                if (!state.valid) {
+                    return TimestampPacer::DisplayMode::Unknown;
+                }
+                if (state.fpsLimit != 0) {
+                    return TimestampPacer::DisplayMode::FrameLimited;
+                }
+                if (state.vrrInUse) {
+                    return TimestampPacer::DisplayMode::Adaptive;
+                }
+                if (state.tearingAllowed) {
+                    return TimestampPacer::DisplayMode::Tearing;
+                }
+                return TimestampPacer::DisplayMode::FixedRefresh;
+            });
+        }
+
+        if (!m_TimestampPacer->start()) {
+            m_VsyncRenderer->setDisplayEventSink(nullptr);
+            m_TimestampPacer.reset();
+            return false;
+        }
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Timestamp pacing: %d FPS stream on %d Hz display, V-Sync %s (%s)",
+                    m_MaxVideoFps, m_DisplayFps, enableVsync ? "on" : "off",
+                    qPrintable(m_TimestampPacer->describe()));
+    }
+
     if (m_VsyncSource != nullptr) {
         m_VsyncThread = SDL_CreateThread(Pacer::vsyncThread, "PacerVsync", this);
     }
@@ -543,6 +683,10 @@ void Pacer::renderFrame(AVFrame* frame)
 {
     const uint64_t decoderOutputUs =
         static_cast<uint64_t>(frame->pkt_dts);
+    // The decoder stores the host's 90 kHz RTP timestamp here, or leaves it
+    // unset when it couldn't match the frame to its decode unit
+    const bool rtpTimestampValid = frame->pts >= 0 && frame->pts <= UINT32_MAX;
+    const uint32_t rtpTimestamp = rtpTimestampValid ? static_cast<uint32_t>(frame->pts) : 0;
     const uint64_t beforeRender = LiGetMicroseconds();
     // Render it
     m_VsyncRenderer->renderFrame(frame);
@@ -552,7 +696,10 @@ void Pacer::renderFrame(AVFrame* frame)
         afterRender >= decoderOutputUs ?
             afterRender - decoderOutputUs : 0,
         afterRender >= beforeRender ? afterRender - beforeRender : 0,
-        afterRender);
+        afterRender, rtpTimestampValid, rtpTimestamp);
+    if (m_TimestampPacer != nullptr) {
+        m_TimestampPacer->notePresented(afterRender);
+    }
 
     // Wait until after next frame to free this one to ensure the GPU
     // doesn't stall or read garbage if the backing buffer gets returned
@@ -562,6 +709,9 @@ void Pacer::renderFrame(AVFrame* frame)
 
     // Drop frames if we have too many queued up for a while
     m_FrameQueueLock.lock();
+    logPacerFrame(PacingLog::Event::Presented, m_DeferredFreeFrame, PacingLog::DropReason::NotDropped,
+                  afterRender, beforeRender,
+                  (uint32_t)(m_PacingQueue.count() + m_RenderQueue.count()));
 
     int frameDropTarget;
 
@@ -592,9 +742,12 @@ void Pacer::renderFrame(AVFrame* frame)
     // Catch up if we're several frames ahead
     while (m_RenderQueue.count() > frameDropTarget) {
         AVFrame* frame = m_RenderQueue.dequeue();
+        const uint32_t depth = (uint32_t)(m_PacingQueue.count() + m_RenderQueue.count());
 
         // Drop the lock while we call av_frame_free()
         m_FrameQueueLock.unlock();
+        logPacerFrame(PacingLog::Event::Dropped, frame, PacingLog::DropReason::RenderCatchUp,
+                      LiGetMicroseconds(), 0, depth);
         m_Telemetry.recordLegacyDrop();
         av_frame_free(&frame);
         m_FrameQueueLock.lock();
@@ -608,6 +761,11 @@ void Pacer::dropFrameForEnqueue(QQueue<AVFrame*>& queue)
     SDL_assert(queue.size() <= MAX_QUEUED_FRAMES);
     if (queue.size() == MAX_QUEUED_FRAMES) {
         AVFrame* frame = queue.dequeue();
+        logPacerFrame(PacingLog::Event::Dropped, frame,
+                      &queue == &m_PacingQueue ? PacingLog::DropReason::PacingQueueFull :
+                                                 PacingLog::DropReason::RenderQueueFull,
+                      LiGetMicroseconds(), 0,
+                      (uint32_t)(m_PacingQueue.count() + m_RenderQueue.count()));
         av_frame_free(&frame);
     }
 }
@@ -616,6 +774,13 @@ void Pacer::submitFrame(AVFrame* frame)
 {
     // Make sure initialize() has been called
     SDL_assert(m_MaxVideoFps != 0);
+
+    // Frames without pacing metadata are shown as soon as frames ahead of
+    // them have been
+    if (m_TimestampPacer != nullptr) {
+        m_TimestampPacer->submit(PacedFrame(frame, -1, 0, false, LiGetMicroseconds()));
+        return;
+    }
 
     // Queue the frame and possibly wake up the render thread
     m_FrameQueueLock.lock();
@@ -636,6 +801,10 @@ void Pacer::submitFrame(PacedFrame&& frame)
         m_VrrWorker->submit(std::move(frame));
         return;
     }
+    if (m_TimestampPacer != nullptr) {
+        m_TimestampPacer->submit(std::move(frame));
+        return;
+    }
 
     submitFrame(frame.release());
 }
@@ -643,4 +812,24 @@ void Pacer::submitFrame(PacedFrame&& frame)
 bool Pacer::isVrrActive() const
 {
     return m_VrrWorker != nullptr;
+}
+
+bool Pacer::isTimestampPacingActive() const
+{
+    return m_TimestampPacer != nullptr;
+}
+
+bool Pacer::isTimestampVblankGridAvailable() const
+{
+    return m_TimestampPacer != nullptr && m_TimestampPacer->usesVblankGrid();
+}
+
+QString Pacer::describeForPacingLog() const
+{
+    return QStringLiteral("pacing=%1 display_hz=%2 vsync_source=%3 render_thread=%4")
+        .arg(m_VrrWorker != nullptr ? "vrr" : m_TimestampPacer != nullptr ? "timestamp" :
+             m_VsyncSource != nullptr ? "vsync_source" : "unpaced")
+        .arg(m_DisplayFps)
+        .arg(m_VsyncSource == nullptr ? "none" : m_VsyncSource->isAsync() ? "async" : "sync")
+        .arg(m_RenderThread != nullptr ? "yes" : "no");
 }

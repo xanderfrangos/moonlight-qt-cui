@@ -1951,7 +1951,7 @@ Flickable {
                                       qsTr("Fullscreen generally provides the best performance, but borderless windowed may work better with features like macOS Spaces, Alt+Tab, screenshot tools, on-screen overlays, etc.")
                 }
 
-                Row {
+                Flow {
                     spacing: 5
                     width: parent.width
 
@@ -1976,7 +1976,8 @@ Flickable {
                         hoverEnabled: !SystemProperties.hoverEffectsDisabled
                         text: qsTr("Frame pacing")
                         font.pointSize:  12
-                        enabled: StreamingPreferences.enableVsync
+                        // Timestamp pacing replaces it
+                        enabled: StreamingPreferences.enableVsync && !StreamingPreferences.timestampPacing
                         checked: StreamingPreferences.enableVsync && StreamingPreferences.framePacing
                         onCheckedChanged: {
                             StreamingPreferences.framePacing = checked
@@ -1984,14 +1985,18 @@ Flickable {
                         ToolTip.delay: 1000
                         ToolTip.timeout: 5000
                         ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                        ToolTip.text: qsTr("Frame pacing reduces micro-stutter by delaying frames that come in too early")
+                        ToolTip.text: StreamingPreferences.timestampPacing ?
+                                          qsTr("Timestamp pacing replaces frame pacing while it is on.")
+                                        :
+                                          qsTr("Frame pacing reduces micro-stutter by delaying frames that come in too early")
                     }
 
                     CheckBox {
                         hoverEnabled: !SystemProperties.hoverEffectsDisabled
                         text: qsTr("VRR")
                         font.pointSize: 12
-                        enabled: StreamingPreferences.enableVsync
+                        // VRR and timestamp pacing are mutually exclusive
+                        enabled: StreamingPreferences.enableVsync && !StreamingPreferences.timestampPacing
                         checked: StreamingPreferences.enableVrr
                         onCheckedChanged: {
                             StreamingPreferences.enableVrr = checked
@@ -2000,11 +2005,46 @@ Flickable {
                         ToolTip.delay: 1000
                         ToolTip.timeout: 5000
                         ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                        ToolTip.text: enabled ?
+                        ToolTip.text: StreamingPreferences.timestampPacing ?
+                                          qsTr("VRR is unavailable while timestamp pacing is on. Turn timestamp pacing off to use VRR.")
+                                        : enabled ?
                                           qsTr("VRR uses adaptive presentation in borderless fullscreen. Choose your display's full refresh rate, or a lower VRR option for more headroom or lower latency.")
                                         :
                                           qsTr("VRR requires V-Sync. Enable V-Sync to change this setting.")
                     }
+
+                    CheckBox {
+                        hoverEnabled: !SystemProperties.hoverEffectsDisabled
+                        text: qsTr("Timestamp pacing")
+                        font.pointSize: 12
+                        checked: StreamingPreferences.timestampPacing
+                        // Turning it on also turns VRR off
+                        onCheckedChanged: {
+                            StreamingPreferences.timestampPacing = checked
+                        }
+
+                        ToolTip.delay: 1000
+                        ToolTip.timeout: 10000
+                        ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                        ToolTip.text: qsTr("Shows each frame at the time the host's frame timestamps call for, smoothed, after a small buffer that absorbs network and decoding delays. Works with V-Sync on or off. Replaces frame pacing, and cannot be used with VRR.") + "\n\n" +
+                                      qsTr("Reconnect the stream after changing this setting.")
+                    }
+                }
+
+                TimestampPacingSettings {
+                    width: parent.width
+                    visible: StreamingPreferences.timestampPacing
+                    smoothing: StreamingPreferences.timestampSmoothing
+                    targetPerMille: StreamingPreferences.timestampTargetPerMille
+                    minBufferMs: StreamingPreferences.timestampMinBufferMs
+                    maxBufferMs: StreamingPreferences.timestampMaxBufferMs
+                    vsyncMarginUs: StreamingPreferences.timestampVsyncMarginUs
+                    vsyncEnabled: StreamingPreferences.enableVsync
+                    onSmoothingEdited: function(value) { StreamingPreferences.timestampSmoothing = value }
+                    onTargetEdited: function(value) { StreamingPreferences.timestampTargetPerMille = value }
+                    onMinBufferEdited: function(value) { StreamingPreferences.timestampMinBufferMs = value }
+                    onMaxBufferEdited: function(value) { StreamingPreferences.timestampMaxBufferMs = value }
+                    onVsyncMarginEdited: function(value) { StreamingPreferences.timestampVsyncMarginUs = value }
                 }
 
                 VrrTimingSettings {
@@ -4071,9 +4111,28 @@ Flickable {
                                     text: modelData.text
                                     font.pointSize: 12
                                     // Like the other VRR settings, hide the VRR
-                                    // graph unless both V-Sync and VRR are on
-                                    visible: modelData.bit !== StreamingPreferences.PG_VRR_SMOOTHNESS ||
-                                             (StreamingPreferences.enableVsync && StreamingPreferences.enableVrr)
+                                    // graph unless both V-Sync and VRR are on.
+                                    // Lateness is measured by fixed pacing only,
+                                    // and the timestamp pacing graphs need it on.
+                                    visible: {
+                                        const vrr = StreamingPreferences.enableVsync && StreamingPreferences.enableVrr
+                                        switch (modelData.bit) {
+                                        case StreamingPreferences.PG_VRR_SMOOTHNESS:
+                                            return vrr
+                                        case StreamingPreferences.PG_PRESENTATION_LATENESS:
+                                            return !vrr
+                                        case StreamingPreferences.PG_TS_BUFFER:
+                                        case StreamingPreferences.PG_TS_SMOOTHNESS:
+                                        case StreamingPreferences.PG_TS_SCHEDULE_ERROR:
+                                        case StreamingPreferences.PG_TS_CORRECTION:
+                                        case StreamingPreferences.PG_TS_RELEASE:
+                                            return StreamingPreferences.timestampPacing
+                                        case StreamingPreferences.PG_TS_VBLANK:
+                                            return StreamingPreferences.timestampPacing && StreamingPreferences.enableVsync
+                                        default:
+                                            return true
+                                        }
+                                    }
                                     // The preference records changes from each
                                     // graph's default, so a click just flips its bit
                                     checked: ((StreamingPreferences.performanceGraphsDefault ^

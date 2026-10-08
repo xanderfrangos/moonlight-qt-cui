@@ -22,6 +22,7 @@ extern "C" {
 #include "ffmpeg-renderers/genhwaccel.h"
 #include "vrrrenderpolicy.h"
 #include "videopacketsize.h"
+#include "pacinglog.h"
 
 #ifdef Q_OS_WIN32
 #include "ffmpeg-renderers/dxva2.h"
@@ -366,6 +367,7 @@ void FFmpegVideoDecoder::reset()
     m_StatsGraphLastFrameUs = 0;
     m_StatsGraphLastDecodeUs = 0;
     m_StatsGraphSyncMode = Overlay::StatsGraphSyncMode::Off;
+    m_StatsGraphTimestampPacing = false;
     m_FrameInfoQueue.clear();
     m_FrameSubmitTimeQueue.clear();
     m_FrameDecodeHoldQueue.clear();
@@ -381,6 +383,9 @@ void FFmpegVideoDecoder::reset()
         // one-second decoder window.
         m_Pacer->shutdown();
         syncPacerTelemetry();
+
+        // TEMPORARY: every producer has stopped
+        PacingLog::stop();
 
         delete m_Pacer;
         m_Pacer = nullptr;
@@ -709,12 +714,14 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
                                      .arg(params->width).arg(params->height).arg(params->videoFormat)
                                      .arg(m_FrontendRenderer->getCalibrationIdentity())
                                      .arg(decoder != nullptr ? decoder->name : "pyrowave"),
-                                 params->vrrLatencyMode, params->vrrTimingOptions)) {
+                                 params->vrrLatencyMode, params->vrrTimingOptions,
+                                 params->timestampPacing)) {
             return false;
         }
 
         // VRR can fall back to fixed V-sync, so ask the pacer what it chose
         // rather than trusting the request
+        m_StatsGraphTimestampPacing = m_Pacer->isTimestampPacingActive();
         m_StatsGraphSyncMode = m_Pacer->isVrrActive() ? Overlay::StatsGraphSyncMode::Vrr :
                                params->enableVsync ? Overlay::StatsGraphSyncMode::VSync :
                                                      Overlay::StatsGraphSyncMode::Off;
@@ -984,6 +991,31 @@ bool FFmpegVideoDecoder::finishRenderInitialization(PDECODER_PARAMETERS params)
         // The VRR cadence graph has nothing to plot without active VRR
         statsGraphConfig.visibleGraphs &= ~(1u << StreamingPreferences::PG_VRR_SMOOTHNESS);
     }
+    else {
+        // VRR presents to the host timestamps itself, so only fixed pacing
+        // measures lateness against them
+        statsGraphConfig.visibleGraphs &= ~(1u << StreamingPreferences::PG_PRESENTATION_LATENESS);
+    }
+    // The timestamp pacing graphs have nothing to plot without it, and the
+    // V-blank one nothing without a V-blank grid
+    if (!m_StatsGraphTimestampPacing) {
+        for (int graph : { StreamingPreferences::PG_TS_BUFFER, StreamingPreferences::PG_TS_SMOOTHNESS,
+                           StreamingPreferences::PG_TS_SCHEDULE_ERROR, StreamingPreferences::PG_TS_CORRECTION,
+                           StreamingPreferences::PG_TS_VBLANK, StreamingPreferences::PG_TS_RELEASE }) {
+            statsGraphConfig.visibleGraphs &= ~(1u << graph);
+        }
+    }
+    else if (!m_Pacer->isTimestampVblankGridAvailable()) {
+        statsGraphConfig.visibleGraphs &= ~(1u << StreamingPreferences::PG_TS_VBLANK);
+    }
+    // TEMPORARY: see pacinglog.h
+    if (m_Pacer != nullptr) {
+        PacingLog::start(QStringLiteral("stream_fps=%1 %2 renderer=%3")
+                             .arg(m_StreamFps)
+                             .arg(m_Pacer->describeForPacingLog())
+                             .arg(m_FrontendRenderer->getRendererName()));
+    }
+
     m_StatsGraphs.start(&Session::get()->getOverlayManager(),
                         statsGraphConfig,
                         [this](Overlay::StatsGraphCounters& counters) {
@@ -1071,6 +1103,22 @@ void FFmpegVideoDecoder::addVideoStats(VIDEO_STATS& src, VIDEO_STATS& dst)
     dst.vrrPresentCancelledFrames += src.vrrPresentCancelledFrames;
     dst.vrrSpacingCorrections += src.vrrSpacingCorrections;
     dst.vrrTelemetryActive = dst.vrrTelemetryActive || src.vrrTelemetryActive;
+    dst.timestampPacedFrames += src.timestampPacedFrames;
+    dst.timestampLateFrames += src.timestampLateFrames;
+    dst.timestampUnpacedFrames += src.timestampUnpacedFrames;
+    dst.timestampSupersededFrames += src.timestampSupersededFrames;
+    dst.timestampVblankHits += src.timestampVblankHits;
+    dst.timestampVblankMisses += src.timestampVblankMisses;
+    if (src.timestampActive) {
+        // Windows are merged oldest first, so the source holds newer state
+        dst.timestampActive = true;
+        dst.timestampVblankGrid = src.timestampVblankGrid;
+        dst.timestampDisplayMode = src.timestampDisplayMode;
+        dst.timestampExtraMarginUs = src.timestampExtraMarginUs;
+        dst.timestampBufferUs = src.timestampBufferUs;
+        dst.timestampSourcePeriodUs = src.timestampSourcePeriodUs;
+        dst.timestampTrimUs = src.timestampTrimUs;
+    }
     // These are decision-time VRR state rather than counters. Preserve the
     // newest complete sample; a Pacer-local sequence can restart when a
     // decoder is reinitialized, so timestamp is the primary ordering key.
@@ -1247,6 +1295,33 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
             counters.renderingTime.min = (float)(frametime.renderingMinUs / 1000.0);
             counters.renderingTime.max = (float)(frametime.renderingMaxUs / 1000.0);
         }
+        if (frametime.latenessCount != 0) {
+            counters.presentationLateness.count = frametime.latenessCount;
+            counters.presentationLateness.sum = frametime.latenessSumUs / 1000.0;
+            counters.presentationLateness.min = (float)(frametime.latenessMinUs / 1000.0);
+            counters.presentationLateness.max = (float)(frametime.latenessMaxUs / 1000.0);
+        }
+
+        const auto toMs = [](const PacerAccumulator& in, Overlay::StatsGraphAccumulator& out) {
+            if (in.count != 0) {
+                out.count = in.count;
+                out.sum = in.sumUs / 1000.0;
+                out.min = (float)(in.minUs / 1000.0);
+                out.max = (float)(in.maxUs / 1000.0);
+            }
+        };
+        toMs(frametime.presentedJerk, counters.presentedJerk);
+        toMs(frametime.timestampLateness, counters.timestampLateness);
+        toMs(frametime.timestampHostJerk, counters.timestampHostJerk);
+        toMs(frametime.timestampCorrection, counters.timestampCorrection);
+        toMs(frametime.timestampVblankWait, counters.timestampVblankWait);
+        toMs(frametime.timestampScheduleError, counters.timestampScheduleError);
+        toMs(frametime.timestampReleaseToPresent, counters.timestampReleaseToPresent);
+        counters.timestampReanchors = (float)frametime.timestampReanchors;
+        counters.timestampStateValid = frametime.timestampStateValid;
+        counters.timestampBufferMs = (float)(frametime.timestampBufferUs / 1000.0);
+        counters.timestampTrimMs = (float)(frametime.timestampTrimUs / 1000.0);
+        counters.timestampRenderLeadMs = (float)(frametime.timestampRenderLeadUs / 1000.0);
     }
 
     // Written by the video receive thread. Each field is a single aligned
@@ -1266,6 +1341,7 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
     counters.streamInfo.hdr = (m_VideoFormat & VIDEO_FORMAT_MASK_10BIT) &&
                               LiGetCurrentHostDisplayHdrMode();
     counters.streamInfo.syncMode = m_StatsGraphSyncMode;
+    counters.streamInfo.timestampPacing = m_StatsGraphTimestampPacing;
     counters.streamInfo.renderer = m_FrontendRenderer->getRendererName();
     counters.streamInfo.backendRenderer =
             m_BackendRenderer->getRendererType() != m_FrontendRenderer->getRendererType()
@@ -1315,6 +1391,27 @@ void FFmpegVideoDecoder::syncPacerTelemetry()
 
     m_ActiveWndVideoStats.vrrTelemetryActive =
         m_ActiveWndVideoStats.vrrTelemetryActive || snapshot.vrrActive;
+    if (snapshot.timestampActive) {
+        m_ActiveWndVideoStats.timestampActive = true;
+        m_ActiveWndVideoStats.timestampPacedFrames +=
+            delta(snapshot.timestampPacedFrames, m_LastPacerTelemetry.timestampPacedFrames);
+        m_ActiveWndVideoStats.timestampLateFrames +=
+            delta(snapshot.timestampLateFrames, m_LastPacerTelemetry.timestampLateFrames);
+        m_ActiveWndVideoStats.timestampUnpacedFrames +=
+            delta(snapshot.timestampUnpacedFrames, m_LastPacerTelemetry.timestampUnpacedFrames);
+        m_ActiveWndVideoStats.timestampSupersededFrames +=
+            delta(snapshot.timestampSupersededFrames, m_LastPacerTelemetry.timestampSupersededFrames);
+        m_ActiveWndVideoStats.timestampVblankGrid = snapshot.timestampVblankGrid;
+        m_ActiveWndVideoStats.timestampDisplayMode = snapshot.timestampDisplayMode;
+        m_ActiveWndVideoStats.timestampExtraMarginUs = snapshot.timestampExtraMarginUs;
+        m_ActiveWndVideoStats.timestampVblankHits +=
+            delta(snapshot.timestampVblankHits, m_LastPacerTelemetry.timestampVblankHits);
+        m_ActiveWndVideoStats.timestampVblankMisses +=
+            delta(snapshot.timestampVblankMisses, m_LastPacerTelemetry.timestampVblankMisses);
+        m_ActiveWndVideoStats.timestampBufferUs = snapshot.timestampBufferUs;
+        m_ActiveWndVideoStats.timestampSourcePeriodUs = snapshot.timestampSourcePeriodUs;
+        m_ActiveWndVideoStats.timestampTrimUs = snapshot.timestampTrimUs;
+    }
     m_ActiveWndVideoStats.vrrReadiness = snapshot.vrrReadiness;
     m_ActiveWndVideoStats.vrrOnTimeTargetPerMillion = snapshot.vrrOnTimeTargetPerMillion;
     m_ActiveWndVideoStats.vrrBufferAtLimit = snapshot.vrrBufferAtLimit;
@@ -1648,6 +1745,47 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
         return;
     }
     offset += ret;
+
+    if (stats.timestampActive) {
+        // TimestampPacer::DisplayMode, as reported by the compositor
+        static const char* const k_DisplayModes[] = {
+            nullptr, "fixed refresh", "VRR", "tearing allowed", "frame limited (FIFO)"
+        };
+        const char* displayMode = stats.timestampDisplayMode < sizeof(k_DisplayModes) / sizeof(k_DisplayModes[0]) ?
+            k_DisplayModes[stats.timestampDisplayMode] : nullptr;
+        char grid[192];
+        if (stats.timestampVblankGrid) {
+            snprintf(grid, sizeof(grid), "V-blank grid, trim %.1f ms", stats.timestampTrimUs / 1000.0);
+        }
+        else {
+            snprintf(grid, sizeof(grid), "no V-blank grid");
+        }
+        if (displayMode != nullptr) {
+            const size_t used = strlen(grid);
+            snprintf(grid + used, sizeof(grid) - used, " | Gamescope: %s", displayMode);
+        }
+        // Only renderers that report actual display times can tell
+        const uint64_t checked = stats.timestampVblankHits + stats.timestampVblankMisses;
+        if (checked != 0) {
+            const size_t used = strlen(grid);
+            snprintf(grid + used, sizeof(grid) - used, " | Missed V-blank: %.2f%% (margin +%.2f ms)",
+                     stats.timestampVblankMisses * 100.0 / checked,
+                     stats.timestampExtraMarginUs / 1000.0);
+        }
+        ret = snprintf(&output[offset], length - offset,
+                       "Timestamp pacing: buffer %.2f ms | Ready late: %.2f%% | Replaced: %llu | Shown on arrival: %llu | %s\n",
+                       stats.timestampBufferUs / 1000.0,
+                       stats.timestampPacedFrames != 0 ?
+                           stats.timestampLateFrames * 100.0 / stats.timestampPacedFrames : 0.0,
+                       static_cast<unsigned long long>(stats.timestampSupersededFrames),
+                       static_cast<unsigned long long>(stats.timestampUnpacedFrames),
+                       grid);
+        if (ret < 0 || ret >= length - offset) {
+            SDL_assert(false);
+            return;
+        }
+        offset += ret;
+    }
 
     if (stats.vrrTelemetryActive || stats.vrrEligibleFrames != 0 ||
             stats.vrrPacingDroppedFrames != 0 ||
@@ -2996,17 +3134,18 @@ void FFmpegVideoDecoder::decoderThreadProc()
                     SDL_assert(m_FrameInfoQueue.size() == m_FramesIn - m_FramesOut);
                     m_FramesOut++;
 
-                    // Only active VRR needs the rest of the decoder-facing
-                    // pacing metadata.
-                    const bool vrrActive = m_Pacer->isVrrActive();
+                    // Only VRR and timestamp pacing need the rest of the
+                    // decoder-facing pacing metadata.
+                    const bool pacedFrames = m_Pacer->isVrrActive() || m_Pacer->isTimestampPacingActive();
                     int frameNumber = -1;
                     uint32_t rtpTimestamp = 0;
                     bool timestampValid = false;
                     uint64_t receiveUs = 0;
                     uint64_t reassembledUs = 0;
                     uint64_t decodeSubmitUs = 0;
+                    uint32_t hostLatencyUs = 0;
 
-                    if (vrrActive) {
+                    if (pacedFrames) {
                         // Capture timing while the matching DECODE_UNIT is
                         // still available. RTP timestamp 0 is valid, so
                         // validity is represented separately rather than
@@ -3022,6 +3161,8 @@ void FFmpegVideoDecoder::decoderThreadProc()
                             // the same clock as decoderOutputUs.
                             receiveUs = du.receiveTimeUs;
                             reassembledUs = du.enqueueTimeUs;
+                            // Reported in units of 100 us
+                            hostLatencyUs = du.frameHostProcessingLatency * 100u;
                         }
                         if (!m_FrameSubmitTimeQueue.isEmpty()) {
                             decodeSubmitUs = m_FrameSubmitTimeQueue.head();
@@ -3190,6 +3331,26 @@ void FFmpegVideoDecoder::decoderThreadProc()
                         // Store the presentation time (90 kHz timebase) for
                         // existing renderers. VRR uses PacedFrame instead.
                         frame->pts = (int64_t)du.rtpTimestamp;
+
+                        // TEMPORARY: see pacinglog.h
+                        if (PacingLog::active()) {
+                            PacingLog::Record record;
+                            record.event = PacingLog::Event::Decoded;
+                            record.frameNumber = du.frameNumber;
+                            record.rtpValid = true;
+                            record.rtpTimestamp = du.rtpTimestamp;
+                            record.frameType = (uint8_t)du.frameType;
+                            record.bytes = (uint32_t)du.fullLength;
+                            record.hostLatencyUs = du.frameHostProcessingLatency * 100u;
+                            record.eventUs = decoderOutputUs;
+                            record.receiveUs = du.receiveTimeUs;
+                            record.reassembledUs = du.enqueueTimeUs;
+                            record.presentationUs = du.presentationTimeUs;
+                            record.decodeSubmitUs = m_FrameSubmitTimeQueue.isEmpty() ?
+                                0 : m_FrameSubmitTimeQueue.head();
+                            record.decoderOutputUs = decoderOutputUs;
+                            PacingLog::record(record);
+                        }
                     }
                     if (!m_FrameSubmitTimeQueue.isEmpty()) {
                         m_FrameSubmitTimeQueue.dequeue();
@@ -3216,7 +3377,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
                     }
 
                     // Queue the frame for rendering (or render now if pacer is disabled)
-                    if (vrrActive) {
+                    if (pacedFrames) {
                         PacedFrame pacedFrame(frame,
                                               frameNumber,
                                               rtpTimestamp,
@@ -3226,6 +3387,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
                                                        reassembledUs,
                                                        decodeSubmitUs);
                         pacedFrame.setDecodeHoldUs(decodeHoldUs);
+                        pacedFrame.setHostLatencyUs(hostLatencyUs);
 #ifdef HAVE_PYROWAVE
                         // Shared-surface output (Vulkan, D3D11 or Metal interop)
                         // returns at submission, not completion.
