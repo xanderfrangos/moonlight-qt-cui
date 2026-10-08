@@ -4731,8 +4731,15 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
   V-blank detection still widens it from there.
 - **Display-mode probe:**
   [gamescopedisplaystate.cpp](app/streaming/video/ffmpeg-renderers/pacer/gamescopedisplaystate.cpp)
-  opens a private Xlib connection to `DISPLAY` and reads root-window
-  properties. The pacing thread polls it every 250 ms with its lock released.
+  opens a private Xlib connection and reads root-window properties. Steam
+  sets them, and Gamescope reports VRR, only on Gamescope's first Xwayland
+  (`GAMESCOPE_XWAYLAND_SERVER_ID` 0). Game Mode runs two, and games get the
+  second as `DISPLAY`, where every property reads zero ("fixed refresh" on a
+  VRR display, fixed 2026-10-08). When `DISPLAY` is not server 0, the probe
+  tries `:0` to `:32` for the server 0 with the same `GAMESCOPE_PID`
+  (reachable from Flatpak through abstract sockets); none found leaves the
+  mode unknown. The pacing thread polls it every 250 ms with its lock
+  released.
   Precedence:
   1. `GAMESCOPE_FPS_LIMIT` nonzero: frame limited (FIFO).
   2. `GAMESCOPE_VRR_FEEDBACK`: VRR.

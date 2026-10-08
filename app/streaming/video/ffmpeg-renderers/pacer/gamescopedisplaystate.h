@@ -8,7 +8,9 @@
 //   GAMESCOPE_FPS_LIMIT       Steam's frame limit; nonzero forces FIFO
 //   GAMESCOPE_VRR_FEEDBACK    Gamescope reports adaptive sync in use
 //   GAMESCOPE_ALLOW_TEARING   Steam's Allow Tearing (Gamescope V-Sync off)
-// Linux with X11 only; elsewhere, and outside Gamescope, it never opens.
+// They live on the root of Gamescope's first Xwayland, which need not be
+// DISPLAY. Linux with X11 only; elsewhere, and outside Gamescope, it never
+// opens.
 class GamescopeDisplayState
 {
 public:
@@ -27,7 +29,7 @@ public:
     // Whether this process runs under Gamescope at all
     static bool runningUnderGamescope();
 
-    // Opens a private connection to Gamescope's X server. Reads happen on
+    // Opens a private connection to Gamescope's first X server. Reads happen on
     // one thread only after this returns.
     bool open();
 
