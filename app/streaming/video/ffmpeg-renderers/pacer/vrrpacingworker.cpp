@@ -23,26 +23,12 @@ extern "C" {
 
 namespace {
 
-// ~64 seconds of rows at 120 FPS. When the writer thread cannot keep up the
-// pacing thread drops rows rather than ever waiting on diagnostics.
-// Each compressed chunk covers only a few seconds, limiting crash loss while
-// still turning repeated timestamps and controller state into very small,
-// infrequent physical writes.
-constexpr int kTraceChunkBytes = 256 * 1024;
 // A decode sync shorter than this did not wait on the GPU; the frame keeps
 // the decoder's completion time as its readiness.
 constexpr uint64_t kDecodeSyncNoticeUs = 200;
 // Slack between the published PyroWave reassembly deadline and the latest
 // on-time reassembly, covering receive-thread wake-up and depacketizing.
 constexpr uint64_t kReceiveDeadlineMarginUs = 250;
-// Always preserve at least an hour, including the maximum supported 480 FPS
-// stream cadence. The physical cap takes effect only after that duration, so
-// an unusually incompressible trace remains complete rather than silently
-// trading away replay fidelity. Chunk compression keeps normal captures far
-// below this limit.
-constexpr uint64_t kMinimumTraceDurationUs = 60ULL * 60ULL * 1000000ULL;
-constexpr uint64_t kMaximumTraceBytes = 512ULL * 1024ULL * 1024ULL;
-constexpr char kTraceMagic[] = "MLVRR1\n";
 #define VRR_TRACE_PARAMETER_HEADER(type, jsonName, memberName, defaultValue) \
     ",param_" #jsonName
 constexpr char kTraceHeader[] =
@@ -153,13 +139,6 @@ uint64_t submissionBoundaryUs(const VrrPresentFeedback& feedback,
     // to every subsequent frame.
     return operationStartUs;
 }
-
-#ifdef _WIN32
-bool isUncPath(const QString& path)
-{
-    return path.startsWith(QStringLiteral("\\\\")) || path.startsWith(QStringLiteral("//"));
-}
-#endif
 
 } // namespace
 
@@ -1418,8 +1397,8 @@ int VrrPacingWorker::traceRun()
     TraceRow row;
     while (true) {
         if (m_TraceQueue->pop(row)) {
-            if (m_TraceAcceptingRows.load() ||
-                    (m_TraceStopping.load() && !m_TraceWriteFailed && !m_TraceSizeCapped))
+            // The file itself refuses rows after a write failure or the cap
+            if (m_TraceAcceptingRows.load() || m_TraceStopping.load())
                 writeTraceRow(row);
             continue;
         }
@@ -1427,12 +1406,10 @@ int VrrPacingWorker::traceRun()
             // A producer could have published between the first empty read
             // and the active-count check. Drain that final row before exiting.
             if (m_TraceQueue->pop(row)) {
-                if (!m_TraceWriteFailed && !m_TraceSizeCapped) writeTraceRow(row);
+                writeTraceRow(row);
                 continue;
             }
-            if (m_TraceFormat == TraceFormat::ChunkedCompressed) {
-                flushTraceChunk();
-            }
+            m_TraceFile.flush();
             return 0;
         }
         // Poll only the background writer. Producers never wait for it or
@@ -1443,8 +1420,6 @@ int VrrPacingWorker::traceRun()
 
 void VrrPacingWorker::writeTraceRow(const TraceRow& row)
 {
-    m_TraceLatestArrivalUs = std::max(m_TraceLatestArrivalUs,
-                                      row.input.arrivalUs);
     const VrrTimingDecision& decision = row.decision;
     const VrrTimingDiagnostics& diagnostics = row.diagnostics;
     // The writer must never read mutable controller parameters. Reconstruct
@@ -1876,80 +1851,10 @@ void VrrPacingWorker::writeTraceRow(const TraceRow& row)
     addUnsigned(row.decodeHoldUs);
     line.append('\n');
 
-    if (m_TraceFormat == TraceFormat::ChunkedCompressed) {
-        m_TraceDecodedHash.addData(line);
-        m_TraceChunk.append(line);
-        if (m_TraceChunk.size() >= kTraceChunkBytes) {
-            flushTraceChunk();
-        }
-        return;
-    }
-
-    const size_t bytesWritten = std::fwrite(
-        line.constData(), 1, static_cast<size_t>(line.size()), m_TraceFile);
-    m_TraceBytesWritten += bytesWritten;
-    if (bytesWritten != static_cast<size_t>(line.size())) {
-        m_TraceWriteFailed = true;
+    // The file stops accepting rows after a write failure or at its size cap
+    if (!m_TraceFile.append(line, row.input.arrivalUs)) {
         m_TraceAcceptingRows.store(false);
     }
-    else {
-        m_TraceDecodedHash.addData(line);
-        if (m_TraceBytesWritten >= kMaximumTraceBytes &&
-                minimumTraceDurationCaptured()) {
-            m_TraceSizeCapped = true;
-            m_TraceAcceptingRows.store(false);
-        }
-    }
-}
-
-void VrrPacingWorker::flushTraceChunk(bool enforceSizeCap)
-{
-    if (m_TraceChunk.isEmpty() || m_TraceFile == nullptr) {
-        return;
-    }
-
-    const QByteArray compressed = qCompress(m_TraceChunk, 6);
-    const uint32_t compressedBytes = static_cast<uint32_t>(compressed.size());
-    const uint64_t recordBytes = sizeof(compressedBytes) + compressedBytes;
-
-    const unsigned char lengthBytes[4] = {
-        static_cast<unsigned char>(compressedBytes & 0xff),
-        static_cast<unsigned char>((compressedBytes >> 8) & 0xff),
-        static_cast<unsigned char>((compressedBytes >> 16) & 0xff),
-        static_cast<unsigned char>((compressedBytes >> 24) & 0xff),
-    };
-    const size_t lengthWritten = std::fwrite(
-        lengthBytes, 1, sizeof(lengthBytes), m_TraceFile);
-    const size_t payloadWritten = std::fwrite(
-        compressed.constData(), 1, static_cast<size_t>(compressed.size()),
-        m_TraceFile);
-    if (lengthWritten != sizeof(lengthBytes) ||
-        payloadWritten != static_cast<size_t>(compressed.size())) {
-        m_TraceWriteFailed = true;
-        m_TraceAcceptingRows.store(false);
-    }
-    else {
-        m_TraceBytesWritten += recordBytes;
-        // A completed chunk is independently recoverable after a crash. This
-        // is a low-frequency write performed only by the background thread.
-        if (std::fflush(m_TraceFile) != 0) {
-            m_TraceWriteFailed = true;
-            m_TraceAcceptingRows.store(false);
-        }
-        else if (enforceSizeCap &&
-                 m_TraceBytesWritten >= kMaximumTraceBytes &&
-                 minimumTraceDurationCaptured()) {
-            m_TraceSizeCapped = true;
-            m_TraceAcceptingRows.store(false);
-        }
-    }
-    m_TraceChunk.clear();
-}
-
-bool VrrPacingWorker::minimumTraceDurationCaptured() const
-{
-    return m_TraceLatestArrivalUs >= m_TraceStartUs &&
-        m_TraceLatestArrivalUs - m_TraceStartUs >= kMinimumTraceDurationUs;
 }
 
 const char* VrrPacingWorker::traceDispositionName(
@@ -2004,121 +1909,27 @@ const char* VrrPacingWorker::tearClassification(const TraceRow& row) const
 void VrrPacingWorker::openTraceIfRequested()
 {
     const QString tracePath = qEnvironmentVariable("MOONLIGHT_VRR_TRACE");
-    if (tracePath.isEmpty()) {
+    if (tracePath.isEmpty() ||
+            !m_TraceFile.open(tracePath, kTraceHeader, "VRR", LiGetMicroseconds())) {
         return;
     }
 
-#ifdef _WIN32
-    // A buffered stdio stream still flushes synchronously when its buffer
-    // fills. Keep diagnostic I/O off the time-critical worker's network path.
-    if (isUncPath(tracePath)) {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "MOONLIGHT_VRR_TRACE must use a local path; refusing network trace: %s",
-                    qPrintable(tracePath));
-        return;
-    }
-
-#endif
-
-    // The launcher owns one path for the application lifetime, while each
-    // reconnect creates a new worker. Preserve the completed connection before
-    // reusing that path so launchers and their latest-trace links still name
-    // the current capture. A failed archive must never fall through to truncate.
-    QFile previousTrace(tracePath);
-    if (previousTrace.exists()) {
-        const QFileInfo traceInfo(previousTrace);
-        const QString extension = traceInfo.suffix().isEmpty() ? QString() :
-            QStringLiteral(".") + traceInfo.suffix();
-        QString archivePath;
-        for (unsigned connection = 1; ; ++connection) {
-            archivePath = traceInfo.absoluteDir().filePath(
-                traceInfo.completeBaseName() +
-                QStringLiteral("-connection-%1").arg(connection) + extension);
-            if (!QFileInfo::exists(archivePath)) break;
-        }
-        if (!previousTrace.rename(archivePath)) {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "Unable to preserve previous VRR trace; tracing disabled: %s",
-                        qPrintable(tracePath));
-            return;
-        }
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "VRR trace: preserved earlier connection at %s",
-                    QFile::encodeName(archivePath).constData());
-    }
-
-#ifdef _WIN32
-    // Use the checked CRT variant on Windows so enabling diagnostics does not
-    // introduce a deprecation warning in the normal application build.
-    if (_wfopen_s(&m_TraceFile, reinterpret_cast<const wchar_t*>(tracePath.utf16()), L"wb") != 0) {
-        m_TraceFile = nullptr;
-    }
-#else
-    m_TraceFile = std::fopen(QFile::encodeName(tracePath).constData(), "wb");
-#endif
-    if (m_TraceFile == nullptr) {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "Unable to open MOONLIGHT_VRR_TRACE file: %s", qPrintable(tracePath));
-        return;
-    }
-
-    // A .csv suffix explicitly requests the directly readable compatibility
-    // format. The recommended .vrrtrace format compresses independent chunks
-    // and typically reduces a full session by an order of magnitude.
-    m_TraceFormat = tracePath.endsWith(QStringLiteral(".csv"), Qt::CaseInsensitive) ?
-        TraceFormat::Csv : TraceFormat::ChunkedCompressed;
-
-    // Amortize local diagnostic writes instead of flushing on every frame.
-    // fclose() commits the CSV tail; compressed chunks flush independently.
-    std::setvbuf(m_TraceFile, nullptr, _IOFBF, 1024 * 1024);
-
-    m_TraceBytesWritten = 0;
-    m_TraceChunk.clear();
     m_TraceQueue = std::make_unique<Vrr13::TraceQueue<TraceRow, 8192>>();
-    m_TraceDecodedHash.reset();
-    if (m_TraceFormat == TraceFormat::ChunkedCompressed) {
-        const size_t magicBytes = sizeof(kTraceMagic) - 1;
-        if (std::fwrite(kTraceMagic, 1, magicBytes, m_TraceFile) != magicBytes) {
-            std::fclose(m_TraceFile);
-            m_TraceFile = nullptr;
-            return;
-        }
-        m_TraceBytesWritten = magicBytes;
-        m_TraceChunk.append(kTraceHeader);
-    }
-    else {
-        const size_t headerBytes = sizeof(kTraceHeader) - 1;
-        if (std::fwrite(kTraceHeader, 1, headerBytes, m_TraceFile) !=
-                headerBytes) {
-            std::fclose(m_TraceFile);
-            m_TraceFile = nullptr;
-            return;
-        }
-        m_TraceBytesWritten = headerBytes;
-    }
-    m_TraceDecodedHash.addData(
-        kTraceHeader, sizeof(kTraceHeader) - 1);
 
     // All formatting and I/O happen on this thread; the pacing worker only
     // enqueues row copies. Without it, a buffered flush would periodically
     // stall the TIME_CRITICAL thread and perturb the timing being measured.
     m_TraceStopping.store(false);
-    m_TraceSizeCapped = false;
-    m_TraceWriteFailed = false;
     m_TraceDroppedRows.store(0, std::memory_order_relaxed);
     m_TraceRowsEnqueued.store(0, std::memory_order_relaxed);
     m_TraceArrivalSequence.store(0);
-    m_TraceStartUs = LiGetMicroseconds();
-    m_TraceLatestArrivalUs = m_TraceStartUs;
     m_TraceThread = SDL_CreateThread(VrrPacingWorker::traceThreadProc,
                                      "VrrTrace", this);
     if (m_TraceThread == nullptr) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Disabling VRR trace: writer thread failed: %s",
                     SDL_GetError());
-        std::fclose(m_TraceFile);
-        m_TraceFile = nullptr;
-        m_TraceChunk.clear();
+        m_TraceFile.abandon();
         return;
     }
     m_TraceAcceptingRows.store(true);
@@ -2145,12 +1956,8 @@ void VrrPacingWorker::closeTrace()
         m_TraceRowsEnqueued.exchange(0, std::memory_order_relaxed);
     const uint64_t arrivalsAllocated =
         m_TraceArrivalSequence.load(std::memory_order_relaxed);
-    if (m_TraceFile != nullptr) {
-        if (m_TraceFormat == TraceFormat::Csv &&
-                std::fflush(m_TraceFile) != 0) {
-            m_TraceWriteFailed = true;
-        }
-        const QByteArray footer =
+    if (m_TraceFile.isOpen()) {
+        m_TraceFile.close(
             QByteArrayLiteral(
                 "#vrr_trace_footer,format_version=2,clean_shutdown=1,"
                 "arrival_sequence_allocated=") +
@@ -2158,53 +1965,11 @@ void VrrPacingWorker::closeTrace()
             QByteArrayLiteral(",rows_enqueued=") +
             QByteArray::number(rowsEnqueued) +
             QByteArrayLiteral(",rows_dropped=") +
-            QByteArray::number(static_cast<qulonglong>(droppedRows)) +
-            QByteArrayLiteral(",size_capped=") +
-            QByteArray::number(m_TraceSizeCapped ? 1 : 0) +
-            QByteArrayLiteral(",write_failed=") +
-            QByteArray::number(m_TraceWriteFailed ? 1 : 0) +
-            QByteArrayLiteral(",decoded_sha256=") +
-            m_TraceDecodedHash.result().toHex() +
-            QByteArrayLiteral("\n");
-        if (m_TraceFormat == TraceFormat::ChunkedCompressed) {
-            m_TraceChunk.append(footer);
-            // The footer is metadata, not a captured row. Crossing the size
-            // threshold by these few bytes did not truncate the capture.
-            flushTraceChunk(false);
-        }
-        else {
-            const size_t footerBytes = static_cast<size_t>(footer.size());
-            if (std::fwrite(
-                    footer.constData(), 1, footerBytes, m_TraceFile) !=
-                    footerBytes ||
-                    std::fflush(m_TraceFile) != 0) {
-                m_TraceWriteFailed = true;
-            }
-        }
+            QByteArray::number(static_cast<qulonglong>(droppedRows)));
     }
     if (droppedRows != 0) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "VRR trace dropped %zu rows to protect pacing",
                     droppedRows);
     }
-
-    if (m_TraceSizeCapped) {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "VRR trace was capped at 512 MiB after preserving at least one hour");
-        m_TraceSizeCapped = false;
-    }
-    if (m_TraceWriteFailed) {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "VRR trace reported a write failure");
-    }
-
-    if (m_TraceFile != nullptr) {
-        if (std::fclose(m_TraceFile) != 0) {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "VRR trace close reported a write failure");
-        }
-        m_TraceFile = nullptr;
-    }
-    m_TraceChunk.clear();
-    m_TraceWriteFailed = false;
 }

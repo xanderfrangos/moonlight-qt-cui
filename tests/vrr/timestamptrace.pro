@@ -1,18 +1,25 @@
 TEMPLATE = app
-TARGET = tst_vrrpacingworker
+TARGET = tst_timestamptrace
 
-QT += core qml
+QT += core testlib
 QT -= gui
-CONFIG += console c++17
+CONFIG += console testcase c++17
 CONFIG -= app_bundle
 DEFINES += SDL_MAIN_HANDLED
 
 SOURCES += \
-    $$PWD/tst_vrrpacingworker.cpp \
-    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrrpacingworker.cpp \
+    $$PWD/tst_timestamptrace.cpp \
+    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/timestamptrace.cpp \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/tracefile.cpp \
-    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/vrrtimingcontroller.cpp \
-    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/vrrtargetwaiter.cpp
+    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/timestamppacer.cpp \
+    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/vrrtargetwaiter.cpp \
+    $$PWD/../../app/streaming/video/pacinglog.cpp
+HEADERS += \
+    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/timestamppacer.h \
+    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/timestamppacingpolicy.h \
+    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/timestamptrace.h \
+    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/tracefile.h \
+    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/tracequeue.h
 
 INCLUDEPATH += \
     $$PWD/../../app \
@@ -46,13 +53,3 @@ unix:!macx {
     CONFIG += link_pkgconfig
     PKGCONFIG += libavutil sdl2
 }
-
-SOURCES += $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/profile.cpp
-
-# Track the header-only feedback models in incremental builds.
-HEADERS += \
-    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/vrrframedroppolicy.h \
-    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/presentationtiming.h \
-    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/prediction.h \
-    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/recentreadiness.h \
-    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/smoothnessfeedback.h

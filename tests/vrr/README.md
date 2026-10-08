@@ -18,6 +18,10 @@ paths and ZIP export. The tracing checkbox does not switch timing policies.
 Set `MOONLIGHT_DIAGNOSTICS_TEST_EXPORT` to a new `.zip` path to export its fixture,
 then run `python3 tests/vrr/check_diagnostic_zip.py PATH` for independent CRC and
 content verification. Cold/warm worker exports use the current production policy.
+`tst_timestamptrace` covers timestamp pacing's `.tstrace`, which shares the
+VRR trace's file handling (`TraceFile`): paths, concurrent producers, footer
+accounting, connection archiving, CSV output, and a real `TimestampPacer` on a
+synthetic V-blank grid.
 
 The interval-quality queue is the production VRR policy (responsive revision 9).
 The four customizable timing settings and their bounds are documented in

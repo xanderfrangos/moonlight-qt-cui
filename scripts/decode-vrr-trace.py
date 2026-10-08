@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Expand a chunk-compressed Moonlight VRR trace to CSV."""
+"""Expand a chunk-compressed Moonlight pacing trace to CSV.
+
+Reads VRR Pacing Mode traces (.vrrtrace) and timestamp pacing traces
+(.tstrace), which share the container format.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +21,7 @@ MAGIC = b"MLVRR1\n"
 def decode(source: BinaryIO, destination: BinaryIO) -> None:
     magic = source.read(len(MAGIC))
     if magic != MAGIC:
-        raise ValueError("not a Moonlight chunk-compressed VRR trace")
+        raise ValueError("not a Moonlight chunk-compressed pacing trace")
 
     chunk_number = 0
     while True:
@@ -47,7 +51,7 @@ def decode(source: BinaryIO, destination: BinaryIO) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("trace", type=Path, help="input .vrrtrace file")
+    parser.add_argument("trace", type=Path, help="input .vrrtrace or .tstrace file")
     parser.add_argument(
         "csv",
         nargs="?",

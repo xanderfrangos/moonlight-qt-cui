@@ -62,8 +62,9 @@ If magenta jumps while the other lanes stay flat on an AMD GPU under Linux, try
 GPU at fixed high clocks for the stream so it cannot drop its clocks between
 frames, at the cost of more power.
 
-In Settings, under **VRR diagnostics**, check **Trace VRR frames for debugging**.
-Enable VRR, connect and reproduce the problem, then disconnect. Recordings are
+In Settings, under **Pacing diagnostics**, check **Trace paced frames for
+debugging**. Turn on VRR Pacing Mode or timestamp pacing, connect and reproduce
+the problem, then disconnect. Recordings are
 saved automatically under **vrr-diagnostics on your Desktop**, with a separate
 timestamped folder for each stream. Use **Open diagnostics folder** to view them,
 or **Export latest recording (ZIP)** to package the latest completed run beside
@@ -90,7 +91,11 @@ writing elsewhere. Tracing remains local to avoid network I/O during streaming.
 Each stream gets a UTC timestamp and random identifier. Its folder contains:
 
 - `Moonlight.vrrtrace` and any `Moonlight-connection-*.vrrtrace` segments from
-  decoder recreation/reconnects within that stream;
+  decoder recreation/reconnects within that stream, when VRR Pacing Mode ran;
+- `Moonlight.tstrace` and any `Moonlight-connection-*.tstrace` segments
+  instead, when timestamp pacing ran. Same container (decode with
+  `scripts/decode-vrr-trace.py`), its own rows; `vrrreplay` cannot replay it.
+  See architecture.md, "Timestamp pacing", "Tracing";
 - `Moonlight.log`, a per-capture copy of existing redacted session logging;
 - `capture-info.json`, with requested stream settings, application version and
   executable SHA-256, OS, diagnostic overrides and capture completion state.
@@ -115,7 +120,8 @@ archived manually. Normal app exit waits for an in-flight export.
 
 ## Lifecycle and external launchers
 
-The checkbox sets only `MOONLIGHT_VRR_TRACE` and `MOONLIGHT_VRR_DEEP_TRACE=1`,
+The checkbox sets only `MOONLIGHT_VRR_TRACE` and `MOONLIGHT_VRR_DEEP_TRACE=1`
+(timestamp pacing derives its `.tstrace` path from the former),
 after the preceding session finishes cleanup and before starting the connection.
 Their prior process values are restored after decoder/trace shutdown and logger
 drain. No system/user environment settings or controller timing parameters are

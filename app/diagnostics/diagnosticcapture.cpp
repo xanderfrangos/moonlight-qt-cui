@@ -190,6 +190,7 @@ void DiagnosticCapture::finish()
     m_Metadata["clean_session_close"] = true;
     m_Metadata["finished_utc"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     m_Metadata["trace_files"] = QDir(m_Directory).entryList({"*.vrrtrace"}, QDir::Files).size();
+    m_Metadata["timestamp_trace_files"] = QDir(m_Directory).entryList({"*.tstrace"}, QDir::Files).size();
     // A failed final manifest remains explicitly unclosed rather than falsely
     // certifying the recording. Trace integrity still requires exact replay.
     saveManifest();

@@ -9,6 +9,7 @@
 #include "vrr/vrrtypes.h"
 #include "vrr/vrrtimingcontroller.h"
 #include "vrr/tracequeue.h"
+#include "tracefile.h"
 
 #include <atomic>
 #include <cstdio>
@@ -172,11 +173,6 @@ private:
         uint64_t terminalTimeUs = 0;
     };
 
-    enum class TraceFormat : uint8_t {
-        Csv,
-        ChunkedCompressed,
-    };
-
     static int threadProc(void* context);
     static int traceThreadProc(void* context);
 
@@ -209,8 +205,6 @@ private:
     void closeTrace();
     int traceRun();
     void writeTraceRow(const TraceRow& row);
-    void flushTraceChunk(bool enforceSizeCap = true);
-    bool minimumTraceDurationCaptured() const;
     static const char* traceDispositionName(TraceDisposition disposition);
     const char* tearClassification(const TraceRow& row) const;
 
@@ -264,7 +258,7 @@ private:
     bool m_RebaseOnNextFrame = false;
     uint32_t m_RebaseOnNextFrameFlags = 0;
     bool m_DeepTraceEnabled = false;
-    std::FILE* m_TraceFile = nullptr;
+    TraceFile m_TraceFile;
     SDL_Thread* m_TraceThread = nullptr;
     std::unique_ptr<Vrr13::TraceQueue<TraceRow, 8192>> m_TraceQueue;
     std::atomic_bool m_TraceStopping { false };
@@ -273,14 +267,4 @@ private:
     std::atomic_uint64_t m_TraceArrivalSequence { 0 };
     std::atomic_size_t m_TraceDroppedRows { 0 };
     std::atomic_uint64_t m_TraceRowsEnqueued { 0 };
-    uint64_t m_TraceBytesWritten = 0;
-    uint64_t m_TraceStartUs = 0;
-    uint64_t m_TraceLatestArrivalUs = 0;
-    bool m_TraceSizeCapped = false;
-    bool m_TraceWriteFailed = false;
-    TraceFormat m_TraceFormat = TraceFormat::Csv;
-    QByteArray m_TraceChunk;
-    QCryptographicHash m_TraceDecodedHash {
-        QCryptographicHash::Sha256
-    };
 };

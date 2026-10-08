@@ -2450,7 +2450,13 @@ void Session::start()
             {"vrr_target_hundredths", m_PresentationSettings.vrrTimingOptions.targetHundredths},
             {"vrr_history_seconds", m_PresentationSettings.vrrTimingOptions.historySeconds},
             {"vrr_tolerance_us", m_PresentationSettings.vrrTimingOptions.toleranceUs},
-            {"reduce_judder", m_PresentationSettings.smoothVrrFrameTiming}
+            {"reduce_judder", m_PresentationSettings.smoothVrrFrameTiming},
+            {"timestamp_pacing", m_PresentationSettings.timestampPacing.enabled},
+            {"timestamp_smoothing", m_PresentationSettings.timestampPacing.smoothing},
+            {"timestamp_target_per_mille", m_PresentationSettings.timestampPacing.targetPerMille},
+            {"timestamp_min_buffer_ms", m_PresentationSettings.timestampPacing.minBufferMs},
+            {"timestamp_max_buffer_ms", m_PresentationSettings.timestampPacing.maxBufferMs},
+            {"timestamp_vsync_margin_us", m_PresentationSettings.timestampPacing.vsyncMarginUs}
         };
         QString error;
         m_DiagnosticCapture = DiagnosticCapture::begin(DiagnosticCapture::rootDirectory(), metadata, error);

@@ -29,6 +29,8 @@ if "%~1"=="--align" (
 )
 set "MOONLIGHT_VRR_CAPTURE="
 set "MOONLIGHT_VRR_TRACE=%TRACE_DIR%\%PREFIX%-%STAMP%.vrrtrace"
+rem Timestamp pacing writes its own trace beside it; vrrreplay cannot replay it.
+set "TIMESTAMP_TRACE=%TRACE_DIR%\%PREFIX%-%STAMP%.tstrace"
 set "MOONLIGHT_VRR_DEEP_TRACE=1"
 set "MOONLIGHT_BFI_FORCE_TEARING="
 set "SUMMARY=%TRACE_DIR%\%PREFIX%-%STAMP%-replay.json"
@@ -37,17 +39,20 @@ echo The first 60 minutes are retained before the 512 MiB cap applies.
 echo Close Moonlight normally when finished so the capture can be verified.
 start "" /wait "%PORTABLE%\Moonlight.exe"
 set "MOONLIGHT_EXIT=%errorlevel%"
-if not exist "%MOONLIGHT_VRR_TRACE%" (
-    echo No VRR capture was saved. Check that a VRR stream was started.
+if not exist "%MOONLIGHT_VRR_TRACE%" if not exist "%TIMESTAMP_TRACE%" (
+    echo No pacing capture was saved. Check that VRR Pacing Mode or timestamp pacing was on for the stream.
     pause
     exit /b 1
 )
+set "REPLAY_EXIT=0"
+if not exist "%MOONLIGHT_VRR_TRACE%" goto upload
 "%PORTABLE%\vrrreplay.exe" "%MOONLIGHT_VRR_TRACE%" --require-exact-baseline --output "%SUMMARY%" > "%SUMMARY%.stdout.txt" 2> "%SUMMARY%.stderr.txt"
 set "REPLAY_EXIT=%errorlevel%"
 if not "%REPLAY_EXIT%"=="0" echo Exact replay failed. This capture is exploratory only; inspect its report.
+:upload
 if not exist "%UPLOAD_DIR%" mkdir "%UPLOAD_DIR%"
 set "UPLOAD_EXIT=0"
-for %%f in ("%MOONLIGHT_VRR_TRACE%" "%MOONLIGHT_VRR_TRACE%.gpu-*.csv" "%SUMMARY%" "%SUMMARY%.stdout.txt" "%SUMMARY%.stderr.txt") do (
+for %%f in ("%MOONLIGHT_VRR_TRACE%" "%MOONLIGHT_VRR_TRACE%.gpu-*.csv" "%TIMESTAMP_TRACE%" "%SUMMARY%" "%SUMMARY%.stdout.txt" "%SUMMARY%.stderr.txt") do (
     if exist "%%~f" (
         copy /y "%%~f" "%UPLOAD_DIR%\" >nul
         if errorlevel 1 set "UPLOAD_EXIT=1"

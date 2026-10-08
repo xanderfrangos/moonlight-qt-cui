@@ -2498,7 +2498,7 @@ Flickable {
             id: vrrDiagnosticsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
             padding: 12
-            title: "<font color=\"skyblue\">" + qsTr("VRR diagnostics") + "</font>"
+            title: "<font color=\"skyblue\">" + qsTr("Pacing diagnostics") + "</font>"
             font.pointSize: 12
 
             Column {
@@ -2507,7 +2507,7 @@ Flickable {
 
                 CheckBox {
                     id: traceVrrFramesCheckBox
-                    text: qsTr("Trace VRR frames for debugging")
+                    text: qsTr("Trace paced frames for debugging")
                     font.pointSize: 12
                     checked: StreamingPreferences.traceVrrFrames
                     onCheckedChanged: StreamingPreferences.traceVrrFrames = checked
@@ -2516,13 +2516,13 @@ Flickable {
                 Label {
                     width: parent.width
                     wrapMode: Text.Wrap
-                    text: qsTr("Saves frame traces and session logs to the vrr-diagnostics folder on your Desktop, with a separate folder for each stream. Does not change your VRR timing settings.")
+                    text: qsTr("Saves frame traces and session logs to the vrr-diagnostics folder on your Desktop, with a separate folder for each stream. Does not change your pacing settings.")
                 }
 
                 Label {
                     width: parent.width
                     wrapMode: Text.Wrap
-                    text: qsTr("Enable VRR and reconnect the stream to start recording. Tracing can use substantial disk space and add diagnostic overhead. Uncheck this after debugging.")
+                    text: qsTr("Turn on VRR Pacing Mode or timestamp pacing and reconnect the stream to start recording. Tracing can use substantial disk space and add diagnostic overhead. Uncheck this after debugging.")
                 }
 
                 Button {

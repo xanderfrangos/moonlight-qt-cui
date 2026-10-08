@@ -730,7 +730,7 @@ void Pacer::renderFrame(AVFrame* frame)
         afterRender >= beforeRender ? afterRender - beforeRender : 0,
         afterRender, rtpTimestampValid, rtpTimestamp);
     if (m_TimestampPacer != nullptr) {
-        m_TimestampPacer->notePresented(afterRender);
+        m_TimestampPacer->notePresented(beforeRender, afterRender, rtpTimestampValid, rtpTimestamp);
     }
 
     // Wait until after next frame to free this one to ensure the GPU

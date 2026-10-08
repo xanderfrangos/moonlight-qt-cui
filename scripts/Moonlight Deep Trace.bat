@@ -45,8 +45,8 @@ popd
 
 echo.
 echo Moonlight exited with code %MOONLIGHT_EXIT%.
-if not exist "%MOONLIGHT_DIAG_OUTPUT%\*.vrrtrace" (
-    echo No VRR trace was created. Check that VRR was enabled for the stream.
+if not exist "%MOONLIGHT_DIAG_OUTPUT%\*.vrrtrace" if not exist "%MOONLIGHT_DIAG_OUTPUT%\*.tstrace" (
+    echo No pacing trace was created. Check that VRR Pacing Mode or timestamp pacing was on for the stream.
     echo The session log is still available for troubleshooting.
 )
 echo Zip the ENTIRE folder below and send it back, including connection files:

@@ -154,10 +154,16 @@ void VrrDiagnosticsTest::preservesConnectionsAndInterruptedCapture()
     QVERIFY(!QJsonDocument::fromJson(readFile(manifest)).object()["clean_session_close"].toBool());
     writeFile(QDir(firstFolder).filePath("Moonlight.vrrtrace"), "last connection");
     writeFile(QDir(firstFolder).filePath("Moonlight-connection-1.vrrtrace"), "first connection");
+    // Timestamp pacing writes its own trace beside the VRR one
+    writeFile(QDir(firstFolder).filePath("Moonlight.tstrace"), "timestamp connection");
+    writeFile(QDir(firstFolder).filePath("Moonlight-connection-1.tstrace"), "first timestamp connection");
     first.reset();
+    QCOMPARE(QJsonDocument::fromJson(readFile(manifest)).object()["timestamp_trace_files"].toInt(), 2);
     const auto zip = DiagnosticCapture::exportLatest(temporary.path(), error);
     QVERIFY2(!zip.isEmpty(), qPrintable(error));
     QVERIFY(readFile(zip).contains("Moonlight-connection-1.vrrtrace"));
+    QVERIFY(readFile(zip).contains("Moonlight.tstrace"));
+    QVERIFY(readFile(zip).contains("Moonlight-connection-1.tstrace"));
     const auto original = readFile(QDir(firstFolder).filePath("Moonlight.vrrtrace"));
     auto second = DiagnosticCapture::begin(temporary.path(), {}, error);
     QVERIFY2(second != nullptr, qPrintable(error));

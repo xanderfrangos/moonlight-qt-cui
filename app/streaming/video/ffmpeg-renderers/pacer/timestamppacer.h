@@ -1,6 +1,7 @@
 #pragma once
 
 #include "timestamppacingpolicy.h"
+#include "timestamptrace.h"
 #include "vrr/vrrtargetwaiter.h"
 #include "vrr/vrrtypes.h"
 
@@ -10,6 +11,7 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <thread>
 
@@ -73,7 +75,8 @@ public:
     bool start();
 
     // Joins the pacing thread and frees the frames still waiting. No callback
-    // runs after this returns.
+    // runs after this returns. The trace stays open until destruction, for
+    // the V-sync and render threads that stop after this.
     void stop();
 
     void submit(PacedFrame&& frame);
@@ -98,8 +101,10 @@ public:
     // renderers whose grid comes from a V-sync source (Windows).
     void onFrameDisplayed(uint64_t presentStartUs, uint64_t displayUs, uint64_t refreshPeriodUs);
 
-    // The renderer finished presenting the most recently released frame
-    void notePresented(uint64_t presentUs);
+    // The renderer finished presenting the most recently released frame.
+    // renderStartUs is when its render began, and the RTP timestamp
+    // identifies it in the trace.
+    void notePresented(uint64_t renderStartUs, uint64_t presentUs, bool rtpValid, uint32_t rtpTimestamp);
 
     size_t queueDepth();
 
@@ -113,6 +118,10 @@ private:
         AVFrame* frame = nullptr;
         uint64_t targetUs = 0;
         bool paced = false;
+        // For the trace
+        int32_t frameNumber = -1;
+        bool rtpValid = false;
+        uint32_t rtpTimestamp = 0;
     };
 
     void run();
@@ -122,7 +131,15 @@ private:
     uint64_t releaseTimeLocked(const Entry& entry, bool vblankGrid) const;
     void releaseDueLocked(std::unique_lock<std::mutex>& lock, bool vblankGrid);
     void learnWakeLead(uint64_t schedulerDelayUs);
-    void noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs);
+    bool noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs);
+    void trace(const TimestampTrace::Row& row);
+    // Records a display report's row on every return, under the lock
+    struct TraceOnReturn {
+        TimestampPacer* pacer;
+        TimestampTrace::Row& row;
+        ~TraceOnReturn();
+    };
+    static TimestampTrace::Row frameRow(TimestampTrace::Event event, const Entry& entry, uint64_t atUs);
 
     const TimestampPacingOptions m_Options;
     const int m_StreamFps;
@@ -177,5 +194,12 @@ private:
     size_t m_SchedulerDelayCount = 0;
     size_t m_NextSchedulerDelay = 0;
     uint64_t m_WakeLeadUs = 0;
+    // The precise waiter's last oversleep before a release, for the trace
+    uint64_t m_LastSchedulerDelayUs = 0;
+    bool m_LastSchedulerDelayValid = false;
     std::thread m_Thread;
+
+    // Null unless tracing. Set before any thread that records starts, and
+    // destroyed after they have all stopped.
+    std::unique_ptr<TimestampTrace> m_Trace;
 };

@@ -367,8 +367,9 @@ SteamOS Desktop Mode:
 3. ~~Start Gamescope at a submit margin of about 4.5 ms.~~ Done 2026-10-08.
 4. ~~Make Light the default smoothing; reword or remove Strong.~~ Done
    2026-10-08.
-5. Live captures with the current build, timestamp pacing on, the pacing log
-   enabled and the presented-smoothness graph visible:
+5. Live captures with the current build, timestamp pacing on, a frame trace
+   (Settings, "Trace paced frames for debugging"; `Moonlight.tstrace`, since
+   2026-10-08) and the presented-smoothness graph visible:
    - Windows at 120 FPS on 120 Hz (matched rates, where phase lock matters
      most).
    - Deck Game Mode at 60 on 60 and 40 on 40.

@@ -325,6 +325,8 @@ ffmpeg {
         streaming/video/ffmpeg-renderers/pacer/pacer.cpp \
         streaming/video/ffmpeg-renderers/pacer/vrrpacingworker.cpp \
         streaming/video/ffmpeg-renderers/pacer/timestamppacer.cpp \
+        streaming/video/ffmpeg-renderers/pacer/timestamptrace.cpp \
+        streaming/video/ffmpeg-renderers/pacer/tracefile.cpp \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtimingcontroller.cpp \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtargetwaiter.cpp
 
@@ -341,6 +343,8 @@ ffmpeg {
         streaming/video/ffmpeg-renderers/pacer/vrrpacingworker.h \
         streaming/video/ffmpeg-renderers/pacer/timestamppacer.h \
         streaming/video/ffmpeg-renderers/pacer/timestamppacingpolicy.h \
+        streaming/video/ffmpeg-renderers/pacer/timestamptrace.h \
+        streaming/video/ffmpeg-renderers/pacer/tracefile.h \
         streaming/video/ffmpeg-renderers/ivrrframepresenter.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtypes.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/presentationtiming.h \

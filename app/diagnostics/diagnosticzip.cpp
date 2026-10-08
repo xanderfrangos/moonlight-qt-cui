@@ -29,8 +29,10 @@ quint32 crc32(const QByteArray& data, quint32 crc)
 bool writeDiagnosticZip(const QDir& source, const QString& destination, QString& error)
 {
     // Never sweep settings, keys, crash dumps, other captures, or symlinks into
-    // a support bundle. Reconnected worker segments use this same prefix.
-    const auto files = source.entryInfoList({"Moonlight*.vrrtrace", "Moonlight*.vrrtrace.gpu-*.csv", "Moonlight.log", "capture-info.json"},
+    // a support bundle. Reconnected worker segments use this same prefix, and
+    // timestamp pacing's traces (.tstrace) sit beside VRR Pacing Mode's.
+    const auto files = source.entryInfoList({"Moonlight*.vrrtrace", "Moonlight*.vrrtrace.gpu-*.csv", "Moonlight*.tstrace",
+                                             "Moonlight.log", "capture-info.json"},
         QDir::Files | QDir::NoSymLinks, QDir::Name);
     if (files.isEmpty() || QFileInfo::exists(destination)) {
         error = QCoreApplication::translate("DiagnosticCapture", "No capture files to export, or the destination already exists.");

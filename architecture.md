@@ -2434,7 +2434,8 @@ legacy path. A UI checkbox alone cannot establish DXGI capability, active
 adaptive presentation, or that the physical panel is varying refresh.
 
 `tracevrrframes` defaults to false. The Settings checkbox enables diagnostic
-frame tracing only, with export of the latest completed recording and a button
+frame tracing only, for VRR Pacing Mode or (since 2026-10-08) timestamp pacing,
+with export of the latest completed recording and a button
 to open `Desktop/vrr-diagnostics`. The platform's Desktop location is resolved
 through Qt, rather than hardcoding an English profile path. The session owns its
 environment wrapper after acquiring the active-session semaphore, restoring it
@@ -4065,7 +4066,9 @@ boundaries and obtaining the missing evidence.
 with `MLVRR1\n` and stores independently compressed CSV chunks. A `.csv` path
 selects CSV output. UNC capture paths are rejected to keep network I/O away
 from frame delivery. `MOONLIGHT_VRR_DEEP_TRACE` requests deeper instrumentation;
-alignment is the separate native raster option described above.
+alignment is the separate native raster option described above. The file
+handling below lives in `TraceFile` and is shared with timestamp pacing, whose
+own `.tstrace` rows are described under "Timestamp pacing" in section 14.
 
 The Settings recording wrapper creates a unique per-stream folder under
 `Desktop/vrr-diagnostics`, sets only the trace/deep-trace variables, and collects
@@ -4886,6 +4889,53 @@ pacing mode but shown only with timestamp pacing.
   - 8.1 ms mean delay over readiness, and 0.64% of frames ready after target.
 - These are present-call times, not scanout. The V-blank path has no capture
   yet and has only been checked against synthetic grids.
+
+**Tracing (2026-10-08, source `fc95fe55` plus this change).** Timestamp
+pacing records a frame trace whenever VRR Pacing Mode would: when
+`MOONLIGHT_VRR_TRACE` is set, by a launcher or by the Settings checkbox (now
+"Trace paced frames for debugging" under "Pacing diagnostics").
+- **File:** beside the VRR path, with `.tstrace` in place of its suffix
+  (`Moonlight.vrrtrace` becomes `Moonlight.tstrace`; a `.csv` path becomes
+  `<base>.tstrace.csv`, plain CSV). It is opened in `TimestampPacer::start()`
+  and closed when the pacer is destroyed, after the V-sync and render threads
+  have stopped, so their last rows still land.
+- **Shared mechanics:** [tracefile.h](app/streaming/video/ffmpeg-renderers/pacer/tracefile.h)
+  (`TraceFile`) now owns the trace file for both modes: local-path check,
+  `-connection-N` archiving of an earlier connection, the `MLVRR1` chunked
+  container, the one-hour minimum before the 512 MiB cap, and the footer's
+  size cap, write failure and decoded SHA-256 fields. `VrrPacingWorker` was
+  moved onto it with its output format unchanged: the footer is identical,
+  and freshly exported cold and warm worker fixtures pass exact replay. Each mode keeps its own rows, bounded MPSC
+  queue (`Vrr13::TraceQueue`) and writer thread.
+- **Rows** ([timestamptrace.h](app/streaming/video/ffmpeg-renderers/pacer/timestamptrace.h),
+  header first column `timestamp_trace_schema`, version 1): one flat CSV
+  with an `event` column. `session` (options, rates, grid availability),
+  `scheduled` (delivery timeline, host latency, decoder queue time, the
+  policy's decision, the held target, render lead, queue depth), `evicted`,
+  `superseded`, `released` (planned release, grid use, assigned V-blank,
+  trim, release lead and extra margin, the waiter's last oversleep),
+  `presented` (render start and present return, by RTP timestamp),
+  `vsync`, `display_event` and `frame_displayed` (matched V-blank and miss
+  verdict), and `display_mode` changes (with the measured refresh share).
+  Each row has a `sequence` allocated when recorded, since rows from
+  different threads can reach the file out of order.
+- **Footer:** `#timestamp_trace_footer,format_version=1,clean_shutdown=1,`
+  `rows_allocated,rows_enqueued,rows_dropped` plus the shared fields. A
+  contended producer gives up on a slot after 16 attempts, as VRR's do, so
+  `rows_dropped` can be nonzero under contention; every row is either written
+  or counted.
+- **Tools:** `scripts/decode-vrr-trace.py` expands it. `vrrreplay` does not
+  read it. Settings capture export includes `Moonlight*.tstrace`, and
+  `capture-info.json` gains `timestamp_trace_files` and the session's
+  timestamp pacing options. The diagnostic launchers skip exact replay and
+  still upload the `.tstrace` when only it exists.
+- **Tests:** `tst_timestamptrace` covers paths, concurrent producers and the
+  footer accounting, connection archiving, CSV output, an unwritable
+  destination, and a real `TimestampPacer` at 60 FPS on a synthetic 60 Hz
+  V-blank grid (every frame scheduled and then released, superseded or
+  evicted; one presented row per release; V-sync rows after `stop()`).
+- **Not done:** no live stream has been traced. The temporary pacing log
+  below remains, independently of this trace.
 
 Temporary per-frame logging for the same proposal (2026-10-07,
 [pacinglog.h](app/streaming/video/pacinglog.h)): with

@@ -47,6 +47,28 @@ TimestampPacer::TimestampPacer(const TimestampPacingOptions& options, int stream
 TimestampPacer::~TimestampPacer()
 {
     stop();
+    // Whoever owns this has stopped the V-sync and render threads by now
+    m_Trace.reset();
+}
+
+void TimestampPacer::trace(const TimestampTrace::Row& row)
+{
+    if (m_Trace != nullptr) {
+        m_Trace->record(row);
+    }
+}
+
+TimestampTrace::Row TimestampPacer::frameRow(TimestampTrace::Event event, const Entry& entry, uint64_t atUs)
+{
+    TimestampTrace::Row row;
+    row.event = event;
+    row.eventUs = atUs;
+    row.frameNumber = entry.frameNumber;
+    row.rtpValid = entry.rtpValid;
+    row.rtpTimestamp = entry.rtpTimestamp;
+    row.paced = entry.paced;
+    row.targetUs = entry.targetUs;
+    return row;
 }
 
 const char* TimestampPacer::displayModeName(DisplayMode mode)
@@ -69,6 +91,31 @@ void TimestampPacer::setDisplayModeProbe(DisplayModeProbe probe)
 
 bool TimestampPacer::start()
 {
+    // Before the pacing thread, and before the owner starts the V-sync and
+    // render threads
+    m_Trace = TimestampTrace::openIfRequested();
+    if (m_Trace != nullptr) {
+        TimestampTrace::Row row;
+        row.event = TimestampTrace::Event::Session;
+        row.eventUs = LiGetMicroseconds();
+        row.sourcePeriodUs = uint64_t(m_SourcePeriodUs);
+        row.renderLeadUs = m_RenderLeadUs;
+        row.streamFps = m_StreamFps;
+        row.displayHz = m_DisplayHz;
+        row.smoothing = m_Options.smoothing;
+        row.targetPerMille = m_Options.targetPerMille;
+        row.minBufferMs = m_Options.minBufferMs;
+        row.maxBufferMs = m_Options.maxBufferMs;
+        row.vsyncMarginUs = m_Options.vsyncMarginUs;
+        row.vblankGridAvailable = m_UseVblankGrid;
+        row.presentFlipsImmediately = m_PresentFlipsImmediately;
+        std::lock_guard<std::mutex> lock(m_Lock);
+        row.compositorProbe = bool(m_DisplayModeProbe);
+        row.measureRefresh = m_MeasureRefresh;
+        row.gridPeriodUs = uint64_t(m_Grid.nominalPeriodUs());
+        m_Trace->record(row);
+    }
+
     try {
         m_Thread = std::thread(&TimestampPacer::run, this);
     }
@@ -143,10 +190,15 @@ void TimestampPacer::submit(PacedFrame&& paced)
     entry.frame = paced.release();
     entry.paced = decision.paced;
     entry.targetUs = decision.paced ? std::min(decision.targetUs, readyUs + k_MaximumHoldUs) : 0;
+    entry.frameNumber = paced.frameNumber();
+    entry.rtpValid = paced.timestampValid();
+    entry.rtpTimestamp = paced.rtpTimestamp();
 
-    AVFrame* evicted = nullptr;
+    Entry evicted;
     bool late = false;
     bool warnQueueFull = false;
+    uint64_t renderLeadUs = 0;
+    uint32_t queueDepth = 0;
     {
         std::lock_guard<std::mutex> lock(m_Lock);
         if (m_Stopping) {
@@ -157,9 +209,10 @@ void TimestampPacer::submit(PacedFrame&& paced)
         m_SourcePeriodUs = m_Policy.sourcePeriodUs();
         // Ready too late to be handed over before its target
         late = entry.paced && entry.targetUs < readyUs + m_RenderLeadUs;
+        renderLeadUs = m_RenderLeadUs;
 
         if (m_Queue.size() >= MaxQueuedFrames) {
-            evicted = m_Queue.front().frame;
+            evicted = m_Queue.front();
             m_Queue.pop_front();
             if (!m_WarnedQueueFull) {
                 m_WarnedQueueFull = true;
@@ -167,11 +220,45 @@ void TimestampPacer::submit(PacedFrame&& paced)
             }
         }
         m_Queue.push_back(entry);
+        queueDepth = uint32_t(m_Queue.size());
     }
     m_Wake.notify_one();
 
-    if (evicted != nullptr) {
-        m_Callbacks.drop(evicted, true);
+    if (m_Trace != nullptr) {
+        const uint64_t nowUs = LiGetMicroseconds();
+        TimestampTrace::Row row = frameRow(TimestampTrace::Event::Scheduled, entry, nowUs);
+        row.hostLatencyUs = paced.hostLatencyUs();
+        row.receiveUs = paced.receiveUs();
+        row.reassembledUs = paced.reassembledUs();
+        row.decodeSubmitUs = paced.decodeSubmitUs();
+        row.decoderOutputUs = paced.decoderOutputUs();
+        row.decodeCompleteUs = paced.decodeCompleteUs();
+        row.decoderQueueUs = paced.decoderQueueUs();
+        row.readyUs = readyUs;
+        row.admitted = decision.admitted;
+        row.repeat = decision.repeat;
+        row.restarted = decision.restarted;
+        row.reanchored = decision.reanchored;
+        row.late = late;
+        row.policyTargetUs = decision.targetUs;
+        row.bufferUs = decision.bufferUs;
+        row.latenessUs = decision.latenessUs;
+        row.correctionUs = int64_t(std::llround(decision.correctionUs));
+        row.hostJerkUs = int64_t(std::llround(decision.hostJerkUs));
+        row.hostJerkValid = decision.hostJerkValid;
+        row.sourcePeriodUs = uint64_t(m_Policy.sourcePeriodUs());
+        row.renderLeadUs = renderLeadUs;
+        row.queueDepth = queueDepth;
+        m_Trace->record(row);
+        if (evicted.frame != nullptr) {
+            TimestampTrace::Row evictedRow = frameRow(TimestampTrace::Event::Evicted, evicted, nowUs);
+            evictedRow.queueDepth = queueDepth;
+            m_Trace->record(evictedRow);
+        }
+    }
+
+    if (evicted.frame != nullptr) {
+        m_Callbacks.drop(evicted.frame, true);
     }
     if (warnQueueFull) {
         // Logging may start its own worker; don't hold the pacing lock or
@@ -204,16 +291,32 @@ void TimestampPacer::measureRefreshMode()
 
 void TimestampPacer::onVsync(uint64_t atUs)
 {
-    std::lock_guard<std::mutex> lock(m_Lock);
-    m_Grid.observe(atUs);
-    if (m_MeasureRefresh) {
-        m_RefreshClass.observe(atUs);
+    TimestampTrace::Row row;
+    row.event = TimestampTrace::Event::Vsync;
+    row.eventUs = atUs;
+    {
+        std::lock_guard<std::mutex> lock(m_Lock);
+        m_Grid.observe(atUs);
+        if (m_MeasureRefresh) {
+            m_RefreshClass.observe(atUs);
+        }
+        row.gridPeriodUs = uint64_t(m_Grid.periodUs());
     }
+    trace(row);
 }
 
 void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs)
 {
+    TimestampTrace::Row row;
+    row.event = TimestampTrace::Event::DisplayEvent;
+    row.eventUs = LiGetMicroseconds();
+    row.displayUs = displayUs;
+    row.refreshPeriodUs = refreshPeriodUs;
     std::lock_guard<std::mutex> lock(m_Lock);
+    row.displayMode = uint8_t(m_DisplayMode);
+    // Recorded on every return, still under the lock: recording never waits
+    const TraceOnReturn record { this, row };
+
     // Display times off a fixed refresh grid would only mislead it
     if (m_DisplayMode != DisplayMode::Unknown && m_DisplayMode != DisplayMode::FixedRefresh) {
         return;
@@ -229,6 +332,7 @@ void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs
     // Match the display time to the release planned for the nearest V-blank
     // at or before it
     const double periodUs = m_Grid.periodUs();
+    row.gridPeriodUs = uint64_t(periodUs);
     Release* match = nullptr;
     for (Release& release : m_Releases) {
         if (release.vblankUs == 0 || release.releaseUs > displayUs ||
@@ -243,13 +347,26 @@ void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs
     if (match == nullptr) {
         return;
     }
-    noteDisplayLagLocked(displayUs, match->vblankUs, periodUs);
+    row.matched = true;
+    row.vblankUs = match->vblankUs;
+    row.releaseUs = match->releaseUs;
+    row.missed = noteDisplayLagLocked(displayUs, match->vblankUs, periodUs);
     match->vblankUs = 0;
 }
 
 void TimestampPacer::onFrameDisplayed(uint64_t presentStartUs, uint64_t displayUs, uint64_t refreshPeriodUs)
 {
+    TimestampTrace::Row row;
+    row.event = TimestampTrace::Event::FrameDisplayed;
+    row.eventUs = LiGetMicroseconds();
+    row.presentStartUs = presentStartUs;
+    row.displayUs = displayUs;
+    row.refreshPeriodUs = refreshPeriodUs;
     std::lock_guard<std::mutex> lock(m_Lock);
+    row.displayMode = uint8_t(m_DisplayMode);
+    row.gridPeriodUs = uint64_t(m_Grid.periodUs());
+    const TraceOnReturn record { this, row };
+
     if (m_DisplayMode != DisplayMode::Unknown && m_DisplayMode != DisplayMode::FixedRefresh) {
         return;
     }
@@ -268,12 +385,21 @@ void TimestampPacer::onFrameDisplayed(uint64_t presentStartUs, uint64_t displayU
     if (match == nullptr) {
         return;
     }
-    noteDisplayLagLocked(displayUs, match->vblankUs,
-                         refreshPeriodUs != 0 ? double(refreshPeriodUs) : m_Grid.periodUs());
+    row.matched = true;
+    row.vblankUs = match->vblankUs;
+    row.releaseUs = match->releaseUs;
+    row.missed = noteDisplayLagLocked(displayUs, match->vblankUs,
+                                      refreshPeriodUs != 0 ? double(refreshPeriodUs) : m_Grid.periodUs());
     match->vblankUs = 0;
 }
 
-void TimestampPacer::noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs)
+TimestampPacer::TraceOnReturn::~TraceOnReturn()
+{
+    row.extraMarginUs = pacer->m_ExtraMarginUs;
+    pacer->trace(row);
+}
+
+bool TimestampPacer::noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs)
 {
     const bool missed = m_Misses.observe(double(displayUs) - double(vblankUs), periodUs);
 
@@ -286,6 +412,7 @@ void TimestampPacer::noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs,
         m_MarginChangedUs = displayUs;
     }
     m_Telemetry->recordTimestampVblankResult(missed, m_ExtraMarginUs);
+    return missed;
 }
 
 void TimestampPacer::refreshDisplayMode(std::unique_lock<std::mutex>& lock, uint64_t nowUs)
@@ -345,6 +472,15 @@ void TimestampPacer::refreshDisplayMode(std::unique_lock<std::mutex>& lock, uint
         m_Misses.reset();
     }
     m_Telemetry->recordTimestampDisplayMode(uint8_t(mode), !m_DisplayModeProbe);
+
+    TimestampTrace::Row row;
+    row.event = TimestampTrace::Event::DisplayMode;
+    row.eventUs = nowUs;
+    row.displayMode = uint8_t(mode);
+    row.displayModeMeasured = !m_DisplayModeProbe;
+    row.refreshSharePerMille = m_DisplayModeProbe ? 0 : uint32_t(std::lround(m_RefreshClass.lastShare() * 1000));
+    row.gridPeriodUs = uint64_t(m_Grid.periodUs());
+    trace(row);
 }
 
 bool TimestampPacer::gridUsableLocked(uint64_t nowUs) const
@@ -354,12 +490,25 @@ bool TimestampPacer::gridUsableLocked(uint64_t nowUs) const
            m_Grid.valid(nowUs);
 }
 
-void TimestampPacer::notePresented(uint64_t presentUs)
+void TimestampPacer::notePresented(uint64_t renderStartUs, uint64_t presentUs, bool rtpValid, uint32_t rtpTimestamp)
 {
+    TimestampTrace::Row row;
+    row.event = TimestampTrace::Event::Presented;
+    row.eventUs = presentUs;
+    row.rtpValid = rtpValid;
+    row.rtpTimestamp = rtpTimestamp;
+    row.renderStartUs = renderStartUs;
+    row.presentUs = presentUs;
+
     uint64_t sampleUs, leadUs, plannedPresentUs;
     {
         std::lock_guard<std::mutex> lock(m_Lock);
+        row.releaseUs = m_LastReleaseUs;
+        row.plannedPresentUs = m_PlannedPresentUs;
+        row.renderLeadUs = m_RenderLeadUs;
         if (m_LastReleaseUs == 0 || presentUs < m_LastReleaseUs || presentUs - m_LastReleaseUs > 50000) {
+            // No release to time it from
+            trace(row);
             return;
         }
 
@@ -378,6 +527,7 @@ void TimestampPacer::notePresented(uint64_t presentUs)
         m_LastReleaseUs = 0;
         m_PlannedPresentUs = 0;
     }
+    trace(row);
 
     m_Telemetry->recordTimestampPresent(plannedPresentUs != 0,
                                         int64_t(presentUs) - int64_t(plannedPresentUs),
@@ -443,6 +593,8 @@ void TimestampPacer::run()
             if (wait.schedulerDelayValid) {
                 learnWakeLead(wait.schedulerDelayUs);
             }
+            m_LastSchedulerDelayUs = wait.schedulerDelayUs;
+            m_LastSchedulerDelayValid = wait.schedulerDelayValid;
             lock.lock();
             if (m_Stopping || m_Queue.empty()) {
                 continue;
@@ -496,10 +648,10 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
         dueCount = i + 1;
     }
 
-    std::array<AVFrame*, MaxQueuedFrames> superseded {};
+    std::array<Entry, MaxQueuedFrames> superseded {};
     size_t supersededCount = 0;
     for (size_t i = 0; i + 1 < dueCount; i++) {
-        superseded[supersededCount++] = m_Queue.front().frame;
+        superseded[supersededCount++] = m_Queue.front();
         m_Queue.pop_front();
     }
     const Entry shown = m_Queue.front();
@@ -523,9 +675,37 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
     m_LastReleaseUs = nowUs;
     const int64_t trimUs = int64_t(m_PhaseLock.trimUs());
 
+    if (m_Trace != nullptr) {
+        TimestampTrace::Row row = frameRow(TimestampTrace::Event::Released, shown, nowUs);
+        row.plannedReleaseUs = plannedReleaseUs;
+        row.vblankGrid = vblankGrid;
+        row.vblankUs = vblankWaitValid ? uint64_t(int64_t(shown.targetUs) + vblankWaitUs) : 0;
+        row.trimUs = trimUs;
+        row.renderLeadUs = m_RenderLeadUs;
+        row.releaseLeadUs = leadUsLocked(vblankGrid);
+        row.extraMarginUs = m_ExtraMarginUs;
+        row.wakeLeadUs = m_WakeLeadUs;
+        row.schedulerDelayUs = m_LastSchedulerDelayUs;
+        row.schedulerDelayValid = m_LastSchedulerDelayValid;
+        row.superseded = uint32_t(supersededCount);
+        row.queueDepth = uint32_t(m_Queue.size());
+        row.plannedPresentUs = m_PlannedPresentUs;
+        row.sourcePeriodUs = uint64_t(m_SourcePeriodUs);
+        row.gridPeriodUs = vblankGrid ? uint64_t(m_Grid.periodUs()) : 0;
+        row.displayMode = uint8_t(m_DisplayMode);
+        for (size_t i = 0; i < supersededCount; i++) {
+            TimestampTrace::Row supersededRow = frameRow(TimestampTrace::Event::Superseded, superseded[i], nowUs);
+            supersededRow.queueDepth = row.queueDepth;
+            m_Trace->record(supersededRow);
+        }
+        m_Trace->record(row);
+    }
+    m_LastSchedulerDelayUs = 0;
+    m_LastSchedulerDelayValid = false;
+
     lock.unlock();
     for (size_t i = 0; i < supersededCount; i++) {
-        m_Callbacks.drop(superseded[i], false);
+        m_Callbacks.drop(superseded[i].frame, false);
     }
     m_Callbacks.release(shown.frame);
     m_Telemetry->recordTimestampRelease(trimUs, vblankGrid, vblankWaitValid, vblankWaitUs);
