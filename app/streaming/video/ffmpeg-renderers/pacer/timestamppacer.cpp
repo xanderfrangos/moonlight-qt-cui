@@ -112,7 +112,8 @@ QString TimestampPacer::describe() const
              QStringLiteral("V-blank grid at %1 Hz, %2 ms margin")
                  .arg(m_DisplayHz)
                  .arg(m_Options.vsyncMarginUs / 1000.0, 0, 'f', 2))
-        .arg(m_DisplayModeProbe ? QStringLiteral(", following the compositor's presentation mode") : QString());
+        .arg(m_DisplayModeProbe ? QStringLiteral(", following the compositor's presentation mode") :
+             m_MeasureRefresh ? QStringLiteral(", measuring whether the display refreshes adaptively") : QString());
 }
 
 void TimestampPacer::submit(PacedFrame&& paced)
@@ -188,10 +189,20 @@ void TimestampPacer::submit(PacedFrame&& paced)
     m_Telemetry->recordTimestampSchedule(sample);
 }
 
+void TimestampPacer::measureRefreshMode()
+{
+    std::lock_guard<std::mutex> lock(m_Lock);
+    m_MeasureRefresh = m_DisplayHz > 0;
+    m_RefreshClass.configure(1000000.0 / std::max(1, m_DisplayHz));
+}
+
 void TimestampPacer::onVsync(uint64_t atUs)
 {
     std::lock_guard<std::mutex> lock(m_Lock);
     m_Grid.observe(atUs);
+    if (m_MeasureRefresh) {
+        m_RefreshClass.observe(atUs);
+    }
 }
 
 void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs)
@@ -273,37 +284,61 @@ void TimestampPacer::noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs,
 
 void TimestampPacer::refreshDisplayMode(std::unique_lock<std::mutex>& lock, uint64_t nowUs)
 {
-    if (!m_DisplayModeProbe || (m_DisplayModeCheckedUs != 0 && nowUs - m_DisplayModeCheckedUs < 250000)) {
+    if ((!m_DisplayModeProbe && !m_MeasureRefresh) ||
+            (m_DisplayModeCheckedUs != 0 && nowUs - m_DisplayModeCheckedUs < 250000)) {
         return;
     }
     m_DisplayModeCheckedUs = nowUs;
 
-    // The probe may talk to the compositor, so never hold the lock over it
-    const DisplayModeProbe probe = m_DisplayModeProbe;
-    lock.unlock();
-    const DisplayMode mode = probe();
-    lock.lock();
+    DisplayMode mode;
+    if (m_DisplayModeProbe) {
+        // The probe may talk to the compositor, so never hold the lock over it
+        const DisplayModeProbe probe = m_DisplayModeProbe;
+        lock.unlock();
+        mode = probe();
+        lock.lock();
+    }
+    else {
+        switch (m_RefreshClass.result()) {
+        case TimestampPacing::RefreshClassifier::Result::Fixed: mode = DisplayMode::FixedRefresh; break;
+        case TimestampPacing::RefreshClassifier::Result::Adaptive: mode = DisplayMode::Adaptive; break;
+        default: mode = DisplayMode::Unknown; break;
+        }
+    }
 
     if (mode == m_DisplayMode) {
         return;
     }
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "Timestamp pacing: compositor presentation is now %s%s",
-                displayModeName(mode),
-                mode == DisplayMode::FixedRefresh || mode == DisplayMode::Unknown ?
-                    " (frames placed on the V-blank grid)" : " (frames presented at their targets)");
+    const bool gridBefore = m_DisplayMode == DisplayMode::FixedRefresh || m_DisplayMode == DisplayMode::Unknown;
+    const bool gridAfter = mode == DisplayMode::FixedRefresh || mode == DisplayMode::Unknown;
+    if (m_DisplayModeProbe) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Timestamp pacing: compositor presentation is now %s%s",
+                    displayModeName(mode),
+                    gridAfter ? " (frames placed on the V-blank grid)" : " (frames presented at their targets)");
+    }
+    else {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Timestamp pacing: display measured as %s: %.0f%% of %d Hz refreshes in the last second%s",
+                    mode == DisplayMode::Adaptive ? "VRR (refreshing as frames arrive)" : "fixed refresh",
+                    m_RefreshClass.lastShare() * 100, m_DisplayHz,
+                    gridAfter ? " (frames placed on the V-blank grid)" : " (frames presented at their targets)");
+    }
     if (mode == DisplayMode::FrameLimited) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Timestamp pacing: Steam's frame limit forces FIFO presentation, which queues frames instead of replacing them. Turn the frame limit off for timestamp pacing.");
     }
     m_DisplayMode = mode;
     // Display times from another mode are not V-blank times. Start the grid
-    // and the lock over.
-    m_Grid.configure(m_Grid.nominalPeriodUs());
-    m_PhaseLock.reset();
-    m_Releases = {};
-    m_Misses.reset();
-    m_Telemetry->recordTimestampDisplayMode(uint8_t(mode));
+    // and the lock over, unless both modes use the grid, which then still
+    // holds.
+    if (gridBefore != gridAfter || m_DisplayModeProbe) {
+        m_Grid.configure(m_Grid.nominalPeriodUs());
+        m_PhaseLock.reset();
+        m_Releases = {};
+        m_Misses.reset();
+    }
+    m_Telemetry->recordTimestampDisplayMode(uint8_t(mode), !m_DisplayModeProbe);
 }
 
 bool TimestampPacer::gridUsableLocked(uint64_t nowUs) const

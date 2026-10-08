@@ -4760,6 +4760,49 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
 - **Validation:** none of this has run on SteamOS. It has been compiled for
   Windows and for Linux through the WSL AppImage build.
 
+**Windows VRR detection (2026-10-08).** On a display refreshing as frames
+arrive, snapping targets to a V-blank grid only adds jitter and delay. Windows
+has no reliable query for whether VRR is engaged on a window: Moonlight's VRR
+qualification checks capability, and only NVAPI or ADL could tell, per vendor.
+So it is measured instead.
+- `TimestampPacing::RefreshClassifier` counts V-sync wakeups over whole
+  1-second windows against the display mode's nominal rate.
+  - A fixed-rate display has a V-blank every refresh whether or not anything
+    was presented. An adaptive one has them only for frames, including LFC
+    repeats.
+  - Below 85% of the nominal rate is adaptive; above 95% is fixed; in between,
+    the previous result holds.
+  - A wakeup gap over 100 ms restarts the window.
+  - Unit-tested: fixed with lost wakeups, 90 FPS on 240 Hz, LFC, recovery, and
+    the dead band.
+- `Pacer::initialize()` enables it with `TimestampPacer::measureRefreshMode()`
+  on Windows (V-Sync on, `DxVsyncSource`).
+  - It is not used for renderers with `RENDERER_ATTRIBUTE_FORCE_PACING`
+    (exclusive fullscreen): their presents flip at once, so a wrong verdict
+    would tear.
+  - It is not used when a compositor probe (Gamescope) exists.
+- The pacing thread maps the result onto the same `DisplayMode` the Gamescope
+  probe uses, every 250 ms:
+  - Fixed: V-blank grid.
+  - Adaptive: frames presented at target minus render lead.
+  - Unknown: grid, as before.
+- Switching between Unknown and fixed keeps the grid; any other switch resets
+  it. Each switch is logged with the measured share.
+- The overlay shows "Display: VRR (measured)" or "Display: fixed refresh
+  (measured)", where Gamescope shows "Gamescope: …".
+  (`VIDEO_STATS::timestampDisplayModeMeasured`.)
+- It depends on V-blank virtualization being disabled, which `main.cpp` does
+  on Windows 11 22H2 and later. Without that, DWM's virtual V-blanks look
+  fixed, and the grid stays as before.
+- Wayland is not measured: `WaylandVsyncSource` commits the surface on every
+  frame callback, so its wakeups follow compositor repaints, which those
+  commits may themselves keep at the maximum rate.
+- When the stream runs at the display's maximum rate, both kinds of display
+  refresh at that rate, so the result stays fixed; the grid is then harmless.
+- This may also be what the `mailbox-test` branch saw as "refreshing on
+  demand" with VRR off. If enough refreshes go missing, the display is now
+  treated as adaptive.
+
 **Windows missed V-blank detection (2026-10-08).** On Windows the grid comes
 from `DxVsyncSource`, so display reports are used only to detect misses.
 - With V-Sync, a V-sync source and a renderer whose

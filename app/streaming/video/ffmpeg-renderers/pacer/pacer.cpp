@@ -659,6 +659,18 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                 return TimestampPacer::DisplayMode::FixedRefresh;
             });
         }
+#ifdef Q_OS_WIN32
+        // Windows has no reliable query for whether VRR is engaged on this
+        // window, but the V-sync source waits on hardware V-blanks (V-blank
+        // virtualization is disabled at startup), and those come every
+        // refresh only on a fixed-rate display. Measure it from them. Not for
+        // renderers whose present flips at once (exclusive fullscreen): there
+        // a wrong verdict would tear instead of only losing the grid.
+        else if (enableVsync && m_VsyncSource != nullptr &&
+                 !(m_RendererAttributes & RENDERER_ATTRIBUTE_FORCE_PACING)) {
+            m_TimestampPacer->measureRefreshMode();
+        }
+#endif
 
         if (!m_TimestampPacer->start()) {
             m_VsyncRenderer->setDisplayEventSink(nullptr);

@@ -557,6 +557,78 @@ private:
     double m_TrimUs = 0;
 };
 
+// Whether the display refreshes at its nominal rate or only when frames
+// arrive (VRR, or Windows changing the refresh rate on demand), from the
+// times of real V-blanks. A fixed-rate display has a V-blank every refresh
+// whether or not anything was presented. An adaptive one has a V-blank only
+// for a new frame, so over a second it shows clearly fewer than the nominal
+// rate, unless the stream runs at that rate, where the two behave alike
+// anyway. Judged over whole seconds with a band between the two thresholds,
+// so it doesn't flap.
+class RefreshClassifier
+{
+public:
+    enum class Result : uint8_t {
+        Unknown,
+        Fixed,
+        Adaptive,
+    };
+
+    static constexpr uint64_t WindowUs = 1000000;
+    // Shares of the nominal refresh rate
+    static constexpr double AdaptiveBelow = 0.85;
+    static constexpr double FixedAbove = 0.95;
+    // A wakeup gap this long is a stall of the source, not refreshes the
+    // display skipped; even a VRR display's slowest refresh is far shorter
+    static constexpr uint64_t StallUs = 100000;
+
+    void configure(double nominalPeriodUs)
+    {
+        m_NominalPeriodUs = nominalPeriodUs;
+        m_Result = Result::Unknown;
+        m_WindowStartUs = 0;
+        m_LastUs = 0;
+        m_Count = 0;
+        m_LastShare = 0;
+    }
+
+    Result observe(uint64_t atUs)
+    {
+        if (m_WindowStartUs == 0 || atUs <= m_LastUs || atUs - m_LastUs > StallUs) {
+            m_WindowStartUs = atUs;
+            m_LastUs = atUs;
+            m_Count = 0;
+            return m_Result;
+        }
+        m_LastUs = atUs;
+        m_Count++;
+        if (atUs - m_WindowStartUs >= WindowUs) {
+            m_LastShare = m_Count * m_NominalPeriodUs / double(atUs - m_WindowStartUs);
+            if (m_LastShare < AdaptiveBelow) {
+                m_Result = Result::Adaptive;
+            }
+            else if (m_LastShare > FixedAbove) {
+                m_Result = Result::Fixed;
+            }
+            m_WindowStartUs = atUs;
+            m_Count = 0;
+        }
+        return m_Result;
+    }
+
+    Result result() const { return m_Result; }
+    // V-blanks seen in the last whole window, as a share of the nominal rate
+    double lastShare() const { return m_LastShare; }
+
+private:
+    double m_NominalPeriodUs = 16667;
+    Result m_Result = Result::Unknown;
+    uint64_t m_WindowStartUs = 0;
+    uint64_t m_LastUs = 0;
+    uint32_t m_Count = 0;
+    double m_LastShare = 0;
+};
+
 // Judges, from when frames actually reached the screen, which ones missed
 // their planned V-blank. A compositor can add a constant refresh or more of
 // lag (Windows composing a windowed frame), which costs latency but not

@@ -1115,6 +1115,7 @@ void FFmpegVideoDecoder::addVideoStats(VIDEO_STATS& src, VIDEO_STATS& dst)
         dst.timestampActive = true;
         dst.timestampVblankGrid = src.timestampVblankGrid;
         dst.timestampDisplayMode = src.timestampDisplayMode;
+        dst.timestampDisplayModeMeasured = src.timestampDisplayModeMeasured;
         dst.timestampExtraMarginUs = src.timestampExtraMarginUs;
         dst.timestampBufferUs = src.timestampBufferUs;
         dst.timestampSourcePeriodUs = src.timestampSourcePeriodUs;
@@ -1406,6 +1407,7 @@ void FFmpegVideoDecoder::syncPacerTelemetry()
             delta(snapshot.timestampSupersededFrames, m_LastPacerTelemetry.timestampSupersededFrames);
         m_ActiveWndVideoStats.timestampVblankGrid = snapshot.timestampVblankGrid;
         m_ActiveWndVideoStats.timestampDisplayMode = snapshot.timestampDisplayMode;
+        m_ActiveWndVideoStats.timestampDisplayModeMeasured = snapshot.timestampDisplayModeMeasured;
         m_ActiveWndVideoStats.timestampExtraMarginUs = snapshot.timestampExtraMarginUs;
         m_ActiveWndVideoStats.timestampVblankHits +=
             delta(snapshot.timestampVblankHits, m_LastPacerTelemetry.timestampVblankHits);
@@ -1750,7 +1752,8 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
     offset += ret;
 
     if (stats.timestampActive) {
-        // TimestampPacer::DisplayMode, as reported by the compositor
+        // TimestampPacer::DisplayMode, as reported by the compositor or
+        // measured from V-blank times
         static const char* const k_DisplayModes[] = {
             nullptr, "fixed refresh", "VRR", "tearing allowed", "frame limited (FIFO)"
         };
@@ -1765,7 +1768,9 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
         }
         if (displayMode != nullptr) {
             const size_t used = strlen(grid);
-            snprintf(grid + used, sizeof(grid) - used, " | Gamescope: %s", displayMode);
+            snprintf(grid + used, sizeof(grid) - used,
+                     stats.timestampDisplayModeMeasured ? " | Display: %s (measured)" : " | Gamescope: %s",
+                     displayMode);
         }
         // Only renderers that report actual display times can tell
         const uint64_t checked = stats.timestampVblankHits + stats.timestampVblankMisses;

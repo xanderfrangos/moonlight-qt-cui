@@ -344,7 +344,7 @@ follows.
 | Without timing | Not expected | Frames released at their target |
 | Refresh period | Display mode, refined ±3% | Gamescope's own (`vkGetRefreshCycleDurationGOOGLE`) |
 | Frame replacement | DWM flip model, `Present(0)` | Mailbox present mode chosen by Moonlight |
-| VRR, tearing, limiter | Read once at start; fixed refresh assumed | Polled every 250 ms and followed |
+| VRR, tearing, limiter | VRR measured from the V-blank rate since 2026-10-08 (not in exclusive fullscreen); tearing and limiter not applicable | Polled every 250 ms and followed |
 | Missed V-blank feedback | From DXGI frame statistics (2026-10-08) | From Gamescope's display times |
 | Starting submit margin | 2 ms | 4.5 ms (since 2026-10-08) |
 | Margin after a miss | +0.5 ms per miss up to +6 ms; released after 5 s clean | Same |
@@ -381,6 +381,12 @@ SteamOS Desktop Mode:
 8. Later: render before waiting, and `Present(1,0)` for exclusive fullscreen.
 
 ## 10. Open questions
+
+- Does Windows' V-blank rate fall well below the nominal rate when G-Sync or
+  FreeSync is engaged on a windowed or borderless flip-model swapchain? The
+  measured-mode log line ("display measured as …: N% of … Hz refreshes")
+  answers it. If it never falls, the measurement can't see VRR there, and a
+  vendor query (NVAPI, ADL) would be the next option.
 
 - Does `GetFrameStatistics()` report usable display times for a windowed
   flip-model swapchain that DWM composes, as well as for independent flip?

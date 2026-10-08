@@ -425,6 +425,56 @@ void missesAreJudgedAgainstUsualLag()
     check(misses == int(MissDetector::Window) - 1, "a lasting extra refresh stops counting once it fills the window");
 }
 
+// A fixed display has a V-blank every refresh; a VRR one only per frame
+void refreshClassifierTellsFixedFromAdaptive()
+{
+    using Result = RefreshClassifier::Result;
+    const double refreshUs = 1000000.0 / 240;
+
+    RefreshClassifier fixed;
+    fixed.configure(refreshUs);
+    for (int i = 0; i < 240 * 3; i++) {
+        // Every 40th wakeup is lost to a late thread
+        if (i % 40 != 39) {
+            fixed.observe(uint64_t(1000000 + i * refreshUs));
+        }
+    }
+    check(fixed.result() == Result::Fixed, "a fixed 240 Hz display is fixed despite a few lost wakeups");
+
+    // A 90 FPS game on a 240 Hz VRR display refreshes once per frame
+    RefreshClassifier vrr;
+    vrr.configure(refreshUs);
+    for (int i = 0; i < 90 * 3; i++) {
+        vrr.observe(uint64_t(1000000 + i * (1000000.0 / 90)));
+    }
+    check(vrr.result() == Result::Adaptive, "refreshes that follow a 90 FPS stream are adaptive");
+    check(std::fabs(vrr.lastShare() - 90.0 / 240) < 0.02, "and come at 90/240 of the nominal rate");
+
+    // Low framerate compensation doubles frames but stays below the nominal rate
+    RefreshClassifier lfc;
+    lfc.configure(1000000.0 / 144);
+    for (int i = 0; i < 60 * 3; i++) {
+        lfc.observe(uint64_t(1000000 + i * (1000000.0 / 60)));
+    }
+    check(lfc.result() == Result::Adaptive, "a 30 FPS stream doubled to 60 Hz on a 144 Hz display is adaptive");
+
+    // Back to a fixed rate, and a stall on the way
+    uint64_t t = 1000000 + 3 * 1000000;
+    t += 500000;
+    for (int i = 0; i < 240 * 2; i++) {
+        vrr.observe(uint64_t(t + i * refreshUs));
+    }
+    check(vrr.result() == Result::Fixed, "a display back at its nominal rate is fixed again");
+
+    // Between the thresholds the result holds
+    RefreshClassifier between;
+    between.configure(1000000.0 / 120);
+    for (int i = 0; i < 108 * 3; i++) {
+        between.observe(uint64_t(1000000 + i * (1000000.0 / 108)));
+    }
+    check(between.result() == Result::Unknown, "90% of the nominal rate decides nothing");
+}
+
 int main()
 {
     smoothingRemovesStampNoise();
@@ -440,6 +490,7 @@ int main()
     vblankGridFollowsWakeups();
     phaseLockAvoidsBoundaryFlicker();
     missesAreJudgedAgainstUsualLag();
+    refreshClassifierTellsFixedFromAdaptive();
 
     if (failures == 0) {
         std::printf("tst_timestamppacing: all checks passed\n");

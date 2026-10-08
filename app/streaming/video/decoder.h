@@ -77,6 +77,9 @@ typedef struct _VIDEO_STATS {
     bool timestampVblankGrid;
     // TimestampPacer::DisplayMode; 0 without a compositor probe
     uint8_t timestampDisplayMode;
+    // Set when the mode was measured from V-blank times (Windows) rather
+    // than reported by the compositor (Gamescope)
+    bool timestampDisplayModeMeasured;
     // Counters of frames shown on, or a refresh after, their planned V-blank
     uint64_t timestampVblankHits;
     uint64_t timestampVblankMisses;

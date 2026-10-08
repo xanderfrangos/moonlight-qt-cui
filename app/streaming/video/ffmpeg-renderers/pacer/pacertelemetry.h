@@ -90,6 +90,7 @@ struct PacerTelemetrySnapshot {
     bool timestampVblankGrid = false;
     // TimestampPacer::DisplayMode from a compositor probe; 0 without one
     uint8_t timestampDisplayMode = 0;
+    bool timestampDisplayModeMeasured = false;
     // From actual display times, where the renderer reports them: frames
     // shown on their planned V-blank and those a refresh or more late, and
     // the submit margin the misses added
@@ -356,10 +357,13 @@ public:
         touchLocked();
     }
 
-    void recordTimestampDisplayMode(uint8_t mode)
+    // measured is set when the mode came from V-blank times rather than from
+    // the compositor
+    void recordTimestampDisplayMode(uint8_t mode, bool measured)
     {
         QMutexLocker lock(&m_Lock);
         m_Snapshot.timestampDisplayMode = mode;
+        m_Snapshot.timestampDisplayModeMeasured = measured;
         touchLocked();
     }
 

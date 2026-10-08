@@ -78,6 +78,13 @@ public:
 
     void submit(PacedFrame&& frame);
 
+    // Judge from V-sync wakeups whether the display refreshes at a fixed rate
+    // or only as frames arrive (VRR), and follow it as the compositor probe
+    // would: the grid is only used at a fixed rate. Only for a source that
+    // wakes at every hardware V-blank whether or not anything is presented
+    // (Windows). Call before start(); the probe takes precedence.
+    void measureRefreshMode();
+
     // A V-sync source woke at this time
     void onVsync(uint64_t atUs);
 
@@ -155,6 +162,8 @@ private:
     uint64_t m_ExtraMarginUs = 0;
     uint64_t m_MarginChangedUs = 0;
     TimestampPacing::MissDetector m_Misses;
+    TimestampPacing::RefreshClassifier m_RefreshClass;
+    bool m_MeasureRefresh = false;
 
     DisplayModeProbe m_DisplayModeProbe;
     DisplayMode m_DisplayMode = DisplayMode::Unknown;
