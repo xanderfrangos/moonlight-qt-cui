@@ -4604,7 +4604,7 @@ An opt-in fourth presentation mode, built from
 [the proposal](docs/timestamp-pacing-proposal.md). Offline evaluation, known
 gaps and next steps are in
 [timestamp-pacing-findings.md](docs/timestamp-pacing-findings.md). Under
-Gamescope it was tested on a Steam Deck and a Steam Machine over eighteen
+Gamescope it was tested on a Steam Deck and a Steam Machine over nineteen
 captures (2026-10-08 to 2026-10-09); each capture, its finding and the change
 it led to are in
 [gamescope-timestamp-pacing-testing.md](docs/gamescope-timestamp-pacing-testing.md).
@@ -4914,7 +4914,9 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
     `marginIgnoresDecodeBoundMisses` runs the real pacer against a modelled
     Gamescope (FIFO at 90 Hz, 4 ms latch, 4.8 ms decodes) with a 55-65 FPS
     stream: about 18% of frames miss, the margin stays at 0-0.75 ms, and
-    the old rule takes it to 6 ms.
+    the old rule takes it to 6 ms. On the Deck (capture 19) 60 FPS at 90 Hz
+    still missed 7-31% of frames in each 10 s with the margin at 0-0.5 ms,
+    and 60 FPS at 60 Hz then ran at 10.1 ms decoder output to display.
   - The text overlay shows the mode, the miss rate and the added margin.
   - Windows (2026-10-08) uses the same detection; see "Windows missed V-blank
     detection" below.
