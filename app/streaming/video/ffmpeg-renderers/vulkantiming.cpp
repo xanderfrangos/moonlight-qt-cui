@@ -218,8 +218,11 @@ void VulkanTiming::collect()
         const int64_t converted = int64_t(t.actualPresentTime / 1000) + offset;
         if (!t.actualPresentTime || converted <= 0) { ++m_Statistics.invalid; continue; }
         if (uint64_t(converted) < pending.submitted) { ++m_Statistics.beforeSubmission; continue; }
-        if (uint64_t(converted) > observed) { ++m_Statistics.future; continue; }
-        if (observed - uint64_t(converted) > 100000) { ++m_Statistics.stale; continue; }
+        if (uint64_t(converted) > observed) {
+            if (uint64_t(converted) - observed > m_FutureToleranceUs) { ++m_Statistics.future; continue; }
+            ++m_Statistics.futureAccepted;
+        }
+        else if (observed - uint64_t(converted) > 100000) { ++m_Statistics.stale; continue; }
         if (m_SkipFirst) { m_SkipFirst = false; ++m_Statistics.warmupSkipped; continue; }
         if (m_Completed.size() == 64) m_Completed.pop_front();
         m_Completed.push_back({pending.id, uint64_t(converted), (observed - before + 1) / 2 + 1});

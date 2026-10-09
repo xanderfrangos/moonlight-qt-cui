@@ -282,7 +282,7 @@ PlVkRenderer::~PlVkRenderer()
                     "Gamescope timing summary: submissions=%llu returned=%llu emitted=%llu "
                     "unmatched=%llu before_submission=%llu future=%llu stale=%llu "
                     "invalid=%llu clock_rejected=%llu warmup_skipped=%llu "
-                    "empty_queries=%llu query_errors=%llu",
+                    "empty_queries=%llu query_errors=%llu future_accepted=%llu",
                     static_cast<unsigned long long>(stats.submissions),
                     static_cast<unsigned long long>(stats.returned),
                     static_cast<unsigned long long>(stats.emitted),
@@ -294,7 +294,8 @@ PlVkRenderer::~PlVkRenderer()
                     static_cast<unsigned long long>(stats.clockRejected),
                     static_cast<unsigned long long>(stats.warmupSkipped),
                     static_cast<unsigned long long>(stats.emptyQueries),
-                    static_cast<unsigned long long>(stats.queryErrors));
+                    static_cast<unsigned long long>(stats.queryErrors),
+                    static_cast<unsigned long long>(stats.futureAccepted));
     }
     m_GamescopeTiming.reset();
 #endif
@@ -1761,6 +1762,13 @@ void PlVkRenderer::setDisplayEventSink(DisplayEventSink sink)
 #ifdef Q_OS_LINUX
     // Set before the render thread starts and cleared after it stops
     m_DisplayEventSink = std::move(sink);
+    // The timestamp pacer takes a scheduled V-blank that is still ahead as
+    // the display time it will be. Rejecting them looked like replaced
+    // frames: on a Deck capture (2026-10-09) Gamescope returned all but 3
+    // of 18428 frames, but 486 were dated in the future and dropped.
+    if (m_GamescopeTiming) {
+        m_GamescopeTiming->setFutureToleranceUs(m_DisplayEventSink ? 40000 : 0);
+    }
 #else
     (void)sink;
 #endif

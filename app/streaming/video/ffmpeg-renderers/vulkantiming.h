@@ -15,6 +15,8 @@ public:
         uint64_t unmatched = 0, beforeSubmission = 0, future = 0, stale = 0;
         uint64_t invalid = 0, clockRejected = 0, warmupSkipped = 0;
         uint64_t emptyQueries = 0, queryErrors = 0;
+        // Future-dated times kept under setFutureToleranceUs()
+        uint64_t futureAccepted = 0;
     };
     ~VulkanTiming();
     static PFN_vkGetInstanceProcAddr bridge(PFN_vkGetInstanceProcAddr loader);
@@ -26,6 +28,11 @@ public:
     uint64_t refreshCycleUs();
     void reset();
     const Statistics& statistics() const { return m_Statistics; }
+    // Gamescope reports the V-blank a frame is scheduled for once it has
+    // latched it, which can still be ahead when the time is read. Keep such
+    // times up to this far ahead instead of rejecting them. Zero (the
+    // default, as VRR Pacing Mode needs) rejects every future-dated time.
+    void setFutureToleranceUs(uint64_t toleranceUs) { m_FutureToleranceUs = toleranceUs; }
 private:
     // Cumulative across swapchain resets; observation only, never pacing input.
     Statistics m_Statistics;
@@ -51,5 +58,6 @@ private:
     uint32_t m_Token = 0;
     uint64_t m_ArmedId = 0, m_AcceptedId = 0;
     int64_t m_Offset = 0;
+    uint64_t m_FutureToleranceUs = 0;
     bool m_HaveOffset = false, m_SkipFirst = true;
 };
