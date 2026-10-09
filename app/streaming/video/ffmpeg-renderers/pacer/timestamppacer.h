@@ -133,6 +133,8 @@ private:
     struct Entry {
         AVFrame* frame = nullptr;
         uint64_t targetUs = 0;
+        // When its decode is expected to be finished
+        uint64_t readyUs = 0;
         bool paced = false;
         // For the trace
         int32_t frameNumber = -1;
@@ -147,7 +149,7 @@ private:
     bool gridUsableLocked(uint64_t nowUs) const;
     uint64_t leadUsLocked(bool vblankGrid) const;
     uint64_t releaseTimeLocked(const Entry& entry, bool vblankGrid) const;
-    uint64_t vblankForLocked(uint64_t targetUs) const;
+    uint64_t vblankForLocked(const Entry& entry) const;
     void releaseDueLocked(std::unique_lock<std::mutex>& lock, bool vblankGrid);
     void learnWakeLead(uint64_t schedulerDelayUs);
     bool noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs);
@@ -155,6 +157,8 @@ private:
     void noteLimitedDisplayLocked(uint64_t displayUs, uint64_t nowUs);
     // Puts the grid back at one V-blank per refresh
     void resetGridLocked();
+    // Shifts every frame a refresh later while most are ready too late
+    void noteLateLocked(const Entry& shown, uint64_t assignedUs);
     void trace(const TimestampTrace::Row& row);
     // Records a display report's row on every return, under the lock
     struct TraceOnReturn {
@@ -210,6 +214,9 @@ private:
     size_t m_NextRelease = 0;
     uint64_t m_ExtraMarginUs = 0;
     uint64_t m_MarginChangedUs = 0;
+    // Frames Gamescope replaced (never reported shown) within the last second
+    uint64_t m_ReplacedWindowUs = 0;
+    uint32_t m_ReplacedInWindow = 0;
     TimestampPacing::MissDetector m_Misses;
     TimestampPacing::RefreshClassifier m_RefreshClass;
     bool m_MeasureRefresh = false;
@@ -225,6 +232,13 @@ private:
     std::array<uint32_t, 32> m_LimitIntervals {};
     size_t m_LimitIntervalCount = 0;
     uint64_t m_LastLimitedDisplayUs = 0;
+    // Whether each of the last grid releases was ready too late for its own
+    // V-blank, and whether frames are planned a refresh later for it
+    std::array<uint8_t, 64> m_LateFlags {};
+    size_t m_LateIndex = 0;
+    size_t m_LateCount = 0;
+    size_t m_LateFilled = 0;
+    bool m_LateShift = false;
 
     VrrTargetWaiter m_Waiter;
     // Pacing thread only. How far the precise waiter's sleeps have recently

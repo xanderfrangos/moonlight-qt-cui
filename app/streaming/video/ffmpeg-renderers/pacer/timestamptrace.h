@@ -136,6 +136,7 @@ public:
         uint64_t decodeWaitUs = 0;
         uint64_t decodeDelayUs = 0;
         uint32_t limitRefreshes = 0;
+        bool lateShift = false;
     };
 
     // The trace path for a VRR trace path: its .vrrtrace (or other) suffix

@@ -208,6 +208,7 @@ void TimestampPacer::submit(PacedFrame&& paced)
     Entry entry;
     entry.frame = paced.release();
     entry.paced = decision.paced;
+    entry.readyUs = readyUs;
     entry.targetUs = decision.paced ? std::min(decision.targetUs, readyUs + k_MaximumHoldUs) : 0;
     entry.frameNumber = paced.frameNumber();
     entry.rtpValid = paced.timestampValid();
@@ -377,6 +378,53 @@ void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs
     row.matched = true;
     row.vblankUs = match->vblankUs;
     row.releaseUs = match->releaseUs;
+
+    // Gamescope reports only frames it showed. A release planned for an
+    // earlier V-blank that was never reported missed its latch and was
+    // replaced by the next frame: that V-blank repeated a frame, and this
+    // one dropped one. The lag check below can't see it, since the frame
+    // shown here was on time. On a Deck capture (2026-10-09, 90 FPS at
+    // 90 Hz) a 30 s stretch lost about a fifth of its frames this way, with
+    // presents returning 5 ms before their V-blank and no miss detected.
+    // Releases from before a longer gap in reports (an overlay, say) are
+    // just forgotten. Gamescope also leaves out a few reports of frames it
+    // did show (0-2 a second there), so the margin only widens once three
+    // go missing within a second; that stretch lost 6-18 a second.
+    // FIFO (the frame limit) never replaces a frame: an unreported one there
+    // is only a gap in the reports. On a Deck capture (2026-10-09) treating
+    // those as replaced widened the margin to 6 ms, handing frames over up
+    // to 17 ms before their V-blank, where they waited in Gamescope's queue.
+    uint32_t replaced = 0;
+    const bool canReplace = m_DisplayMode != DisplayMode::FrameLimited;
+    for (Release& release : m_Releases) {
+        if (release.vblankUs == 0 || &release == match || release.vblankUs >= match->vblankUs) {
+            continue;
+        }
+        if (canReplace && double(match->vblankUs - release.vblankUs) <= periodUs * 3.5) {
+            replaced++;
+        }
+        release.vblankUs = 0;
+    }
+    if (replaced != 0) {
+        row.superseded = replaced;
+        if (displayUs - m_ReplacedWindowUs > 1000000) {
+            m_ReplacedWindowUs = displayUs;
+            m_ReplacedInWindow = 0;
+        }
+        m_ReplacedInWindow += replaced;
+        const bool widen = m_ReplacedInWindow >= 3;
+        if (widen) {
+            m_ExtraMarginUs = std::min<uint64_t>(6000, m_ExtraMarginUs + 500);
+            m_MarginChangedUs = displayUs;
+            m_ReplacedWindowUs = displayUs;
+            m_ReplacedInWindow = 0;
+        }
+        // Each is a missed V-blank in the overlay, widening or not
+        for (uint32_t i = 0; i < replaced; i++) {
+            m_Telemetry->recordTimestampVblankResult(true, m_ExtraMarginUs);
+        }
+        row.missed = true;
+    }
     row.missed = noteDisplayLagLocked(displayUs, match->vblankUs, periodUs);
     match->vblankUs = 0;
 }
@@ -510,8 +558,61 @@ void TimestampPacer::refreshDisplayMode(std::unique_lock<std::mutex>& lock, uint
     trace(row);
 }
 
+void TimestampPacer::noteLateLocked(const Entry& shown, uint64_t assignedUs)
+{
+    // Under Gamescope, a frame handed over less than its lead before its
+    // V-blank misses the latch, and in Mailbox the next frame replaces it: a
+    // V-blank repeats and a frame is lost. On a Deck capture (2026-10-09,
+    // 90 FPS at 90 Hz) a stretch where frames were ready only 5.5 ms before
+    // their V-blank (10.7 ms normally) lost a quarter of them, and a wider
+    // margin couldn't help, since a frame can't be handed over before it's
+    // ready. Moving each late frame to its next V-blank instead (the next
+    // capture) made the frames after it collide with it, since readiness
+    // jitters around the limit: the pacer then dropped up to 15 a second.
+    // So once half of the last 64 frames are late (normal stretches reached
+    // 18, the bad one 64), all frames move a refresh later, a uniform shift
+    // that costs a refresh of latency and drops nothing, until at most 2
+    // would be late without it. The lead includes the margin that replaced
+    // frames widen, so frames ready in time that Gamescope still missed
+    // also lead here. The frame limit's FIFO already shows a late frame a
+    // refresh later.
+    if (!m_DisplayModeProbe || m_DisplayMode == DisplayMode::FrameLimited || shown.readyUs == 0) {
+        return;
+    }
+    const bool late = shown.readyUs + leadUsLocked(true) > assignedUs;
+    if (m_LateFilled == m_LateFlags.size()) {
+        m_LateCount -= m_LateFlags[m_LateIndex];
+    }
+    else {
+        m_LateFilled++;
+    }
+    m_LateFlags[m_LateIndex] = late ? 1 : 0;
+    m_LateCount += late ? 1 : 0;
+    m_LateIndex = (m_LateIndex + 1) % m_LateFlags.size();
+    if (m_LateFilled < m_LateFlags.size()) {
+        return;
+    }
+
+    if (!m_LateShift && m_LateCount >= m_LateFlags.size() / 2) {
+        m_LateShift = true;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Timestamp pacing: %zu of the last %zu frames were ready too late for their V-blank; planning frames a refresh later",
+                    m_LateCount, m_LateFlags.size());
+    }
+    else if (m_LateShift && m_LateCount <= 2) {
+        m_LateShift = false;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Timestamp pacing: frames are ready in time for their V-blank again; no longer planning them a refresh later");
+    }
+}
+
 void TimestampPacer::resetGridLocked()
 {
+    m_LateShift = false;
+    m_LateFlags = {};
+    m_LateIndex = 0;
+    m_LateCount = 0;
+    m_LateFilled = 0;
     m_LimitRefreshes = 1;
     m_LimitIntervalCount = 0;
     m_LastLimitedDisplayUs = 0;
@@ -720,7 +821,7 @@ uint64_t TimestampPacer::releaseTimeLocked(const Entry& entry, bool vblankGrid) 
     }
 
     const uint64_t leadUs = leadUsLocked(vblankGrid);
-    const uint64_t showUs = vblankGrid ? vblankForLocked(entry.targetUs) : entry.targetUs;
+    const uint64_t showUs = vblankGrid ? vblankForLocked(entry) : entry.targetUs;
     return showUs > leadUs ? showUs - leadUs : 0;
 }
 
@@ -730,9 +831,16 @@ uint64_t TimestampPacer::releaseTimeLocked(const Entry& entry, bool vblankGrid) 
 // a newer frame due by then replaces it, so FIFO never holds a backlog. On a
 // Deck capture (2026-10-08, 90 FPS at 60 Hz), releasing them all queued
 // frames and blocked presents for up to 14 ms.
-uint64_t TimestampPacer::vblankForLocked(uint64_t targetUs) const
+uint64_t TimestampPacer::vblankForLocked(const Entry& entry) const
 {
-    const uint64_t vblankUs = m_PhaseLock.assign(targetUs, m_Grid);
+    uint64_t vblankUs = m_PhaseLock.assign(entry.targetUs, m_Grid);
+
+    // While most frames can't be ready their lead before their V-blank,
+    // every frame is planned a refresh later (see noteLateLocked())
+    if (m_LateShift) {
+        vblankUs = m_Grid.atOrAfter(double(vblankUs) + m_Grid.periodUs() / 2);
+    }
+
     if (m_DisplayMode != DisplayMode::FrameLimited || m_LastVblankUs == 0 ||
             double(vblankUs) > double(m_LastVblankUs) + m_Grid.periodUs() / 2) {
         return vblankUs;
@@ -805,7 +913,7 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
     // one), and otherwise those whose release has also come. Only the newest
     // of them is shown, as a mailbox swapchain would.
     const Entry& front = m_Queue.front();
-    const uint64_t frontVblankUs = vblankGrid && front.paced ? vblankForLocked(front.targetUs) : 0;
+    const uint64_t frontVblankUs = vblankGrid && front.paced ? vblankForLocked(front) : 0;
     size_t dueCount = 1;
     for (size_t i = 1; i < m_Queue.size(); i++) {
         const Entry& entry = m_Queue[i];
@@ -814,7 +922,7 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
             due = true;
         }
         else if (vblankGrid && frontVblankUs != 0) {
-            due = m_PhaseLock.assign(entry.targetUs, m_Grid) <= frontVblankUs;
+            due = vblankForLocked(entry) <= frontVblankUs;
         }
         else {
             due = releaseTimeLocked(entry, vblankGrid) <= nowUs + k_ReleaseSlackUs;
@@ -845,10 +953,11 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
         // The phase lock learns from the V-blank the target falls on, not
         // one a frame limit postponed it to
         const uint64_t assignedUs = m_PhaseLock.assign(shown.targetUs, m_Grid);
-        const uint64_t vblankUs = vblankForLocked(shown.targetUs);
+        const uint64_t vblankUs = vblankForLocked(shown);
         vblankWaitValid = true;
         vblankWaitUs = int64_t(vblankUs) - int64_t(shown.targetUs);
         m_PhaseLock.update(shown.targetUs, assignedUs, m_Grid.periodUs(), m_SourcePeriodUs);
+        noteLateLocked(shown, assignedUs);
         m_Releases[m_NextRelease] = { nowUs, vblankUs };
         m_NextRelease = (m_NextRelease + 1) % m_Releases.size();
         m_LastVblankUs = vblankUs;
@@ -875,6 +984,7 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
         row.gridPeriodUs = vblankGrid ? uint64_t(m_Grid.periodUs()) : 0;
         row.displayMode = uint8_t(m_DisplayMode);
         row.limitRefreshes = m_LimitRefreshes;
+        row.lateShift = m_LateShift;
         for (size_t i = 0; i < supersededCount; i++) {
             TimestampTrace::Row supersededRow = frameRow(TimestampTrace::Event::Superseded, superseded[i], nowUs);
             supersededRow.queueDepth = row.queueDepth;
