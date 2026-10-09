@@ -19,8 +19,12 @@ constexpr uint64_t k_CoarseWakeUs = 2000;
 // Frames whose release falls this close together are handed over together
 constexpr uint64_t k_ReleaseSlackUs = 200;
 
-// A shorter wait for a frame's decode is the sync call itself
-constexpr uint64_t k_DecodeWaitThresholdUs = 250;
+// A shorter wait for a frame's decode is the sync call itself, or driver
+// contention after the decode finished (0.25-0.6 ms on a Deck)
+constexpr uint64_t k_DecodeWaitThresholdUs = 1000;
+// How much later than the learned decode delay a render may begin and still
+// time a slower decode
+constexpr uint64_t k_DecodeWindowSlackUs = 3000;
 
 // A target this far past readiness means the timeline is wrong, not that the
 // frame should wait that long
@@ -617,17 +621,29 @@ void TimestampPacer::notePresented(uint64_t renderStartUs, uint64_t presentUs, u
     // the decode was done by the time it began. Rise quickly to a slow
     // decode and fall back slowly, as the render lead does. A renderer that
     // never reports a wait leaves this at zero.
+    //
+    // A wait only times the decode when the render began near when decodes
+    // finish. Driver contention also stretches the sync to a fraction of a
+    // millisecond long after the decode is done: on a Deck capture
+    // (2026-10-09, frame limit) such waits of 0.25-1.3 ms, on frames rendered
+    // 10-20 ms after output, raised the delay to its cap. Holding frames for
+    // that delay then kept every render that late, so nothing lowered it, and
+    // frames sat 2-3 deep in the queue. Real decode waits there were about
+    // 3 ms. The cap also keeps the delay under one and a half frames.
     if (decoderOutputUs != 0 && renderStartUs >= decoderOutputUs && renderStartUs - decoderOutputUs < 100000) {
         const uint64_t startedAfterUs = renderStartUs - decoderOutputUs;
         uint64_t delayUs = m_DecodeDelayUs.load(std::memory_order_relaxed);
-        if (decodeWaitUs > k_DecodeWaitThresholdUs) {
-            const uint64_t doneUs = startedAfterUs + decodeWaitUs;
-            delayUs = doneUs > delayUs ? delayUs + (doneUs - delayUs) / 4 : delayUs - (delayUs - doneUs) / 32;
+        if (decodeWaitUs >= k_DecodeWaitThresholdUs) {
+            if (startedAfterUs <= delayUs + k_DecodeWindowSlackUs) {
+                const uint64_t doneUs = startedAfterUs + decodeWaitUs;
+                delayUs = doneUs > delayUs ? delayUs + (doneUs - delayUs) / 4 : delayUs - (delayUs - doneUs) / 32;
+            }
         }
         else if (startedAfterUs + decodeWaitUs < delayUs) {
             delayUs -= (delayUs - startedAfterUs - decodeWaitUs) / 32;
         }
-        m_DecodeDelayUs.store(std::min<uint64_t>(delayUs, 20000), std::memory_order_relaxed);
+        const uint64_t maxDelayUs = m_StreamFps > 0 ? std::min<uint64_t>(20000, 1500000 / uint64_t(m_StreamFps)) : 20000;
+        m_DecodeDelayUs.store(std::min(delayUs, maxDelayUs), std::memory_order_relaxed);
     }
     row.decodeDelayUs = m_DecodeDelayUs.load(std::memory_order_relaxed);
 
