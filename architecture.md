@@ -4601,9 +4601,81 @@ wrap, discontinuities and drift.
 ### Timestamp pacing (2026-10-07)
 
 An opt-in fourth presentation mode, built from
-[the proposal](docs/timestamp-pacing-proposal.md). It is not yet validated on
-a live stream. Offline evaluation, known gaps and next steps are in
-[timestamp-pacing-findings.md](docs/timestamp-pacing-findings.md).
+[the proposal](docs/timestamp-pacing-proposal.md). Offline evaluation, known
+gaps and next steps are in
+[timestamp-pacing-findings.md](docs/timestamp-pacing-findings.md). Under
+Gamescope it was tested on a Steam Deck and a Steam Machine over fifteen
+captures (2026-10-08 to 2026-10-09); each capture, its finding and the change
+it led to are in
+[gamescope-timestamp-pacing-testing.md](docs/gamescope-timestamp-pacing-testing.md).
+Windows has only the earlier pacing logs.
+
+**What the Gamescope testing established (outline).**
+- **Where Gamescope's state is.** Root properties of its first Xwayland
+  (`:0`), not the game's `DISPLAY` (`:1`). Reliable: refresh-rate feedback,
+  VRR capable, VRR feedback (KMS `VRR_ENABLED`), Allow Tearing, limiter
+  feedback (on/off only). Stale or misleading: `GAMESCOPE_FPS_LIMIT`,
+  `GAMESCOPE_DYNAMIC_REFRESH`, and `GAMESCOPE_VRR_ENABLED`, which is Steam's
+  toggle and reads 1 on the Deck's non-VRR panel. The WSI layer's refresh
+  cycle restarts at 16.67 ms for every swapchain, so it can't set the grid.
+- **What display reports mean.** Gamescope reports only frames it showed,
+  at the V-blank it scheduled (which can still be ahead when read), so a
+  missing report is a replaced frame. Reports pause while Quick Access is
+  open.
+- **How frames reach the screen.** Mailbox replaces a frame that misses the
+  latch (about 4 ms before the V-blank on the Deck). The frame limit forces
+  FIFO and overrides Allow Tearing. While VRR is in use, Allow Tearing
+  changes nothing.
+- **VRR's ceiling.** A stream at a VRR display's maximum refresh leaves no
+  headroom: the display refreshes at a fixed rate, the host's clock drifts
+  against it (135–650 ppm, one refresh every 13–62 s), and frames are
+  replaced in bursts at each wrap. The limit's FIFO avoids the bursts for
+  about a refresh more latency. Pacing such streams on the grid was tried
+  and reverted (fewer replaced frames, 6 ms more latency). A rate a few FPS
+  below, R − R²/3600, was smooth in every Gamescope setting; the frame rate
+  menu now offers it (see "Recommended frame rate" below).
+- **Decode.** VAAPI returns a frame before its GPU decode finishes: about
+  4.5–6 ms later on the Deck (2560x1600 HEVC 10-bit), 1.8 ms on the Steam
+  Machine. A finished decode's sync can still wait 0.25–1.3 ms (driver
+  contention). The stats line's decode time is the CPU side only.
+- **Learned values must not learn from their own effects.** Four bugs had
+  that shape: the decode delay (holding frames for it kept renders late
+  enough to raise it), the render lead (FIFO back-pressure counted as
+  rendering), the margin under FIFO (gaps in reports read as replaced
+  frames) and the margin at VRR's ceiling (a release lead near a whole
+  refresh made frames collide, and each collision widened it). Each value
+  now learns only from samples it can't cause itself, is bounded, and has a
+  way back down that doesn't depend on the condition it creates (for the
+  decode delay, the median-wait decay).
+- **Per-frame fixes collide.** Moving individual late frames to the next
+  V-blank made them collide (up to 394 frames dropped in a stretch); one
+  shift for all frames with hysteresis replaced it.
+- **The frame limit was not smoother in itself.** Its early edge (99.9% vs
+  97.4% single refreshes on the Deck) came from the decode delay's extra
+  holding. With that bounded, the limit and fixed refresh are close.
+
+**How it was tested.**
+- **Captures:** Settings' diagnostic capture (`MOONLIGHT_VRR_TRACE`) writes
+  the session log, the timestamp trace (`*.tstrace`, expanded by
+  `scripts/decode-vrr-trace.py`) and, only while tracing, the display probe
+  report with a sampler that logs Gamescope's state on each change.
+- **Analysis:** split each trace at the sampler's setting changes (trace and
+  sampler times differ by up to a second), then per stretch: single-refresh
+  display intervals and repeats, replaced frames (presents with no report),
+  pacer drops, decoder output → display, present → display, the release
+  lead, extra margin, late shift, decode waits and delay, and host vs
+  display clock rates from RTP and display times. Check the host's frame
+  rate first: drops there look like pacing problems.
+- **Discipline that came out of it:** several builds mostly fixed the
+  previous build's regressions, and an early latency comparison rested on
+  9 s of data. Change one thing at a time, compare the same Gamescope
+  setting across builds, and replay existing traces offline before choosing
+  a threshold (the decay's 0.15 ms came from replaying the decode waits of
+  eight captures). The comparison against the build before decode readiness
+  was never run.
+- **Still open:** VRR with a limit below the stream's rate, Windows VRR
+  detection (NVAPI, the EDID or a short test window; none built), the late
+  shift, and the docked Deck's 4K Mailbox stall.
 
 **Selection.** The `timestamppacing` preference (Settings checkbox
 "Timestamp pacing", `--timestamp-pacing`) is snapshotted per session in
@@ -4828,8 +4900,8 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
   unchanged. EGL renderers, and Gamescope sessions whose device lacks
   `VK_GOOGLE_display_timing`, get no grid and fall back to presenting at
   target.
-- **Validation:** none of this has run on SteamOS. It has been compiled for
-  Windows and for Linux through the WSL AppImage build.
+- **Validation:** tested on SteamOS from 2026-10-08 (see the outline at the
+  start of this section and the testing notes).
 
 **Gamescope owns V-Sync (2026-10-08).** Gamescope composites every frame
 and decides how it reaches the display: async flips that tear (Allow Tearing),
