@@ -5012,9 +5012,26 @@ the probe never forces a connector probe.
   output time, to `TimestampPacer::notePresented()`.
   - The render lead learns from release-to-present time minus that wait.
   - `m_DecodeDelayUs` learns when decodes finish relative to decoder
-    output: a render that waited more than 250 us gives (render start −
-    output + wait), rising by a quarter of the gap; one that didn't bounds
-    it at (render start − output + wait), falling by 1/32. Capped at 20 ms.
+    output: a render that waited at least 1 ms, and began no more than 3 ms
+    after the current estimate, gives (render start − output + wait),
+    rising by a quarter of the gap; one that waited less bounds it at
+    (render start − output + wait), falling by 1/32. Capped at 1.5 stream
+    frame periods and 20 ms.
+  - The first version (250 us threshold, no start window, 20 ms cap) ran
+    away on a Deck capture (2026-10-09, 90 FPS, frame limit at 90 and
+    60 Hz). Renders under the limit began 15–21 ms after decoder output,
+    when the decode had long finished, but about 3% still waited
+    0.25–1.3 ms for the sync (driver contention). Each read as a decode
+    finishing that late, so the delay reached 20 ms; frames were then held
+    for it, which kept every render that late and nothing lowered it. The
+    pacer queue sat 2–3 deep (one "queue full" eviction burst), and decoder
+    output to present was 17–32 ms median against 7–9 ms with the limit
+    off. Real decode waits there were about 3 ms (2.2 ms median for renders
+    started within 3 ms of output). Replaying the trace's presents through
+    the current rules keeps the delay at 4.6–6.0 ms.
+  - The same capture's frame-limited stretches showed 99.9–100% of frames
+    on a single refresh, against 97.4–99.4% with fixed refresh, but that
+    came from the extra ~15 ms of holding, not from FIFO itself.
   - `submit()` treats a frame as ready at max(decode complete, decoder
     output + `m_DecodeDelayUs`), which the policy, lateness and the trace
     use. Renderers that report no wait (D3D11, EGL, SDL) leave the delay at
@@ -5022,6 +5039,99 @@ the probe never forces a connector probe.
   - Trace columns appended (schema unchanged): `decode_wait_us` and
     `decode_delay_us` on presented rows, `decode_delay_us` on scheduled rows.
   - Not yet captured on hardware.
+- **Deck capture with the bounded estimator** (2026-10-09, 90 FPS at 90 Hz,
+  frame limit toggled seven times): decode delay 4.8–6.4 ms throughout,
+  pacer queue depth 0–1 (2 five times), no queue-full eviction, decoder
+  output to present 8–12 ms median in both modes, frames dropped by
+  pacing 0.05%, ready late 25%. Frame limited showed 99.4–100% of frames
+  on a single refresh, fixed refresh 99.2–99.6%, except one fixed-refresh
+  stretch below.
+- **Replaced frames count as misses.** In that 30 s fixed-refresh stretch
+  the host sent a steady 90 FPS and every frame was released on the grid,
+  with presents returning 5 ms before their planned V-blank, yet only 68–76
+  frames a second were reported shown, worsening and then recovering with
+  no change in render or decode time. Gamescope returned no timing for
+  about 580 frames: they missed its latch, the next frame replaced them
+  (Mailbox), and the V-blank repeated a frame. The miss detector saw
+  nothing because the frames it was shown were on time. `onDisplayEvent()`
+  now treats each grid release planned for an earlier V-blank (within 3.5
+  refreshes) that was never reported as replaced: it counts as a missed
+  V-blank in the overlay, is recorded as `superseded` and `missed` on the
+  display report's trace row, and three within a second widen the margin
+  by 0.5 ms (up to 6 ms, narrowing as before). Gamescope leaves out a few
+  reports of frames it did show; replaying the capture, that stretch would
+  widen the margin 20–60 times per 10 s and the rest 0–5 times.
+- **The margin alone did not stop it.** The next Deck capture (2026-10-09,
+  same settings) had a 12 s stretch right after the limit was turned off:
+  25 frames a second were replaced, the margin reached 6 ms within 2 s, and
+  replacement continued at that rate for 10 s before fading. Frames there
+  became ready 5.5 ms before their planned V-blank (10.7 ms in good
+  stretches; the phase lock trim was −3.5 ms), so they couldn't be handed
+  over earlier. Shown rate by how long before the V-blank the present
+  returned: 31% at 0–2 ms, 60% at 2–4 ms, 91% at 4–6 ms, about 100% beyond,
+  consistent with Gamescope latching about 4 ms ahead.
+- **Planning a refresh later while frames are late.** A first version
+  planned each frame whose expected ready time (`Entry::readyUs`, decoder
+  output plus the decode delay) plus the grid release lead came after its
+  target's V-blank for the first V-blank it could make. On the next Deck
+  capture (2026-10-09, 90 FPS at 90 Hz, limit toggled seven times, then a
+  45 FPS and a 60 Hz limit) Gamescope replaced almost nothing (at most 18
+  frames a stretch), but in four of seven stretches the pacer itself
+  dropped 180–394 frames (79–85 shown a second): readiness jitters around
+  the limit, so a moved frame collided with the unmoved one after it, and
+  frame limited stretches lost frames FIFO would have shown a refresh late.
+  It was replaced by a uniform shift (`noteLateLocked()`): each grid
+  release records whether it was ready too late for its target's own
+  V-blank (ready + lead, the lead including the widened margin); once half
+  of the last 64 were, every frame is planned a refresh later until at most
+  2 of 64 would be late without it. Not used under the frame limit (FIFO
+  already shows a late frame a refresh later) or without a compositor
+  probe, and reset with the grid. It logs both switches and writes a
+  `late_shift` trace column. Replayed over the two captures before it, it
+  switches on within a second of the bad stretch (64 of 64 late) and never
+  in the normal stretches (at most 18 of 64). While on, frames show about
+  11 ms later; with a widened margin it stays on until the margin narrows
+  (0.25 ms per clean 5 s). The capture before those (256–286 s, frames
+  ready in time but still missed) would switch it on only through the
+  widened margin. Not yet captured.
+- **Replaced frames and FIFO; future-dated reports.** A 210 s Deck capture
+  (2026-10-09) with the 90 FPS limit on throughout had its margin climb to
+  6 ms (1.90% missed V-blanks). FIFO never replaces a frame, but the
+  replaced-frame check counted unreported releases anyway, and the
+  widened margin then handed frames over up to 17 ms before their V-blank,
+  where they waited in Gamescope's queue. Gamescope had returned all but 3
+  of 18428 frames; 486 were dropped by `VulkanTiming` as future-dated (the
+  scheduled V-blank of a latched frame can still be ahead when read), in
+  bursts that looked like replacement. The replaced-frame check is now off
+  under frame limited, and with the timestamp pacer's display sink set,
+  `VulkanTiming::setFutureToleranceUs(40000)` keeps times up to 40 ms ahead
+  (`future_accepted` in the summary log). VRR Pacing Mode keeps rejecting
+  them. The same capture's latency swings (decoder output to present 8–21
+  ms, queue depth 0–1) followed the playout buffer (4–15 ms) as it
+  answered Wi-Fi arrival jitter (±4–7 ms p1/p99, spikes to 16 ms), not
+  pacing: almost no frame was moved past its own V-blank.
+- **Render lead under FIFO.** The next Deck capture (2026-10-09, 90 FPS
+  limit on throughout, 135 s) confirmed the FIFO and future-report fixes:
+  margin +0.00 ms, missed V-blanks 0.01%, no future-dated report rejected
+  (22 accepted), and 99.9% of frames on single refreshes. But from 100 s
+  the render lead jumped from 2.1 to 5.6 ms while rendering took 1.5 ms:
+  occasional 11 ms release-to-present samples, from the render thread still
+  waiting for a swapchain image behind FIFO, held it up (it rises by a
+  quarter, falls by 1%), which released frames earlier (10 ms before the
+  V-blank instead of 6.6 ms), kept FIFO fuller and produced more such
+  waits. Frames still showed at their planned V-blank, 4–5 ms later after
+  decoder output than before. With a compositor probe, the lead is now
+  timed from max(release, render start); Windows keeps timing from release,
+  where the wait before rendering is DXGI's frame latency. Replayed over
+  that capture the lead stays 1.5–2.1 ms. The capture's other latency (up
+  to 24 ms in its first 40 s) was the playout buffer (13–16 ms) after
+  Wi-Fi arrival spikes of up to 59 ms. The decode delay there was 7.5–8.3
+  ms, against 5–6 ms in earlier captures.
+- **Sub-refresh limit detected.** The same capture's 45 FPS limit at 90 Hz
+  logged "frames are shown every 2 refreshes" within 2 s of the limit;
+  45.0 frames a second were shown, all on single 22.2 ms intervals, with
+  the other 45 dropped in the pacer (none queued) and decoder output to
+  present 16.6 ms median. A 60 Hz limit showed 59.8 a second.
 - **Frame limit period.** Under frame limited, each display report's
   interval is recorded (`noteLimitedDisplayLocked()`); every 32, the 25th
   percentile rounded to whole refreshes (1 to 8) becomes the grid period,
