@@ -682,7 +682,7 @@ QStringList streamInfoChips(const StatsGraphStreamInfo& info)
     // Pacing". Under Gamescope V-Sync is always on, so the chip shows how
     // Gamescope presents instead (TimestampPacer::DisplayMode values).
     static const char* const k_DisplayModeChips[] = {
-        nullptr, "V-Sync", "VRR", "Tearing", "Frame limit"
+        nullptr, "V-Sync", "VRR", "Tearing", "Frame limit", "VRR (max)"
     };
     const char* displayMode = info.displayMode < sizeof(k_DisplayModeChips) / sizeof(k_DisplayModeChips[0])
                                   ? k_DisplayModeChips[info.displayMode] : nullptr;

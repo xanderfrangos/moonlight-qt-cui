@@ -640,7 +640,9 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
         // fixed refresh and the frame limit's FIFO show frames at refreshes,
         // so they use the V-blank grid, whose period comes from Gamescope's
         // reported output refresh. The limit forces FIFO, which overrides
-        // Allow Tearing.
+        // Allow Tearing. VRR with the stream at the refresh rate, its
+        // maximum, also refreshes at a fixed rate, but only without the
+        // limit: there FIFO already shows every frame.
         if (GamescopeDisplayState::runningUnderGamescope()) {
             // Shared, because the pacer copies the probe for each poll
             struct ProbeState {
@@ -649,7 +651,7 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                 bool warnedLimitedVrr = false;
             };
             auto probeState = std::make_shared<ProbeState>();
-            m_TimestampPacer->setDisplayModeProbe([probeState]() {
+            m_TimestampPacer->setDisplayModeProbe([probeState, streamFps = m_MaxVideoFps]() {
                 GamescopeDisplayState* const gamescope = &probeState->gamescope;
                 bool& warnedLimitedVrr = probeState->warnedLimitedVrr;
                 if (!probeState->opened) {
@@ -671,7 +673,9 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                 }
                 warnedLimitedVrr = limitedVrr;
                 if (state.vrrInUse) {
-                    result.mode = TimestampPacer::DisplayMode::Adaptive;
+                    result.mode = !state.frameLimited && TimestampPacer::streamAtRefreshRate(streamFps, state.refreshHz) ?
+                                      TimestampPacer::DisplayMode::AdaptiveAtRefreshRate :
+                                      TimestampPacer::DisplayMode::Adaptive;
                 }
                 else if (state.frameLimited) {
                     result.mode = TimestampPacer::DisplayMode::FrameLimited;

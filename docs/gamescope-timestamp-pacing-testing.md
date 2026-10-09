@@ -207,7 +207,7 @@ These come from reading Gamescope's source (ValveSoftware/gamescope
 | 10 | Deck, 90 FPS limit on throughout (210 s) | Late shift | 99%+ single refreshes, pacing drops 0.15%, but the margin reached 6 ms: under FIFO, unreported frames were counted as replaced, mostly 486 reports `VulkanTiming` rejected as future-dated (Gamescope returned all but 3 of 18428). The wide margin handed frames over up to 17 ms early. Latency swings (8–21 ms) followed the playout buffer answering Wi-Fi jitter. | No replaced-frame check under FIFO; accept display times up to 40 ms in the future for Timestamp Pacing |
 | 11 | Deck, 90 FPS limit on throughout (135 s) | FIFO/future fixes | Fixes confirmed: margin 0, missed 0.01%, no future reports rejected, 99.9% single refreshes. But the render lead jumped 2.1 → 5.6 ms at 100 s (render 1.5 ms): occasional 11 ms samples from waiting for a swapchain image behind FIFO, self-reinforcing through earlier release; frames waited in FIFO, about 4–5 ms more latency. | Render lead timed from max(release, render start) under Gamescope |
 | 12 | Steam Machine, 116 FPS, VRR in use throughout: limit, VRR, tearing, VRR (193 s) | Render lead from render start | Smooth in every setting: 99.5–100% of frames shown, display interval change p95 0.35–0.37 ms, decoder output → display 4.5–4.9 ms median. Decode delay 1.8 ms. Spikes only at stream start and when Quick Access opened. The VRR-with-limit warning was logged 4 times a second. | Warning logged once per change |
-| 13 | Steam Machine, 120 FPS, VRR in use throughout: tearing + limit, tearing, limit, VRR (249 s) | Render lead from render start | VRR at the panel's ceiling: a 62 s beat between the host's and the display's clocks. Without the limit, latency drifted 4 → 11 ms with bursts of replaced frames at each wrap (1.3–2.7% overall); with it, none replaced but 10–16 ms latency. | None (see open questions) |
+| 13 | Steam Machine, 120 FPS, VRR in use throughout: tearing + limit, tearing, limit, VRR (249 s) | Render lead from render start | VRR at the panel's ceiling: a 62 s beat between the host's and the display's clocks. Without the limit, latency drifted 4 → 11 ms with bursts of replaced frames at each wrap (1.3–2.7% overall); with it, none replaced but 10–16 ms latency. | Without the limit, VRR with the stream within 0.06 Hz of the refresh rate is paced like fixed refresh ("VRR at its maximum") |
 
 ### Smoothness and latency by mode (Deck, 90 FPS)
 
@@ -267,7 +267,9 @@ extra latency.
 
 - **Mode,** polled every 250 ms from server 0:
   1. VRR in use: no grid; frames go out at their target minus the render
-     lead.
+     lead. Without the limit and with the stream's frame rate within
+     0.06 Hz of the refresh rate: on the grid, as fixed refresh ("VRR (max)"
+     chip).
   2. Limiter engaged: grid, one frame per V-blank, sub-refresh limits
      measured from display intervals.
   3. Allow Tearing: like VRR.
@@ -308,11 +310,13 @@ extra latency.
 - **A limit below the stream's rate with VRR** queues frames; Gamescope
   doesn't report the limited cadence. A warning is logged once each time
   the limit and VRR come on together.
-- **Streams at the VRR ceiling** (capture 13). Treating VRR as fixed refresh,
-  on the grid, when the stream's rate is within about 1% of the refresh rate
+- **Streams at the VRR ceiling** (capture 13). Without the limit, VRR with the
+  stream within 0.06 Hz of the refresh rate is now paced on the grid. It
   should turn each wrap's burst of replaced frames into one repeated frame
-  and hold latency steady. Not built or tested; a hint to stream a few FPS
-  lower is the alternative.
+  and hold latency steady. Not yet captured. Open: whether 117–119 FPS on
+  120 Hz also beat (a 119 FPS capture would show it), and whether the limit
+  on at the ceiling should be paced like the frame limit to save FIFO's
+  extra refresh of latency.
 - **Tearing:** Gamescope's display reports can't show tearing, and are
   missing for about half of the frames.
 - **Docked Deck Mailbox at 4K** (22–24 FPS) is unexplained.

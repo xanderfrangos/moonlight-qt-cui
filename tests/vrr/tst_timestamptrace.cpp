@@ -321,6 +321,25 @@ private slots:
         QVERIFY(lastVsyncUs != 0);
     }
 
+    // VRR at the stream's frame rate is paced on the grid only when the
+    // rates match within 0.06 Hz
+    void vrrAtRefreshRateUsesGrid()
+    {
+        QVERIFY(TimestampPacer::streamAtRefreshRate(120, 120));
+        QVERIFY(TimestampPacer::streamAtRefreshRate(60, 60));
+        QVERIFY(TimestampPacer::streamAtRefreshRate(119.95, 120));
+        QVERIFY(TimestampPacer::streamAtRefreshRate(120.05, 120));
+        QVERIFY(!TimestampPacer::streamAtRefreshRate(119.9, 120));
+        QVERIFY(!TimestampPacer::streamAtRefreshRate(119, 120));
+        QVERIFY(!TimestampPacer::streamAtRefreshRate(116, 120));
+        QVERIFY(!TimestampPacer::streamAtRefreshRate(120, 0));
+        QVERIFY(!TimestampPacer::streamAtRefreshRate(0, 0));
+
+        QVERIFY(TimestampPacer::modeUsesGrid(TimestampPacer::DisplayMode::AdaptiveAtRefreshRate));
+        QVERIFY(!TimestampPacer::modeUsesGrid(TimestampPacer::DisplayMode::Adaptive));
+        QVERIFY(TimestampPacer::modeUsesGrid(TimestampPacer::DisplayMode::FixedRefresh));
+    }
+
     void refusesUnwritableDestination()
     {
         QTemporaryDir directory;

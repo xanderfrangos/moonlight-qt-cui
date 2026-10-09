@@ -1756,7 +1756,8 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
         // TimestampPacer::DisplayMode, as reported by the compositor or
         // measured from V-blank times
         static const char* const k_DisplayModes[] = {
-            nullptr, "fixed refresh", "VRR", "tearing allowed", "frame limited (FIFO)"
+            nullptr, "fixed refresh", "VRR", "tearing allowed", "frame limited (FIFO)",
+            "VRR at its maximum (fixed)"
         };
         const char* displayMode = stats.timestampDisplayMode < sizeof(k_DisplayModes) / sizeof(k_DisplayModes[0]) ?
             k_DisplayModes[stats.timestampDisplayMode] : nullptr;
