@@ -499,11 +499,10 @@ qreal niceCeil(qreal value)
     return step * magnitude;
 }
 
-// target is a value to mark with a reference line, or 0 for none. The plot's
-// backdrop follows the card's opacity, relative to the default.
-void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
-               const std::vector<StatsGraphPoint>& points, int maxPoints,
-               qreal target, qreal opacity, qreal frametimeMin, qreal frametimeMax)
+// The parts of a plot that don't depend on its data: the backdrop, which
+// follows the card's opacity relative to the default, and a midpoint gridline,
+// which is enough to read the shape against.
+void drawPlotBackdrop(QPainter& painter, const QRectF& plotRect, qreal opacity)
 {
     const GraphPalette& palette = graphPalette();
     QColor plotColor = palette.plot;
@@ -511,6 +510,20 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
     painter.setPen(Qt::NoPen);
     painter.setBrush(plotColor);
     painter.drawRoundedRect(plotRect, palette.plotRadius, palette.plotRadius);
+
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(k_GraphGridColor, 1));
+    const qreal midY = plotRect.center().y();
+    painter.drawLine(QPointF(plotRect.left() + 1, midY), QPointF(plotRect.right() - 1, midY));
+}
+
+// Plots the data over a backdrop from drawPlotBackdrop(). target is a value to
+// mark with a reference line, or 0 for none.
+void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
+               const std::vector<StatsGraphPoint>& points, int maxPoints,
+               qreal target, qreal frametimeMin, qreal frametimeMax)
+{
+    const GraphPalette& palette = graphPalette();
 
     // Scale against the spread, not just the mean, so a spike that only shows
     // up in the band is never clipped off the plot.
@@ -549,12 +562,7 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
         }
     }
     const qreal plotRange = scale - baseline;
-
-    // A midpoint gridline is enough to read the shape against
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(k_GraphGridColor, 1));
     const qreal midY = plotRect.center().y();
-    painter.drawLine(QPointF(plotRect.left() + 1, midY), QPointF(plotRect.right() - 1, midY));
 
     // Draw the target only when it fits the data-focused frametime view.
     // An off-scale target must not flatten the observed variation.
@@ -743,6 +751,28 @@ QString overlayCostText(const StatsGraphOverlayCost& cost)
             .arg(part("paint", cost.paintCount, cost.paintMs, cost.paintMaxMs),
                  part("upload", cost.uploadCount, cost.uploadMs, cost.uploadMaxMs));
 }
+
+// Everything the graph card's static layer depends on. The layer is redrawn
+// only when one of these changes.
+struct GraphCardLayerKey {
+    QSize size;
+    qreal scale = 0;
+    uint32_t visibleGraphs = 0;
+    int plotHeight = 0;
+    int backgroundOpacity = 0;
+    int windowSeconds = 0;
+    QStringList chips;
+    bool tvMode = false;
+
+    bool operator==(const GraphCardLayerKey& other) const
+    {
+        return size == other.size && scale == other.scale &&
+               visibleGraphs == other.visibleGraphs && plotHeight == other.plotHeight &&
+               backgroundOpacity == other.backgroundOpacity &&
+               windowSeconds == other.windowSeconds && chips == other.chips &&
+               tvMode == other.tvMode;
+    }
+};
 
 }
 
@@ -1009,93 +1039,148 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
     const qreal opacity = qBound(0, config.backgroundOpacity, 100) / 100.0;
     const qreal opacityFactor = opacity / k_DefaultCardOpacity;
 
+    const QSize cardSize(qCeil(naturalWidth * scale), qCeil(naturalHeight * scale));
+    const QRectF cardRect(shadowMargin, shadowMargin, cardWidth, cardHeight);
+    const qreal contentLeft = cardRect.left() + cardPadding;
+    const qreal contentRight = cardRect.right() - cardPadding;
+
+    // Where the chips, the header and the grid of graphs sit
+    const qreal chipsTop = cardRect.top() + cardPadding;
+    qreal y = chipsTop;
+    if (!chipRects.empty()) {
+        y += chipsHeight;
+        if (graphRows > 0) {
+            y += graphGap;
+        }
+    }
+    const qreal headerTop = y;
+    if (graphRows > 0) {
+        y += headerMetrics.height() + graphGap;
+    }
+    const qreal gridTop = y;
+
+    auto labelRectAt = [&](int column, int row) {
+        return QRectF(contentLeft + (column * (columnWidth + columnGap)),
+                      gridTop + (row * (graphHeight + graphGap)),
+                      columnWidth, labelHeight);
+    };
+    auto plotRectAt = [&](int column, int row) {
+        const QRectF labelRect = labelRectAt(column, row);
+        return QRectF(labelRect.left(), labelRect.bottom() + labelGap, columnWidth, plotHeight);
+    };
+
     // Reused across repaints. This card republishes for as long as it is on
     // screen, and reallocating a megabyte of pixels every time churns the
     // allocator to no purpose. Only the stats graph sampling thread paints
-    // here, so a thread-local canvas needs no additional synchronization.
+    // here, so thread-local canvases need no additional synchronization.
+    //
+    // Most of the card is the same from one repaint to the next: the shadow,
+    // the card itself, the chips, the header, and each graph's name and empty
+    // plot. That is drawn once into its own layer and copied in, leaving only
+    // the data and the values that go with it to paint each time. Nothing in
+    // one layer overlaps anything in the other, so this draws exactly what
+    // painting everything in one pass would.
+    static thread_local QImage layer;
+    static thread_local GraphCardLayerKey layerKey;
     static thread_local QImage image;
-    const QSize cardSize(qCeil(naturalWidth * scale), qCeil(naturalHeight * scale));
+
+    GraphCardLayerKey key;
+    key.size = cardSize;
+    key.scale = scale;
+    key.visibleGraphs = config.visibleGraphs;
+    key.plotHeight = config.plotHeight;
+    key.backgroundOpacity = config.backgroundOpacity;
+    key.windowSeconds = config.windowSeconds;
+    key.chips = chips;
+    key.tvMode = SystemProperties::isTvMode();
+
+    if (layer.isNull() || !(layerKey == key)) {
+        layer = QImage(cardSize, QImage::Format_ARGB32_Premultiplied);
+        if (layer.isNull()) {
+            return nullptr;
+        }
+        layer.fill(Qt::transparent);
+
+        QPainter painter(&layer);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::TextAntialiasing);
+        painter.scale(scale, scale);
+
+        drawCardShadow(painter, cardRect, cardRadius, shadowBlur, shadowOffset,
+                       0.45 * qMin(1.0, opacityFactor));
+
+        QColor surfaceColor = palette.surface;
+        surfaceColor.setAlphaF(opacity);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(surfaceColor);
+        painter.drawRoundedRect(cardRect, cardRadius, cardRadius);
+
+        QColor edgeColor = palette.surfaceEdge;
+        edgeColor.setAlphaF(qMin(1.0, edgeColor.alphaF() * opacityFactor));
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(edgeColor, 1));
+        painter.drawRoundedRect(cardRect.adjusted(0.5, 0.5, -0.5, -0.5), cardRadius, cardRadius);
+
+        if (!chipRects.empty()) {
+            painter.setFont(chipFont);
+            for (int i = 0; i < chips.size(); i++) {
+                const QRectF chipRect = chipRects[i].translated(contentLeft, chipsTop);
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(palette.chip);
+                painter.drawRoundedRect(chipRect, chipHeight / 2, chipHeight / 2);
+
+                painter.setBrush(Qt::NoBrush);
+                painter.setPen(palette.text);
+                painter.drawText(chipRect.adjusted(chipPaddingX, 0, -chipPaddingX, 0),
+                                 Qt::AlignCenter,
+                                 chipMetrics.elidedText(chips[i], Qt::ElideRight,
+                                                        chipRect.width() - (chipPaddingX * 2)));
+            }
+        }
+
+        if (graphRows > 0) {
+            painter.setFont(headerFont);
+            painter.setPen(palette.secondaryText);
+            painter.drawText(QRectF(contentLeft, headerTop, contentRight - contentLeft, headerMetrics.height()),
+                             Qt::AlignLeft | Qt::AlignVCenter,
+                             QStringLiteral("Last %1 seconds").arg(config.windowSeconds));
+        }
+
+        for (int column = 0; column < graphColumns; column++) {
+            for (int row = 0; row < (int)columns[column].size(); row++) {
+                painter.setFont(labelFont);
+                painter.setPen(palette.text);
+                painter.drawText(labelRectAt(column, row), Qt::AlignLeft | Qt::AlignVCenter,
+                                 StreamingPreferences::performanceGraphName(columns[column][row]->id));
+                drawPlotBackdrop(painter, plotRectAt(column, row), opacityFactor);
+            }
+        }
+
+        painter.end();
+        layerKey = key;
+    }
+
     if (image.size() != cardSize) {
         image = QImage(cardSize, QImage::Format_ARGB32_Premultiplied);
         if (image.isNull()) {
             return nullptr;
         }
     }
-    image.fill(Qt::transparent);
+    // The same size and format, so the rows line up byte for byte
+    SDL_memcpy(image.bits(), layer.constBits(), (size_t)layer.sizeInBytes());
 
     QPainter painter(&image);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setRenderHint(QPainter::TextAntialiasing);
     painter.scale(scale, scale);
 
-    const QRectF cardRect(shadowMargin, shadowMargin, cardWidth, cardHeight);
-
-    drawCardShadow(painter, cardRect, cardRadius, shadowBlur, shadowOffset,
-                   0.45 * qMin(1.0, opacityFactor));
-
-    QColor surfaceColor = palette.surface;
-    surfaceColor.setAlphaF(opacity);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(surfaceColor);
-    painter.drawRoundedRect(cardRect, cardRadius, cardRadius);
-
-    QColor edgeColor = palette.surfaceEdge;
-    edgeColor.setAlphaF(qMin(1.0, edgeColor.alphaF() * opacityFactor));
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(edgeColor, 1));
-    painter.drawRoundedRect(cardRect.adjusted(0.5, 0.5, -0.5, -0.5), cardRadius, cardRadius);
-
-    const qreal contentLeft = cardRect.left() + cardPadding;
-    const qreal contentRight = cardRect.right() - cardPadding;
-    qreal y = cardRect.top() + cardPadding;
-
     // Frametime graphs mark the frametime the stream is meant to arrive at
     const qreal targetFrametimeMs = streamInfo.frameRate > 0 ? 1000.0 / streamInfo.frameRate : 0;
 
-    if (!chipRects.empty()) {
-        painter.setFont(chipFont);
-        for (int i = 0; i < chips.size(); i++) {
-            const QRectF chipRect = chipRects[i].translated(contentLeft, y);
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(palette.chip);
-            painter.drawRoundedRect(chipRect, chipHeight / 2, chipHeight / 2);
-
-            painter.setBrush(Qt::NoBrush);
-            painter.setPen(palette.text);
-            painter.drawText(chipRect.adjusted(chipPaddingX, 0, -chipPaddingX, 0),
-                             Qt::AlignCenter,
-                             chipMetrics.elidedText(chips[i], Qt::ElideRight,
-                                                    chipRect.width() - (chipPaddingX * 2)));
-        }
-        y += chipsHeight;
-        if (graphRows > 0) {
-            y += graphGap;
-        }
-    }
-
-    if (graphRows > 0) {
-        painter.setFont(headerFont);
-        painter.setPen(palette.secondaryText);
-        painter.drawText(QRectF(contentLeft, y, contentRight - contentLeft, headerMetrics.height()),
-                         Qt::AlignLeft | Qt::AlignVCenter,
-                         QStringLiteral("Last %1 seconds").arg(config.windowSeconds));
-        y += headerMetrics.height() + graphGap;
-    }
-
-    const qreal gridTop = y;
     for (int column = 0; column < graphColumns; column++) {
         for (int row = 0; row < (int)columns[column].size(); row++) {
             const GraphSpec& spec = *columns[column][row];
-            const qreal cellLeft = contentLeft + (column * (columnWidth + columnGap));
-            const qreal cellTop = gridTop + (row * (graphHeight + graphGap));
-            const QRectF labelRect(cellLeft, cellTop, columnWidth, labelHeight);
-
-            painter.setFont(labelFont);
-            painter.setPen(palette.text);
-            painter.drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter,
-                             StreamingPreferences::performanceGraphName(spec.id));
-
-            QRectF valueRect = labelRect;
+            QRectF valueRect = labelRectAt(column, row);
             if (!points.empty() && spec.withFrameRate) {
                 // The equivalent frame rate is secondary to the frametime it comes
                 // from, so it sits to its right in the smaller, dimmer label type.
@@ -1106,8 +1191,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
                 painter.setFont(scaleFont);
                 painter.setPen(palette.secondaryText);
                 painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter, rateText);
-                valueRect.setRight(valueRect.right() -
-                                   QFontMetricsF(scaleFont).horizontalAdvance(rateText));
+                valueRect.setRight(valueRect.right() - scaleMetrics.horizontalAdvance(rateText));
             }
             else if (!points.empty() && spec.secondaryField) {
                 // Named in its own line colour, which doubles as the legend.
@@ -1131,8 +1215,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
                 painter.setFont(scaleFont);
                 painter.setPen(spec.secondaryColor);
                 painter.drawText(valueRect, Qt::AlignRight | Qt::AlignVCenter, secondaryText);
-                valueRect.setRight(valueRect.right() -
-                                   QFontMetricsF(scaleFont).horizontalAdvance(secondaryText));
+                valueRect.setRight(valueRect.right() - scaleMetrics.horizontalAdvance(secondaryText));
             }
 
             // A signed value too small to show reads as zero, not "-0.00"
@@ -1149,12 +1232,9 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
                                                 .arg(QString::fromUtf8(spec.unit)));
 
             painter.setFont(scaleFont);
-            drawGraph(painter,
-                      QRectF(cellLeft, cellTop + labelHeight + labelGap,
-                             columnWidth, plotHeight),
-                      spec, points, maxPoints,
+            drawGraph(painter, plotRectAt(column, row), spec, points, maxPoints,
                       spec.withFrameRate ? targetFrametimeMs : 0,
-                      opacityFactor, frametimeMin, frametimeMax);
+                      frametimeMin, frametimeMax);
         }
     }
 
