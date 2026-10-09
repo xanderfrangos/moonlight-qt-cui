@@ -52,13 +52,6 @@ public:
         // releases at most one frame per refresh, so surplus frames are
         // dropped here rather than queued behind a blocking present.
         FrameLimited,
-        // VRR with the stream at the display's refresh rate (the maximum)
-        // and no frame limit: with no headroom the display refreshes at
-        // that rate as at a fixed rate, so this uses the V-blank grid. On a
-        // 120 Hz VRR TV (2026-10-09), a 120 FPS stream drifted against the
-        // refresh by one refresh every 62 s, and frames presented at their
-        // targets were replaced in bursts each time.
-        AdaptiveAtRefreshRate,
     };
     // What the probe reads from the compositor
     struct CompositorState {
@@ -71,11 +64,6 @@ public:
     using DisplayModeProbe = std::function<CompositorState()>;
     static const char* displayModeName(DisplayMode mode);
     static bool modeUsesGrid(DisplayMode mode);
-    // Whether a stream runs at the display's refresh rate, for
-    // AdaptiveAtRefreshRate. Both are nominal rates; Gamescope reports
-    // whole hertz.
-    static constexpr double RefreshRateMatchHz = 0.06;
-    static bool streamAtRefreshRate(double streamFps, double refreshHz);
 
     // Frames waiting for their target. Kept to the fixed pacing queue's bound
     // so the decoder's surface pool still covers every frame held here.

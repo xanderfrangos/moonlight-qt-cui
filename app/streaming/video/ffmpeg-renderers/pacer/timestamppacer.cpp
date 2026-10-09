@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cmath>
 
 namespace {
 
@@ -70,13 +69,7 @@ void TimestampPacer::trace(const TimestampTrace::Row& row)
 // The modes in which frames are shown at the display's refreshes
 bool TimestampPacer::modeUsesGrid(DisplayMode mode)
 {
-    return mode == DisplayMode::Unknown || mode == DisplayMode::FixedRefresh || mode == DisplayMode::FrameLimited ||
-           mode == DisplayMode::AdaptiveAtRefreshRate;
-}
-
-bool TimestampPacer::streamAtRefreshRate(double streamFps, double refreshHz)
-{
-    return streamFps > 0 && refreshHz > 0 && std::fabs(streamFps - refreshHz) <= RefreshRateMatchHz;
+    return mode == DisplayMode::Unknown || mode == DisplayMode::FixedRefresh || mode == DisplayMode::FrameLimited;
 }
 
 TimestampTrace::Row TimestampPacer::frameRow(TimestampTrace::Event event, const Entry& entry, uint64_t atUs)
@@ -100,7 +93,6 @@ const char* TimestampPacer::displayModeName(DisplayMode mode)
     case DisplayMode::Adaptive: return "VRR";
     case DisplayMode::Tearing: return "tearing allowed";
     case DisplayMode::FrameLimited: return "frame limited (FIFO)";
-    case DisplayMode::AdaptiveAtRefreshRate: return "VRR at the stream's frame rate, its maximum";
     }
     return "unknown";
 }

@@ -4782,19 +4782,9 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
   released.
   Precedence:
   1. `GAMESCOPE_VRR_FEEDBACK`: VRR. If `GAMESCOPE_LIMITER_FEEDBACK` is also
-     set, the probe warns once each time both come on: FIFO queues frames
-     when the limit is below the stream's rate, and Gamescope does not
-     report the limited cadence a grid would need. Without the limit, a
-     stream whose nominal frame rate is within 0.06 Hz of the reported
-     refresh rate (`TimestampPacer::streamAtRefreshRate()`; both whole
-     numbers, so in practice equal) is "VRR at its maximum"
-     (`AdaptiveAtRefreshRate`), paced like fixed refresh. On a 120 Hz VRR TV
-     (2026-10-09) a 120 FPS stream left VRR no headroom: the host's 119.983
-     FPS against the 119.999 Hz ceiling drifted one refresh every 62 s, and
-     each wrap replaced 50–77 frames in 10 s while frames were presented at
-     their targets. 116 FPS was followed by VRR and stays plain VRR. With the
-     limit on, FIFO showed every frame at the ceiling (with about a refresh
-     more latency), so that case stays VRR.
+     set, the probe warns once: FIFO queues frames when the limit is below
+     the stream's rate, and Gamescope does not report the limited cadence a
+     grid would need.
   2. `GAMESCOPE_LIMITER_FEEDBACK`: frame limited (FIFO). It comes before
      tearing because the limit's FIFO overrides Allow Tearing.
   3. `GAMESCOPE_ALLOW_TEARING`: tearing.
@@ -4808,9 +4798,9 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
   `gamescope_control`. On a Deck capture, it read 1 exactly while the
   renderer's presents blocked at the refresh rate (60, 53, 77 and 90 Hz).
   It does not give the limit's value.
-- **Pacing per mode:** fixed refresh, frame limited, VRR at its maximum
-  and no probe use the grid (`TimestampPacer::modeUsesGrid()`); VRR and
-  tearing present at target minus render lead. Under a frame limit, FIFO shows each queued frame at
+- **Pacing per mode:** fixed refresh, frame limited and no probe use the
+  grid (`TimestampPacer::modeUsesGrid()`); VRR and tearing present at target
+  minus render lead. Under a frame limit, FIFO shows each queued frame at
   its own refresh, so the grid's release of at most one frame (the newest)
   per V-blank drops surplus frames instead of queuing them. That reduction
   only works among frames waiting together, and nearly every frame under
