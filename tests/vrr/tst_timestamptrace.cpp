@@ -13,7 +13,19 @@ extern "C" {
 #include <QTemporaryDir>
 #include <QtTest>
 
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
+#endif
+
 #include <chrono>
+#include <deque>
+#include <mutex>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -383,6 +395,127 @@ private slots:
         QVERIFY(lowUs >= 3500);
         QVERIFY(highUs <= 3900);
         QVERIFY(highUs - lowUs <= 150);
+    }
+
+    // A real pacer, in real time, against a modelled Gamescope under the
+    // frame limit: FIFO at 90 Hz, showing a frame at the first refresh at
+    // least 4 ms after its present returned and after the frame before it,
+    // and VAAPI decodes finishing 4.8 ms after decoder output (as on a
+    // Deck). Host frames come 15.4-18.2 ms apart (55-65 FPS), so their phase
+    // against the refresh keeps moving and some are always planned for a
+    // V-blank their decode can't make. Those miss, but handing frames over
+    // earlier couldn't help them, so the margin must stay down.
+    void marginIgnoresDecodeBoundMisses()
+    {
+        constexpr uint64_t refreshUs = 11111;
+        constexpr uint64_t latchUs = 4000;
+        constexpr uint64_t decodeUs = 4800;
+        constexpr uint64_t renderUs = 1500;
+        constexpr int seconds = 12;
+#ifdef Q_OS_WIN
+        // Moonlight runs with SDL's 1 ms timer resolution; without it the
+        // pacer's waits overshoot by up to a scheduler tick
+        timeBeginPeriod(1);
+        const auto restoreTimer = qScopeGuard([] { timeEndPeriod(1); });
+#endif
+
+        // Sleeps most of the way so the pacer's own thread isn't crowded out
+        const auto spinUntil = [](uint64_t atUs) {
+            while (LiGetMicroseconds() + 2000 < atUs) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            while (LiGetMicroseconds() < atUs) {
+                std::this_thread::yield();
+            }
+        };
+
+        PacerTelemetry telemetry;
+        TimestampPacer* pacer = nullptr;
+        std::mutex fifoLock;
+        std::deque<uint64_t> fifo;
+        std::atomic_int presented { 0 };
+        TimestampPacer::Callbacks callbacks;
+        callbacks.release = [&](AVFrame* frame) {
+            const uint64_t startUs = LiGetMicroseconds();
+            const uint64_t outputUs = uint64_t(frame->pts);
+            const uint64_t doneUs = outputUs + decodeUs;
+            const uint64_t waitUs = doneUs > startUs ? doneUs - startUs : 20;
+            const uint64_t presentUs = std::max(startUs, doneUs) + renderUs;
+            av_frame_free(&frame);
+            pacer->notePresented(startUs, presentUs, outputUs, waitUs, false, 0);
+            std::lock_guard<std::mutex> lock(fifoLock);
+            fifo.push_back(presentUs);
+            presented++;
+        };
+        callbacks.drop = [](AVFrame* frame, bool) {
+            av_frame_free(&frame);
+        };
+
+        TimestampPacingOptions options;
+        options.enabled = true;
+        options.vsyncMarginUs = TimestampPacingOptions::GamescopeVsyncMarginUs;
+        TimestampPacer timestampPacer(options, 90, 90, true, false, &telemetry, callbacks);
+        pacer = &timestampPacer;
+        timestampPacer.setDisplayModeProbe([] {
+            return TimestampPacer::CompositorState { TimestampPacer::DisplayMode::FrameLimited, 90 };
+        });
+        QVERIFY(timestampPacer.start());
+
+        std::atomic_bool stopDisplay { false };
+        std::atomic_int shown { 0 };
+        std::thread display([&] {
+            uint64_t vblankUs = LiGetMicroseconds();
+            while (!stopDisplay.load()) {
+                vblankUs += refreshUs;
+                spinUntil(vblankUs);
+                bool show = false;
+                {
+                    std::lock_guard<std::mutex> lock(fifoLock);
+                    if (!fifo.empty() && fifo.front() + latchUs <= vblankUs) {
+                        fifo.pop_front();
+                        show = true;
+                    }
+                }
+                if (show) {
+                    timestampPacer.onDisplayEvent(vblankUs, refreshUs);
+                    shown++;
+                }
+            }
+        });
+
+        std::mt19937 random(7);
+        std::uniform_int_distribution<uint64_t> period(15385, 18182);
+        const uint64_t startUs = LiGetMicroseconds();
+        uint64_t sendUs = startUs;
+        uint64_t maxMarginUs = 0;
+        uint64_t nextCheckUs = startUs + 2000000;
+        int frames = 0;
+        while (sendUs < startUs + uint64_t(seconds) * 1000000) {
+            sendUs += period(random);
+            spinUntil(sendUs);
+            // The decode is timed from when the frame actually came out
+            const uint64_t outputUs = LiGetMicroseconds();
+            AVFrame* frame = av_frame_alloc();
+            frame->pts = int64_t(outputUs);
+            PacedFrame paced(frame, ++frames, uint32_t((sendUs - startUs) * 9 / 100), true, outputUs);
+            paced.setHostLatencyUs(3000);
+            timestampPacer.submit(std::move(paced));
+            if (sendUs >= nextCheckUs) {
+                // After the decode delay is learned
+                maxMarginUs = std::max(maxMarginUs, timestampPacer.extraMarginUs());
+                nextCheckUs += 250000;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        timestampPacer.stop();
+        stopDisplay.store(true);
+        display.join();
+
+        qInfo("%d frames, %d presented, %d shown, extra margin at most %llu us, decode delay %llu us", frames,
+              presented.load(), shown.load(), (unsigned long long)maxMarginUs,
+              (unsigned long long)timestampPacer.decodeDelayUs());
+        QVERIFY(presented.load() >= frames * 97 / 100);
+        QVERIFY(maxMarginUs <= 1000);
     }
 
     void refusesUnwritableDestination()

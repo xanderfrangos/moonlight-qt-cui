@@ -211,6 +211,8 @@ These come from reading Gamescope's source (ValveSoftware/gamescope
 | 14 | Steam Machine, 120 FPS: limit off (77 s), then on (73 s) | VRR at the ceiling paced on the grid; decode delay decay | On the grid, replaced frames fell only to 0.97/s, still in bursts (11–33 per 5 s); decoder output → display 13.8 ms median. The release lead (4.5 ms Gamescope margin, up to 3.5 ms more from replaced frames, 1.2 ms render) was about a whole refresh, so presents collided with the previous frame's latch, each replacement widened the margin, and the late shift was on for 69% of frames. With the limit, the sawtooth of capture 13's no-limit stretches, unlike its limit stretch. Decode delay settled at 1.5–1.9 ms. | Grid pacing at the ceiling reverted; Recommended frame rate (116 FPS at 120 Hz) offered instead |
 | 15 | Deck, 90 FPS at 90 Hz: limit, no limit, limit (76 s) | Same | Limit 99.95%/99.91% single refreshes, no limit 99.63%; decoder output → display 17.5 / 14.1 ms median (host sent only about 51 FPS in the last stretch). No pacer drops, no extra margin. Decode delay decayed 5.56 → 4.72 ms against a real 4.5 ms decode, median waits 0.02 ms. | None |
 | 16 | Deck, 90 FPS at 90 Hz, 90 FPS limit on throughout: a launch that began on the host's desktop (120 s), then a resume straight into the game (73 s) | Same | The launch was jittery in game until near the end. The desktop sent a frame every 50–60 ms (about 20 FPS, in bursts) and the loading screen 16 FPS, which the limit measurement read as frames every 3–5 refreshes; the host's frame clock still said 90 FPS, so the slow-stream check passed. With the grid at 5 refreshes the pacer released one frame in 5, so frames were shown 55.6 ms apart and each measurement confirmed it: the game at a steady 90 FPS was shown at 18 FPS for 30 s (about 72 frames a second dropped; 39% overall). It escaped only when the grid's fitted period drifted 3% short, a few frames landed 4 refreshes apart, and the reconfigured grid let frames through at full rate for a moment. The resume never saw a slow stream: one refresh throughout, 2 replaced, 0.11% dropped. | Slow-stream check also by arrival rate; limit measured again at one refresh after 5 s (doubling to 30 s) and after report gaps; third shortest of 32 intervals instead of the 25th percentile |
+| 17 | Deck, 90 Hz, 90 FPS limit on throughout, a launch from the host's desktop; the game itself then ran at 90, 45, 30 and 60 FPS (7 min) | Capture 16's fix | Fix confirmed: the grid stayed at one refresh throughout and the stream spaced itself (45 FPS on 2-refresh intervals, 30 on 3, 60 alternating 1 and 2); pacer drops 0.18%. But at 60 FPS, from 315 s to 340 s, 16-22% of frames were shown a refresh late: planned for a V-blank their decode finished only 2.6 ms before (decode about 4.8 ms after output), they waited 4.8 ms for it and presented 1.4 ms before the V-blank. 280 of 282 misses in the capture were such frames. They took the margin to 6 ms, where it stayed; no visible repeats (intervals stayed 1/2), latency 14-17 ms. | None yet (see capture 18) |
+| 18 | Deck, 90 FPS limit, 90 FPS at 90 Hz, then the game at 60 FPS, then Steam's 60 FPS limit (the panel moved to 60 Hz), a brief 59 Hz (6 min) | Same | 60 FPS at 60 Hz: every interval one refresh, no misses, no drops. 60 FPS at 90 Hz again missed in stretches (177 of 600 frames in 10 s), 331 of 342 misses decode-bound, margin to 6 ms; it then cost about 2.7 ms at 60 Hz (latency 14.8 → 12.1 ms as it decayed over two minutes). 7 more misses came in the 0.1 s between the panel switching to 60 Hz and the pacer's poll seeing it. At 59.013 Hz with 60 FPS, about one frame a second dropped and latency rose to about 23 ms, as a rate mismatch must. | A miss whose render waited at least a margin step (0.5 ms) for its decode no longer widens the margin; a new refresh rate resets it |
 
 ### Smoothness and latency by mode (Deck, 90 FPS)
 
@@ -273,8 +275,13 @@ extra latency.
     there: the slow-stream check used the host's frame clock, which stays
     at the stream rate while the host skips frames. Raising the limit in
     Quick Access had the same blind spot.
+14. **Decode-bound misses widened the margin** (captures 17 and 18). A
+    frame planned for a V-blank its decode couldn't make missed however
+    early it was handed over, yet each miss widened the margin, which only
+    added latency. A refresh-rate switch, seen up to a poll late, also
+    widened it.
 
-## Current behaviour under Gamescope (as built after capture 16)
+## Current behaviour under Gamescope (as built after capture 18)
 
 - **Mode,** polled every 250 ms from server 0:
   1. VRR in use: no grid; frames go out at their target minus the render
@@ -295,9 +302,11 @@ extra latency.
   holds mostly don't wait (1 s median under 0.15 ms), so an estimate that
   ends up too high comes back down.
 - **Missed V-blanks:** lag on reported frames, plus replaced frames
-  (unreported earlier releases, not under the frame limit); 3 replaced in
-  a second widen the margin by 0.5 ms, up to 6 ms. Display times up to
-  40 ms in the future are accepted.
+  (unreported earlier releases, not under the frame limit); a lagging frame
+  or 3 replaced in a second widen the margin by 0.5 ms, up to 6 ms, except
+  frames whose render waited at least 0.5 ms for its decode (handing those
+  over earlier wouldn't have helped). A new refresh rate resets the margin.
+  Display times up to 40 ms in the future are accepted.
 - **Late shift:** when half of the last 64 grid frames couldn't be ready
   their lead before their V-blank, every frame is planned a refresh later
   until at most 2 of 64 would be late. Not used under the frame limit.
@@ -344,6 +353,13 @@ extra latency.
   captures would still be needed to confirm nothing changed.
 - **Limiter detection timing:** `GAMESCOPE_LIMITER_FEEDBACK` was trusted
   from one Deck capture and the stream logs after it.
+- **Unsteady frame rates without VRR** (after capture 18). At 55-65 FPS on
+  90 Hz the frames' phase against the refresh keeps moving, so some are
+  always planned for a V-blank their decode can't make; in the modelled
+  test about 18% miss. Under the frame limit each is shown a refresh late
+  (no drop); without it, a late frame is usually replaced by the next, and
+  the late shift (half of 64 late) wouldn't engage at that rate. Not
+  captured.
 - **Re-measuring a frame limit** (after capture 16) is tested only against a
   model of FIFO. Under a real limit, each re-measurement sends a frame every
   refresh for 8 reports (about 0.27 s at 30 FPS), which may queue a frame

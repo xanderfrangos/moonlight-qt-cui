@@ -4604,7 +4604,7 @@ An opt-in fourth presentation mode, built from
 [the proposal](docs/timestamp-pacing-proposal.md). Offline evaluation, known
 gaps and next steps are in
 [timestamp-pacing-findings.md](docs/timestamp-pacing-findings.md). Under
-Gamescope it was tested on a Steam Deck and a Steam Machine over sixteen
+Gamescope it was tested on a Steam Deck and a Steam Machine over eighteen
 captures (2026-10-08 to 2026-10-09); each capture, its finding and the change
 it led to are in
 [gamescope-timestamp-pacing-testing.md](docs/gamescope-timestamp-pacing-testing.md).
@@ -4894,8 +4894,27 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
   - `TimestampPacing::MissDetector` rounds display minus planned V-blank to
     whole refreshes. A frame has missed when that lag is above the least lag
     among the last 128 frames, so a constant compositor delay is not counted.
-  - A miss adds 0.5 ms to the submit margin, up to 6 ms.
-  - After 5 s without a miss, the margin releases 0.25 ms.
+  - A miss adds 0.5 ms to the submit margin, up to 6 ms, unless the frame's
+    render waited at least that long for its decode (`Release::decodeBound`,
+    set from `notePresented()`'s decode wait): it then presented when the
+    decode finished, and handing it over a step earlier couldn't have
+    helped. The same goes for replaced frames. Such a miss still counts in
+    the overlay's miss rate. Renderers that don't report a decode wait
+    (D3D11) are unaffected.
+  - After 5 s without a miss that widens it, the margin releases 0.25 ms.
+  - A new compositor refresh rate sets the margin back to zero: Gamescope
+    switches up to a poll (250 ms) before the pacer sees it, and frames
+    planned on the old grid until then look missed.
+  - Before 2026-10-09 every miss widened it. At 60 FPS on the Deck's 90 Hz
+    panel (captures 17 and 18 in the testing notes) frames planned for a
+    V-blank their decode finished only 2.6-3.6 ms before missed in stretches
+    of 20-25 s; 611 of 624 misses were decode-bound. They held the margin at
+    6 ms, and at 60 Hz afterwards that cost about 2.7 ms of latency for the
+    two minutes it took to decay. `tst_timestamptrace`'s
+    `marginIgnoresDecodeBoundMisses` runs the real pacer against a modelled
+    Gamescope (FIFO at 90 Hz, 4 ms latch, 4.8 ms decodes) with a 55-65 FPS
+    stream: about 18% of frames miss, the margin stays at 0-0.75 ms, and
+    the old rule takes it to 6 ms.
   - The text overlay shows the mode, the miss rate and the added margin.
   - Windows (2026-10-08) uses the same detection; see "Windows missed V-blank
     detection" below.

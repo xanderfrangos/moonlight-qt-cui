@@ -127,6 +127,9 @@ public:
     // How long after decoder output frames are treated as decoded
     uint64_t decodeDelayUs() const { return m_DecodeDelayUs.load(std::memory_order_relaxed); }
 
+    // How much earlier than usual frames are handed over, after missed V-blanks
+    uint64_t extraMarginUs();
+
     // Whether frames can be placed on a V-blank grid at all
     bool usesVblankGrid() const { return m_UseVblankGrid; }
 
@@ -155,7 +158,8 @@ private:
     uint64_t vblankForLocked(const Entry& entry) const;
     void releaseDueLocked(std::unique_lock<std::mutex>& lock, bool vblankGrid);
     void learnWakeLead(uint64_t schedulerDelayUs);
-    bool noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs);
+    // A miss widens the margin only when releasing earlier could have helped
+    bool noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs, bool decodeBound = false);
     // Under a frame limit, spaces the grid at the interval frames are shown at
     void noteLimitedDisplayLocked(uint64_t displayUs, uint64_t nowUs);
     void applyLimitLocked(uint64_t nowUs);
@@ -218,6 +222,9 @@ private:
     struct Release {
         uint64_t releaseUs = 0;
         uint64_t vblankUs = 0;
+        // Its render waited for its decode, so it presented when the decode
+        // allowed, however early it was handed over
+        bool decodeBound = false;
     };
     std::array<Release, 16> m_Releases {};
     size_t m_NextRelease = 0;

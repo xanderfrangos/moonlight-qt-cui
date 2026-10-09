@@ -34,6 +34,11 @@ constexpr uint64_t k_DecodeWindowSlackUs = 3000;
 constexpr uint64_t k_DecodeDecayWindowUs = 1000;
 constexpr uint64_t k_DecodeDecayMedianUs = 150;
 
+// How much each missed V-blank widens the submit margin. A render that waited
+// at least this long for its decode would have presented no earlier had it
+// been handed over one step sooner, so its miss doesn't widen it.
+constexpr uint64_t k_MarginStepUs = 500;
+
 // A target this far past readiness means the timeline is wrong, not that the
 // frame should wait that long
 constexpr uint64_t k_MaximumHoldUs = 100000;
@@ -403,7 +408,16 @@ void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs
     // is only a gap in the reports. On a Deck capture (2026-10-09) treating
     // those as replaced widened the margin to 6 ms, handing frames over up
     // to 17 ms before their V-blank, where they waited in Gamescope's queue.
+    // A frame whose render waited a margin step or more for its decode
+    // presented when the decode finished, so handing it over a step earlier
+    // couldn't have helped: it counts
+    // as missed but doesn't widen the margin. On two Deck captures
+    // (2026-10-09, 60 FPS at 90 Hz) 611 of 624 misses were such frames,
+    // planned for a V-blank their decode finished only 2.6-3.6 ms before;
+    // they took the margin to 6 ms, about 2.7 ms more latency for the two
+    // minutes it took to come back down.
     uint32_t replaced = 0;
+    uint32_t replacedInTime = 0;
     const bool canReplace = m_DisplayMode != DisplayMode::FrameLimited;
     for (Release& release : m_Releases) {
         if (release.vblankUs == 0 || &release == match || release.vblankUs >= match->vblankUs) {
@@ -411,6 +425,7 @@ void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs
         }
         if (canReplace && double(match->vblankUs - release.vblankUs) <= periodUs * 3.5) {
             replaced++;
+            replacedInTime += release.decodeBound ? 0 : 1;
         }
         release.vblankUs = 0;
     }
@@ -420,10 +435,10 @@ void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs
             m_ReplacedWindowUs = displayUs;
             m_ReplacedInWindow = 0;
         }
-        m_ReplacedInWindow += replaced;
+        m_ReplacedInWindow += replacedInTime;
         const bool widen = m_ReplacedInWindow >= 3;
         if (widen) {
-            m_ExtraMarginUs = std::min<uint64_t>(6000, m_ExtraMarginUs + 500);
+            m_ExtraMarginUs = std::min<uint64_t>(6000, m_ExtraMarginUs + k_MarginStepUs);
             m_MarginChangedUs = displayUs;
             m_ReplacedWindowUs = displayUs;
             m_ReplacedInWindow = 0;
@@ -434,7 +449,7 @@ void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs
         }
         row.missed = true;
     }
-    row.missed = noteDisplayLagLocked(displayUs, match->vblankUs, periodUs);
+    row.missed = noteDisplayLagLocked(displayUs, match->vblankUs, periodUs, match->decodeBound);
     match->vblankUs = 0;
 }
 
@@ -483,12 +498,13 @@ TimestampPacer::TraceOnReturn::~TraceOnReturn()
     pacer->trace(row);
 }
 
-bool TimestampPacer::noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs)
+bool TimestampPacer::noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs, bool decodeBound)
 {
     const bool missed = m_Misses.observe(double(displayUs) - double(vblankUs), periodUs);
 
-    if (missed) {
-        m_ExtraMarginUs = std::min<uint64_t>(6000, m_ExtraMarginUs + 500);
+    // A frame that waited for its decode says nothing about the margin
+    if (missed && !decodeBound) {
+        m_ExtraMarginUs = std::min<uint64_t>(6000, m_ExtraMarginUs + k_MarginStepUs);
         m_MarginChangedUs = displayUs;
     }
     else if (m_ExtraMarginUs != 0 && displayUs - m_MarginChangedUs > 5000000) {
@@ -673,8 +689,14 @@ void TimestampPacer::applyCompositorRefreshLocked(int refreshHz, uint64_t nowUs)
                 refreshHz, 1000.0 / refreshHz, m_Grid.nominalPeriodUs() / 1000.0);
     m_CompositorRefreshHz = refreshHz;
     // V-blanks of the old period don't line up with the new ones, and a
-    // frame limit is measured again against the new refresh
+    // frame limit is measured again against the new refresh. The margin
+    // starts over too: the switch lands up to a poll before it is seen, and
+    // frames planned on the old grid until then look missed. On a Deck
+    // capture (2026-10-09, 90 to 60 Hz) seven of them in 0.1 s widened it
+    // 3.5 ms.
     m_RefreshPeriodUs = 1000000.0 / refreshHz;
+    m_ExtraMarginUs = 0;
+    m_ReplacedInWindow = 0;
     resetGridLocked();
 
     TimestampTrace::Row row;
@@ -769,6 +791,13 @@ void TimestampPacer::notePresented(uint64_t renderStartUs, uint64_t presentUs, u
         row.releaseUs = m_LastReleaseUs;
         row.plannedPresentUs = m_PlannedPresentUs;
         row.renderLeadUs = m_RenderLeadUs;
+        if (decodeWaitUs >= k_MarginStepUs && m_LastReleaseUs != 0) {
+            for (Release& release : m_Releases) {
+                if (release.releaseUs == m_LastReleaseUs && release.vblankUs != 0) {
+                    release.decodeBound = true;
+                }
+            }
+        }
         if (m_LastReleaseUs == 0 || presentUs < m_LastReleaseUs || presentUs - m_LastReleaseUs > 50000) {
             // No release to time it from
             trace(row);
@@ -815,6 +844,12 @@ size_t TimestampPacer::queueDepth()
 {
     std::lock_guard<std::mutex> lock(m_Lock);
     return m_Queue.size();
+}
+
+uint64_t TimestampPacer::extraMarginUs()
+{
+    std::lock_guard<std::mutex> lock(m_Lock);
+    return m_ExtraMarginUs;
 }
 
 uint64_t TimestampPacer::leadUsLocked(bool vblankGrid) const
@@ -973,7 +1008,7 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
         vblankWaitUs = int64_t(vblankUs) - int64_t(shown.targetUs);
         m_PhaseLock.update(shown.targetUs, assignedUs, m_Grid.periodUs(), m_SourcePeriodUs);
         noteLateLocked(shown, assignedUs);
-        m_Releases[m_NextRelease] = { nowUs, vblankUs };
+        m_Releases[m_NextRelease] = { nowUs, vblankUs, false };
         m_NextRelease = (m_NextRelease + 1) % m_Releases.size();
         m_LastVblankUs = vblankUs;
     }
