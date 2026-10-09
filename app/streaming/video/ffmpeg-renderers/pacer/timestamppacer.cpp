@@ -662,7 +662,19 @@ void TimestampPacer::notePresented(uint64_t renderStartUs, uint64_t presentUs, u
         // Rise quickly to a slow frame and fall back slowly, so the lead
         // covers most frames rather than the average one. Waiting for the
         // decode is not rendering: readiness accounts for it.
-        sampleUs = presentUs - m_LastReleaseUs;
+        //
+        // Under Gamescope, the render thread can also still be waiting for a
+        // swapchain image when a frame is released, because FIFO (the frame
+        // limit) holds the frames handed over earlier. That wait is not
+        // rendering either, and counting it feeds itself: a longer lead hands
+        // frames over earlier, they wait in FIFO longer, and the next image
+        // comes later. On a Deck capture (2026-10-09, frame limit at 90 Hz)
+        // occasional 11 ms samples held the lead at 5.6 ms against 1.5 ms of
+        // rendering, and frames presented 9 ms before their V-blank. So the
+        // lead there is timed from when the render began. Elsewhere that wait
+        // (DXGI's frame latency) is part of handing a frame over.
+        const uint64_t startUs = m_DisplayModeProbe ? std::max(m_LastReleaseUs, renderStartUs) : m_LastReleaseUs;
+        sampleUs = presentUs > startUs ? presentUs - startUs : 0;
         sampleUs -= std::min(sampleUs, decodeWaitUs);
         if (sampleUs > m_RenderLeadUs) {
             m_RenderLeadUs += (sampleUs - m_RenderLeadUs) / 4;
