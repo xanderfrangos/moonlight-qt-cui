@@ -35,6 +35,18 @@ public:
     static
     void getDisplayOutputMode(int displayIndex, int& width, int& height, int& refreshHz);
 
+    // Whether a display refreshes adaptively (VRR), where it can tell:
+    // Gamescope's VRR state, or macOS's refresh range. False elsewhere,
+    // including Windows, which has no reliable query. Main thread only.
+    static
+    bool displayUsesVrr(int displayIndex);
+
+    // Whether displayUsesVrr() can tell at all. Where it can't, the frame
+    // rate menu offers a VRR choice for the user to pick instead of a
+    // Recommended one.
+    static
+    bool canDetectVrr();
+
     static
     int getDisplayRefreshRate(SDL_Window* window);
 

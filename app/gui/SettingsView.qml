@@ -617,11 +617,19 @@ Flickable {
 
                     AutoResizingComboBox {
                         property int lastIndexValue
+                        // The stream display's refresh rate, and the frame
+                        // rate Recommended picks for it (lower on a VRR display).
+                        // Where VRR can't be detected, the choice is named VRR and
+                        // always uses the VRR rate, so the user decides.
+                        property int displayRefreshRate: 0
+                        property int recommendedFps: 0
+                        property bool vrrDetectable: true
 
                         function updateBitrateForSelection() {
                             var selectedFps = parseInt(model.get(fpsComboBox.currentIndex).video_fps)
                             var fpsChanged = StreamingPreferences.fps !== selectedFps
                             StreamingPreferences.nativeFps = model.get(fpsComboBox.currentIndex).is_native
+                            StreamingPreferences.recommendedFps = model.get(fpsComboBox.currentIndex).is_recommended
                             StreamingPreferences.fps = selectedFps
 
                             if (fpsChanged && StreamingPreferences.autoAdjustBitrate) {
@@ -755,13 +763,23 @@ Flickable {
                         }
 
                         function reinitialize() {
-                            // Native follows the stream's display. Show the current
-                            // display's refresh rate here; the stream detects it again at launch.
-                            var nativeFps = SystemProperties.getStreamDisplayMode().refreshRate
-                            if (StreamingPreferences.nativeFps && nativeFps > 0 && StreamingPreferences.fps !== nativeFps) {
+                            // Native and Recommended follow the stream's display. Show the
+                            // current display's rates here; the stream detects them again at launch.
+                            var displayMode = SystemProperties.getStreamDisplayMode()
+                            var nativeFps = displayMode.refreshRate
+                            vrrDetectable = displayMode.vrrDetectable
+                            // Recommended follows the detected display; the VRR
+                            // choice assumes VRR
+                            var recommended = StreamingPreferences.getRecommendedFps(
+                                        nativeFps, vrrDetectable ? displayMode.vrr : true)
+                            displayRefreshRate = nativeFps
+                            recommendedFps = StreamingPreferences.getRecommendedFps(nativeFps, displayMode.vrr)
+                            var dynamicFps = StreamingPreferences.nativeFps ? nativeFps :
+                                             StreamingPreferences.recommendedFps ? recommended : 0
+                            if (dynamicFps > 0 && StreamingPreferences.fps !== dynamicFps) {
                                 // Update the placeholder before building the choices, so
                                 // an old display's rate is not offered as a custom value
-                                StreamingPreferences.fps = nativeFps
+                                StreamingPreferences.fps = dynamicFps
                                 if (StreamingPreferences.autoAdjustBitrate) {
                                     StreamingPreferences.bitrateKbps = slider.defaultBitrate()
                                     slider.value = StreamingPreferences.bitrateKbps
@@ -776,26 +794,46 @@ Flickable {
                                              "text": nativeFps > 0 ? qsTr("Native (%1 Hz)").arg(nativeFps) : qsTr("Native"),
                                              "video_fps": "" + (nativeFps > 0 ? nativeFps : StreamingPreferences.fps),
                                              "is_custom": false,
-                                             "is_native": true
+                                             "is_native": true,
+                                             "is_recommended": false
+                                         })
+                            model.append({
+                                             "text": vrrDetectable ?
+                                                         (recommended > 0 ? qsTr("Recommended (%1 FPS)").arg(recommended) : qsTr("Recommended")) :
+                                                         (recommended > 0 ? qsTr("VRR (%1 FPS)").arg(recommended) : qsTr("VRR")),
+                                             "video_fps": "" + (recommended > 0 ? recommended : StreamingPreferences.fps),
+                                             "is_custom": false,
+                                             "is_native": false,
+                                             "is_recommended": true
                                          })
 
+                            // VRR Pacing Mode lists the same rate as the VRR choice
+                            var duplicateFps = 0
                             for (var i = 0; i < choices.length; i++) {
                                 var choice = choices[i]
                                 hasCustomChoice = hasCustomChoice || choice.is_custom
+                                if (!vrrDetectable && choice.kind === "vrr" && parseInt(choice.video_fps) === recommended) {
+                                    duplicateFps = recommended
+                                    continue
+                                }
                                 model.append({
                                                  "text": choiceText(choice),
                                                  "video_fps": choice.video_fps,
                                                  "is_custom": choice.is_custom,
-                                                 "is_native": false
+                                                 "is_native": false,
+                                                 "is_recommended": false
                                              })
                             }
 
                             var saved_fps = StreamingPreferences.fps
-                            var found = StreamingPreferences.nativeFps
-                            if (found) {
+                            var found = StreamingPreferences.nativeFps || StreamingPreferences.recommendedFps
+                            if (StreamingPreferences.nativeFps) {
                                 currentIndex = 0
                             }
-                            for (var i = 1; i < model.count && !found; i++) {
+                            else if (StreamingPreferences.recommendedFps) {
+                                currentIndex = 1
+                            }
+                            for (var i = 2; i < model.count && !found; i++) {
                                 var el_fps = parseInt(model.get(i).video_fps);
 
                                 // Look for a matching frame rate
@@ -806,10 +844,16 @@ Flickable {
                                 }
                             }
 
+                            // A rate saved from the duplicate shows as the VRR choice
+                            if (!found && duplicateFps > 0 && saved_fps === duplicateFps) {
+                                currentIndex = 1
+                                found = true
+                            }
+
                             // Saved custom and native maximum choices remain visible.
-                            // Fall back to the first fixed rate, after Native
+                            // Fall back to the first fixed rate, after Native and Recommended
                             if (!found) {
-                                currentIndex = model.count > 1 ? 1 : -1
+                                currentIndex = model.count > 2 ? 2 : -1
                             }
 
                             if (!hasCustomChoice) {
@@ -817,7 +861,8 @@ Flickable {
                                                  "text": qsTr("Custom"),
                                                  "video_fps": "",
                                                  "is_custom": true,
-                                                 "is_native": false
+                                                 "is_native": false,
+                                                 "is_recommended": false
                                              })
                             }
 
@@ -851,6 +896,21 @@ Flickable {
                             }
                         }
                     }
+                }
+
+                Label {
+                    width: parent.width
+                    // On a VRR display (or with VRR Pacing Mode), when the frame
+                    // rate is above what Recommended would pick
+                    visible: fpsComboBox.recommendedFps > 0 &&
+                             fpsComboBox.recommendedFps < fpsComboBox.displayRefreshRate &&
+                             StreamingPreferences.fps > fpsComboBox.recommendedFps
+                    text: qsTr("Your display uses VRR, which can't show frames faster than its %1 Hz maximum. Streaming at that rate can drop frames; stream at %2 FPS or below, or choose %3.")
+                          .arg(fpsComboBox.displayRefreshRate).arg(fpsComboBox.recommendedFps)
+                          .arg(fpsComboBox.vrrDetectable ? qsTr("Recommended") : qsTr("VRR"))
+                    font.pointSize: 9
+                    color: "#ffb74d"
+                    wrapMode: Text.Wrap
                 }
 
                 Label {

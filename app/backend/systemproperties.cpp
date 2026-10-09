@@ -440,10 +440,11 @@ QVariantMap SystemProperties::getStreamDisplayMode()
     }
 
     int width = 0, height = 0, refreshHz = 0;
+    bool vrr = false;
     if (SDL_InitSubSystem(SDL_INIT_VIDEO) == 0) {
-        StreamUtils::getDisplayOutputMode(
-            StreamUtils::getDisplayIndexForScreen(screen),
-            width, height, refreshHz);
+        const int displayIndex = StreamUtils::getDisplayIndexForScreen(screen);
+        StreamUtils::getDisplayOutputMode(displayIndex, width, height, refreshHz);
+        vrr = StreamUtils::displayUsesVrr(displayIndex);
         SDL_QuitSubSystem(SDL_INIT_VIDEO);
     }
     else {
@@ -456,6 +457,8 @@ QVariantMap SystemProperties::getStreamDisplayMode()
     mode.insert("width", width);
     mode.insert("height", height);
     mode.insert("refreshRate", refreshHz);
+    mode.insert("vrr", vrr);
+    mode.insert("vrrDetectable", StreamUtils::canDetectVrr());
     return mode;
 }
 

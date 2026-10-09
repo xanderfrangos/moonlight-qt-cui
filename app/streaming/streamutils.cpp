@@ -348,8 +348,14 @@ void StreamUtils::getDisplayOutputMode(int displayIndex, int& width, int& height
     }
 
     // The current mode is what the display is actually running at, which
-    // is also what VRR qualification checks the stream's frame rate against
-    if (SDL_GetCurrentDisplayMode(displayIndex, &mode) == 0 && mode.refresh_rate > 0) {
+    // is also what VRR qualification checks the stream's frame rate against.
+    // Under Gamescope, SDL reads the game Xwayland's mode, which can be stale
+    // after a refresh change; Gamescope's own output rate is current.
+    const uint32_t gamescopeHz = GamescopeDisplayState::readRefreshHz();
+    if (gamescopeHz != 0) {
+        refreshHz = int(gamescopeHz);
+    }
+    else if (SDL_GetCurrentDisplayMode(displayIndex, &mode) == 0 && mode.refresh_rate > 0) {
         refreshHz = mode.refresh_rate;
     }
     else {
@@ -357,6 +363,28 @@ void StreamUtils::getDisplayOutputMode(int displayIndex, int& width, int& height
                     "Refresh rate of display %d is unknown",
                     displayIndex);
     }
+}
+
+bool StreamUtils::displayUsesVrr(int displayIndex)
+{
+    if (GamescopeDisplayState::runningUnderGamescope()) {
+        return GamescopeDisplayState::readVrrDisplay();
+    }
+#ifdef Q_OS_DARWIN
+    return queryMacDisplayTimingForDisplay(displayIndex).supportsVariableRefresh();
+#else
+    Q_UNUSED(displayIndex);
+    return false;
+#endif
+}
+
+bool StreamUtils::canDetectVrr()
+{
+#ifdef Q_OS_DARWIN
+    return true;
+#else
+    return GamescopeDisplayState::runningUnderGamescope();
+#endif
 }
 
 bool StreamUtils::getNativeDesktopMode(int displayIndex, SDL_DisplayMode* mode, SDL_Rect* safeArea)

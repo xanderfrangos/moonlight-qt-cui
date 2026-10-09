@@ -58,7 +58,9 @@ public:
     Q_INVOKABLE int getRefreshRate(int displayIndex);
 
     // The current mode of the display a stream started now would use, as a
-    // map with "width", "height" and "refreshRate" (0 if unknown)
+    // map with "width", "height" and "refreshRate" (0 if unknown), "vrr"
+    // when it refreshes adaptively (StreamUtils::displayUsesVrr()), and
+    // "vrrDetectable" when that can be told at all
     Q_INVOKABLE QVariantMap getStreamDisplayMode();
 
     // Audio backends that SDL can open on this system, as maps with "value"

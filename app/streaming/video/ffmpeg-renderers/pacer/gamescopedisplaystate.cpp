@@ -60,6 +60,8 @@ struct GamescopeDisplayState::Impl {
     Atom vrrFeedback = None;
     Atom limiterFeedback = None;
     Atom allowTearing = None;
+    Atom vrrCapable = None;
+    Atom vrrEnabled = None;
 
     // A missing property reads as zero, which is what Gamescope assumes too
     uint32_t cardinal(Atom atom)
@@ -138,6 +140,8 @@ bool GamescopeDisplayState::open()
     m_Impl->vrrFeedback = XInternAtom(m_Impl->display, "GAMESCOPE_VRR_FEEDBACK", False);
     m_Impl->limiterFeedback = XInternAtom(m_Impl->display, "GAMESCOPE_LIMITER_FEEDBACK", False);
     m_Impl->allowTearing = XInternAtom(m_Impl->display, "GAMESCOPE_ALLOW_TEARING", False);
+    m_Impl->vrrCapable = XInternAtom(m_Impl->display, "GAMESCOPE_VRR_CAPABLE", False);
+    m_Impl->vrrEnabled = XInternAtom(m_Impl->display, "GAMESCOPE_VRR_ENABLED", False);
     return true;
 }
 
@@ -152,6 +156,8 @@ GamescopeDisplayState::State GamescopeDisplayState::read()
     state.vrrInUse = m_Impl->cardinal(m_Impl->vrrFeedback) != 0;
     state.frameLimited = m_Impl->cardinal(m_Impl->limiterFeedback) != 0;
     state.tearingAllowed = m_Impl->cardinal(m_Impl->allowTearing) != 0;
+    state.vrrCapable = m_Impl->cardinal(m_Impl->vrrCapable) != 0;
+    state.vrrEnabled = m_Impl->cardinal(m_Impl->vrrEnabled) != 0;
     return state;
 }
 
@@ -188,4 +194,17 @@ uint32_t GamescopeDisplayState::readRefreshHz()
         return 0;
     }
     return state.read().refreshHz;
+}
+
+bool GamescopeDisplayState::readVrrDisplay()
+{
+    if (!runningUnderGamescope()) {
+        return false;
+    }
+    GamescopeDisplayState display;
+    if (!display.open()) {
+        return false;
+    }
+    const State state = display.read();
+    return state.vrrCapable && (state.vrrEnabled || state.vrrInUse);
 }

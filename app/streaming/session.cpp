@@ -891,7 +891,7 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
 
 void Session::applyNativeStreamMode()
 {
-    if (!m_Preferences->nativeResolution && !m_Preferences->nativeFps) {
+    if (!m_Preferences->nativeResolution && !m_Preferences->nativeFps && !m_Preferences->recommendedFps) {
         return;
     }
 
@@ -919,6 +919,25 @@ void Session::applyNativeStreamMode()
         else {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "Native frame rate unavailable; using %d FPS",
+                        m_StreamConfig.fps);
+        }
+    }
+    else if (m_Preferences->recommendedFps) {
+        // Where VRR can't be detected, this is the menu's VRR choice: the
+        // user said the display is VRR
+        const bool detectable = StreamUtils::canDetectVrr();
+        const bool vrrDisplay = detectable ? StreamUtils::displayUsesVrr(displayIndex) : true;
+        const int recommendedFps = m_Preferences->getRecommendedFps(refreshHz, vrrDisplay);
+        if (recommendedFps > 0) {
+            m_StreamConfig.fps = recommendedFps;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "%s frame rate: %d FPS for a %d Hz %s display",
+                        detectable ? "Recommended" : "VRR", recommendedFps, refreshHz,
+                        vrrDisplay ? "VRR" : "fixed refresh");
+        }
+        else {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Recommended frame rate unavailable; using %d FPS",
                         m_StreamConfig.fps);
         }
     }

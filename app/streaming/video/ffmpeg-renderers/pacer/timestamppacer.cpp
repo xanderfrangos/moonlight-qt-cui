@@ -25,6 +25,14 @@ constexpr uint64_t k_DecodeWaitThresholdUs = 1000;
 // How much later than the learned decode delay a render may begin and still
 // time a slower decode
 constexpr uint64_t k_DecodeWindowSlackUs = 3000;
+// Once a second, the learned decode delay falls 2% while the median wait of
+// renders it held (begun no more than this window after it) is under the
+// threshold. Replayed over six Deck and two Steam Machine captures
+// (2026-10-09), renders begun after their decode finished had 1 s medians
+// of 0.004-0.047 ms, while renders begun x ms before it had medians of
+// about x.
+constexpr uint64_t k_DecodeDecayWindowUs = 1000;
+constexpr uint64_t k_DecodeDecayMedianUs = 150;
 
 // A target this far past readiness means the timeline is wrong, not that the
 // frame should wait that long
@@ -742,6 +750,32 @@ void TimestampPacer::notePresented(uint64_t renderStartUs, uint64_t presentUs, u
         }
         else if (startedAfterUs + decodeWaitUs < delayUs) {
             delayUs -= (delayUs - startedAfterUs - decodeWaitUs) / 32;
+        }
+
+        // Frames are held until the delay, so renders rarely begin before it
+        // and an estimate that is too high may never be lowered above. Short
+        // waits can't say by how much on their own, but their median can:
+        // it stays near zero while the delay is too high and rises to the
+        // shortfall once it is too low, so the decay stops about the
+        // threshold below a typical decode. Renders held for other reasons
+        // (FIFO back-pressure) begin later and don't count.
+        if (startedAfterUs <= delayUs + k_DecodeDecayWindowUs && m_DecodeWaitCount < m_DecodeWaits.size()) {
+            m_DecodeWaits[m_DecodeWaitCount++] = uint32_t(std::min<uint64_t>(decodeWaitUs, UINT32_MAX));
+        }
+        if (m_DecodeWaitWindowUs == 0 || presentUs < m_DecodeWaitWindowUs) {
+            m_DecodeWaitWindowUs = presentUs;
+        }
+        else if (presentUs - m_DecodeWaitWindowUs >= 1000000) {
+            const size_t minSamples = std::max<size_t>(8, size_t(std::max(m_StreamFps, 0)) / 4);
+            if (m_DecodeWaitCount >= minSamples) {
+                const auto begin = m_DecodeWaits.begin();
+                std::nth_element(begin, begin + m_DecodeWaitCount / 2, begin + m_DecodeWaitCount);
+                if (m_DecodeWaits[m_DecodeWaitCount / 2] < k_DecodeDecayMedianUs) {
+                    delayUs -= delayUs / 50;
+                }
+            }
+            m_DecodeWaitCount = 0;
+            m_DecodeWaitWindowUs = presentUs;
         }
         const uint64_t maxDelayUs = m_StreamFps > 0 ? std::min<uint64_t>(20000, 1500000 / uint64_t(m_StreamFps)) : 20000;
         m_DecodeDelayUs.store(std::min(delayUs, maxDelayUs), std::memory_order_relaxed);

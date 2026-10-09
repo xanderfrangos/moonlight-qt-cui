@@ -5017,6 +5017,20 @@ the probe never forces a connector probe.
     rising by a quarter of the gap; one that waited less bounds it at
     (render start − output + wait), falling by 1/32. Capped at 1.5 stream
     frame periods and 20 ms.
+  - Frames are held until the estimate, so renders rarely begin before it,
+    and an estimate that ends up too high could stay there. So once a
+    second, the delay also falls 2% while the median wait of renders begun
+    no more than 1 ms after it is under 0.15 ms (at least a quarter of a
+    second's frames, and 8). Replayed over six Deck and two Steam Machine
+    captures (2026-10-09), renders begun after their decode had finished
+    had 1 s median waits of 0.004–0.047 ms (contention waits of 0.3 ms or
+    more were 0–2.5% of them), while renders begun x ms before it had
+    medians of about x (0.09–0.2 ms at 0–0.3 ms, 0.32–0.48 at 0.3–0.6). The
+    decay therefore stops once a typical render begins about 0.15 ms before
+    its decode finishes, and the rules above leave it there, so it settles
+    rather than cycling (`tst_timestamptrace` `decodeDelaySettles`).
+    Renders delayed for other reasons, such as FIFO back-pressure, begin
+    later and don't count. Not yet captured on hardware.
   - The first version (250 us threshold, no start window, 20 ms cap) ran
     away on a Deck capture (2026-10-09, 90 FPS, frame limit at 90 and
     60 Hz). Renders under the limit began 15–21 ms after decoder output,
@@ -5155,6 +5169,42 @@ the probe never forces a connector probe.
   `PacerTelemetryCounters` carries the mode to
   `StatsGraphStreamInfo::displayMode`. With no mode known it falls back to
   "V-Sync" when V-Sync is on.
+
+**Recommended frame rate (2026-10-09).** A stream at a VRR display's maximum
+refresh leaves VRR no headroom: the display refreshes at that rate as a fixed
+one, and the host's clock drifts against it. On a 120 Hz VRR TV under
+Gamescope, 120 FPS (host 119.983 FPS against a 119.999 Hz ceiling) lost bursts
+of 50–77 frames in 10 s about once a minute, while 116 FPS was smooth in every
+Gamescope setting. Pacing those streams on the V-blank grid was tried and
+reverted: replaced frames fell only from about 1.8 to 1 a second, still in
+bursts, and decoder output to display rose to 13.8 ms median, because the
+Gamescope margin plus the margin replaced frames widened made the release lead
+about a whole refresh. So the settings page offers a dynamic "Recommended"
+frame rate after Native (`StreamingPreferences::recommendedFps`, resolved in
+`Session::applyNativeStreamMode()` at launch):
+- `StreamingPreferences::getRecommendedFps()`: on a VRR display,
+  `VrrRatePolicy::vrrRateForRefresh()`, floor(R − R²/3600) (116 at 120 Hz, 138
+  at 144, 59 at 60); otherwise the refresh rate. VRR Pacing Mode counts as a
+  VRR display.
+- `StreamUtils::displayUsesVrr()`: under Gamescope, `GAMESCOPE_VRR_CAPABLE` and
+  either Steam's VRR toggle (`GAMESCOPE_VRR_ENABLED`, which alone also reads 1
+  on the Deck's panel) or `GAMESCOPE_VRR_FEEDBACK`; on macOS, an NSScreen
+  refresh range (`MacDisplayTiming::supportsVariableRefresh()`). Elsewhere,
+  including Windows, it can't tell (`StreamUtils::canDetectVrr()` is false).
+- Where it can't tell, the same choice is named "VRR (N FPS)" and always uses
+  the VRR rate, so the user decides. Guessing would be worse either way: the
+  VRR rate on a display that actually refreshes at a fixed rate (116 FPS at
+  120 Hz) repeats a frame every quarter second. Windows' only signals are
+  per-vendor (NVAPI's VRR state), the EDID (capability, not whether it is
+  on), or a measurement (a short flip-model window presenting below the
+  refresh rate), none built. When VRR Pacing Mode also lists that rate, its
+  duplicate is hidden.
+- `SystemProperties::getStreamDisplayMode()` adds `vrr`. A note under the
+  frame rate menu appears while the selected rate is above Recommended's on
+  such a display.
+- `StreamUtils::getDisplayOutputMode()` now takes Gamescope's output refresh
+  rate over SDL's, which reads the game Xwayland's possibly stale mode, as
+  `tryGetDisplayRefreshRate()` already did. This also affects Native.
 
 **Windows VRR detection (2026-10-08).** On a display refreshing as frames
 arrive, snapping targets to a V-blank grid only adds jitter and delay. Windows

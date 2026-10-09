@@ -321,6 +321,70 @@ private slots:
         QVERIFY(lastVsyncUs != 0);
     }
 
+    // The decode delay, driven by renders that begin around it as the pacer
+    // holds them, given a decode that takes decodeUs and short contention
+    // waits. Returns the delay at each second.
+    static std::vector<uint64_t> runDecodeDelay(TimestampPacer& pacer, uint64_t& nowUs, int seconds,
+                                                uint64_t decodeUs, int64_t startOffsetUs)
+    {
+        // Held until the delay, renders begin at it or a little after, so
+        // only the decay can lower an estimate that is too high
+        static const int64_t k_Jitter[] = { 0, 50, 100, 200, 300 };
+        std::vector<uint64_t> perSecond;
+        for (int frame = 0; frame < seconds * 60; frame++) {
+            nowUs += 16667;
+            const int64_t start = std::max<int64_t>(0, int64_t(pacer.decodeDelayUs()) + startOffsetUs +
+                                                           k_Jitter[frame % 5]);
+            const uint64_t startedAfterUs = uint64_t(start);
+            uint64_t waitUs = decodeUs > startedAfterUs ? decodeUs - startedAfterUs : 0;
+            waitUs += frame % 7 == 0 ? 400 : 20;
+            const uint64_t outputUs = nowUs - 10000;
+            pacer.notePresented(outputUs + startedAfterUs, outputUs + startedAfterUs + 1000, outputUs, waitUs,
+                                false, 0);
+            if (frame % 60 == 59) {
+                perSecond.push_back(pacer.decodeDelayUs());
+            }
+        }
+        return perSecond;
+    }
+
+    // An estimate that ends up too high falls until renders begin just
+    // before their decode finishes and settles there, and renders held for
+    // other reasons don't lower it
+    void decodeDelaySettles()
+    {
+        PacerTelemetry telemetry;
+        TimestampPacingOptions options;
+        options.enabled = true;
+        TimestampPacer pacer(options, 60, 60, true, false, &telemetry, TimestampPacer::Callbacks());
+        uint64_t nowUs = 1000000;
+
+        // One slow stretch (8 ms decodes) raises it
+        for (int frame = 0; frame < 60; frame++) {
+            nowUs += 16667;
+            const uint64_t outputUs = nowUs - 10000;
+            pacer.notePresented(outputUs + 100, outputUs + 9000, outputUs, 8000, false, 0);
+        }
+        QVERIFY(pacer.decodeDelayUs() > 7500);
+
+        // Renders begun well after it (FIFO back-pressure) leave it alone
+        const uint64_t raisedUs = pacer.decodeDelayUs();
+        runDecodeDelay(pacer, nowUs, 20, 4000, 4000);
+        QCOMPARE(pacer.decodeDelayUs(), raisedUs);
+
+        // Held by it with 4 ms decodes, it falls and settles where the
+        // median render (begun 100 us after it) waits about 0.15 ms
+        const std::vector<uint64_t> perSecond = runDecodeDelay(pacer, nowUs, 180, 4000, 0);
+        const auto last = perSecond.end() - 60;
+        const uint64_t lowUs = *std::min_element(last, perSecond.end());
+        const uint64_t highUs = *std::max_element(last, perSecond.end());
+        qInfo("decode delay over the last minute: %llu-%llu us", (unsigned long long)lowUs,
+              (unsigned long long)highUs);
+        QVERIFY(lowUs >= 3500);
+        QVERIFY(highUs <= 3900);
+        QVERIFY(highUs - lowUs <= 150);
+    }
+
     void refusesUnwritableDestination()
     {
         QTemporaryDir directory;

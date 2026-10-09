@@ -124,6 +124,9 @@ public:
 
     size_t queueDepth();
 
+    // How long after decoder output frames are treated as decoded
+    uint64_t decodeDelayUs() const { return m_DecodeDelayUs.load(std::memory_order_relaxed); }
+
     // Whether frames can be placed on a V-blank grid at all
     bool usesVblankGrid() const { return m_UseVblankGrid; }
 
@@ -194,6 +197,11 @@ private:
     // Frames are treated as ready this long after decoder output. Read by
     // the submitting thread.
     std::atomic<uint64_t> m_DecodeDelayUs { 0 };
+    // Render thread only. Decode waits of renders the delay held, over the
+    // current second, from which the delay decays.
+    std::array<uint32_t, 512> m_DecodeWaits {};
+    size_t m_DecodeWaitCount = 0;
+    uint64_t m_DecodeWaitWindowUs = 0;
     uint64_t m_LastReleaseUs = 0;
     // The V-blank the last grid release was planned for
     uint64_t m_LastVblankUs = 0;

@@ -12,6 +12,9 @@
 //   GAMESCOPE_LIMITER_FEEDBACK  Gamescope's frame limit is engaged, which
 //                             forces FIFO presentation
 //   GAMESCOPE_ALLOW_TEARING   Steam's Allow Tearing (Gamescope V-Sync off)
+//   GAMESCOPE_VRR_CAPABLE     the output supports adaptive sync
+//   GAMESCOPE_VRR_ENABLED     Steam's VRR toggle, which also reads 1 on a
+//                             panel without VRR (Steam Deck)
 // GAMESCOPE_FPS_LIMIT is not read: Gamescope resets its active limit
 // internally without changing the property, which then reads a stale value
 // (60 on an unlimited 120 Hz stream, 90 on a docked Deck; 2026-10-08 captures).
@@ -31,6 +34,8 @@ public:
         bool vrrInUse = false;
         bool frameLimited = false;
         bool tearingAllowed = false;
+        bool vrrCapable = false;
+        bool vrrEnabled = false;
     };
 
     GamescopeDisplayState();
@@ -54,6 +59,11 @@ public:
     // Gamescope's output refresh rate right now, or zero when it can't be
     // read. Opens and closes its own connection.
     static uint32_t readRefreshHz();
+
+    // Whether the output uses adaptive sync: it supports it, and Steam's
+    // toggle is on or Gamescope reports it in use. Opens and closes its own
+    // connection.
+    static bool readVrrDisplay();
 
 private:
     struct Impl;

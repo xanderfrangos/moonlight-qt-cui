@@ -331,6 +331,10 @@ public:
     // when it starts. The fields above keep the last placeholder values.
     Q_PROPERTY(bool nativeResolution MEMBER nativeResolution NOTIFY displayModeChanged)
     Q_PROPERTY(bool nativeFps MEMBER nativeFps NOTIFY displayModeChanged)
+    // Like nativeFps, but a little below the refresh rate on a VRR display
+    // (see getRecommendedFps()). Where VRR can't be detected, the menu
+    // calls it "VRR" and it always uses the VRR rate.
+    Q_PROPERTY(bool recommendedFps MEMBER recommendedFps NOTIFY displayModeChanged)
     Q_PROPERTY(int bitrateKbps MEMBER bitrateKbps NOTIFY bitrateChanged)
     Q_PROPERTY(bool unlockBitrate MEMBER unlockBitrate NOTIFY unlockBitrateChanged)
     Q_PROPERTY(bool autoAdjustBitrate MEMBER autoAdjustBitrate NOTIFY autoAdjustBitrateChanged)
@@ -414,12 +418,23 @@ public:
     // preference.
     Q_INVOKABLE QVariantList getFpsChoices(const QVariantList& refreshRates) const;
 
+    // The frame rate to stream at on a display: its refresh rate, or on a
+    // VRR display a little below it, R - R*R/3600 rounded down (116 FPS at
+    // 120 Hz), so frames never arrive faster than the display's maximum.
+    // At the maximum, VRR stops following the stream and refreshes at a
+    // fixed rate that drifts against the host's frames: a 120 FPS stream on
+    // a 120 Hz VRR TV under Gamescope (2026-10-09) lost bursts of frames
+    // about once a minute, while 116 FPS was smooth. VRR Pacing Mode counts
+    // as a VRR display. Zero when the refresh rate is unknown.
+    Q_INVOKABLE int getRecommendedFps(int refreshHz, bool vrrDisplay) const;
+
     // Directly accessible members for preferences
     int width;
     int height;
     int fps;
     bool nativeResolution;
     bool nativeFps;
+    bool recommendedFps;
     int bitrateKbps;
     bool unlockBitrate;
     bool autoAdjustBitrate;

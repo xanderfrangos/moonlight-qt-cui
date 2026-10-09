@@ -27,6 +27,7 @@
 #define SER_FPS "fps"
 #define SER_NATIVERESOLUTION "nativeresolution"
 #define SER_NATIVEFPS "nativefps"
+#define SER_RECOMMENDEDFPS "recommendedfps"
 #define SER_BITRATE "bitrate"
 #define SER_UNLOCK_BITRATE "unlockbitrate"
 #define SER_AUTOADJUSTBITRATE "autoadjustbitrate"
@@ -172,6 +173,7 @@ void StreamingPreferences::reload()
     fps = settings.value(SER_FPS, 60).toInt();
     nativeResolution = settings.value(SER_NATIVERESOLUTION, false).toBool();
     nativeFps = settings.value(SER_NATIVEFPS, false).toBool();
+    recommendedFps = settings.value(SER_RECOMMENDEDFPS, false).toBool();
     enableYUV444 = settings.value(SER_YUV444, false).toBool();
     ditheringMode = DM_OFF;
     if (settings.contains(SER_DITHERINGMODE)) {
@@ -620,6 +622,7 @@ void StreamingPreferences::save()
     settings.setValue(SER_FPS, fps);
     settings.setValue(SER_NATIVERESOLUTION, nativeResolution);
     settings.setValue(SER_NATIVEFPS, nativeFps);
+    settings.setValue(SER_RECOMMENDEDFPS, recommendedFps);
     settings.setValue(SER_BITRATE, bitrateKbps);
     settings.setValue(SER_UNLOCK_BITRATE, unlockBitrate);
     settings.setValue(SER_AUTOADJUSTBITRATE, autoAdjustBitrate);
@@ -795,6 +798,15 @@ QVariantList StreamingPreferences::getFpsChoices(const QVariantList& refreshRate
     }
 
     return result;
+}
+
+int StreamingPreferences::getRecommendedFps(int refreshHz, bool vrrDisplay) const
+{
+    if (refreshHz <= 0) {
+        return 0;
+    }
+    const bool vrr = vrrDisplay || (effectiveVsync() && enableVrr);
+    return vrr ? VrrRatePolicy::vrrRateForRefresh(refreshHz) : refreshHz;
 }
 
 int StreamingPreferences::getDefaultBitrate(int width, int height, int fps, bool yuv444)
