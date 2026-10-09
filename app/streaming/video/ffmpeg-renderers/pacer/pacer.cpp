@@ -642,10 +642,18 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
         // reported output refresh. The limit forces FIFO, which overrides
         // Allow Tearing.
         if (GamescopeDisplayState::runningUnderGamescope()) {
-            auto gamescope = std::make_shared<GamescopeDisplayState>();
-            m_TimestampPacer->setDisplayModeProbe([gamescope, opened = false, warnedLimitedVrr = false]() mutable {
-                if (!opened) {
-                    opened = true;
+            // Shared, because the pacer copies the probe for each poll
+            struct ProbeState {
+                GamescopeDisplayState gamescope;
+                bool opened = false;
+                bool warnedLimitedVrr = false;
+            };
+            auto probeState = std::make_shared<ProbeState>();
+            m_TimestampPacer->setDisplayModeProbe([probeState]() {
+                GamescopeDisplayState* const gamescope = &probeState->gamescope;
+                bool& warnedLimitedVrr = probeState->warnedLimitedVrr;
+                if (!probeState->opened) {
+                    probeState->opened = true;
                     gamescope->open();
                 }
                 TimestampPacer::CompositorState result;
