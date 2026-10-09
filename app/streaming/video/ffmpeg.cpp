@@ -1261,6 +1261,7 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
     if (m_Pacer != nullptr) {
         const PacerTelemetryCounters pacerCounters = m_Pacer->telemetryCounters();
         counters.jitterDroppedFrames = pacerCounters.pacerDroppedFrames;
+        counters.streamInfo.displayMode = pacerCounters.timestampDisplayMode;
         counters.queueDepth = m_Pacer->queueDepth();
 
         // The same score the text overlay shows beside "VRR pacing", for

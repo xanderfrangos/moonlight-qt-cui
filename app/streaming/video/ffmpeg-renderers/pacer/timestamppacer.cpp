@@ -19,6 +19,9 @@ constexpr uint64_t k_CoarseWakeUs = 2000;
 // Frames whose release falls this close together are handed over together
 constexpr uint64_t k_ReleaseSlackUs = 200;
 
+// A shorter wait for a frame's decode is the sync call itself
+constexpr uint64_t k_DecodeWaitThresholdUs = 250;
+
 // A target this far past readiness means the timeline is wrong, not that the
 // frame should wait that long
 constexpr uint64_t k_MaximumHoldUs = 100000;
@@ -40,7 +43,8 @@ TimestampPacer::TimestampPacer(const TimestampPacingOptions& options, int stream
     m_Policy.configure(m_Options, streamFps);
     m_SourcePeriodUs = m_Policy.sourcePeriodUs();
     if (m_DisplayHz > 0) {
-        m_Grid.configure(1000000.0 / m_DisplayHz);
+        m_RefreshPeriodUs = 1000000.0 / m_DisplayHz;
+        m_Grid.configure(m_RefreshPeriodUs);
     }
 }
 
@@ -56,6 +60,12 @@ void TimestampPacer::trace(const TimestampTrace::Row& row)
     if (m_Trace != nullptr) {
         m_Trace->record(row);
     }
+}
+
+// The modes in which frames are shown at the display's refreshes
+bool TimestampPacer::modeUsesGrid(DisplayMode mode)
+{
+    return mode == DisplayMode::Unknown || mode == DisplayMode::FixedRefresh || mode == DisplayMode::FrameLimited;
 }
 
 TimestampTrace::Row TimestampPacer::frameRow(TimestampTrace::Event event, const Entry& entry, uint64_t atUs)
@@ -165,8 +175,13 @@ QString TimestampPacer::describe() const
 
 void TimestampPacer::submit(PacedFrame&& paced)
 {
-    const uint64_t readyUs = paced.decodeCompleteUs() != 0 ? paced.decodeCompleteUs()
-                                                           : paced.decoderOutputUs();
+    // A frame is ready once its GPU decode has finished, which with VAAPI is
+    // some time after the decoder returned it
+    const uint64_t decodeDelayUs = m_DecodeDelayUs.load(std::memory_order_relaxed);
+    const uint64_t outputReadyUs = paced.decodeCompleteUs() != 0 ? paced.decodeCompleteUs()
+                                                                 : paced.decoderOutputUs();
+    const uint64_t readyUs = paced.decoderOutputUs() != 0
+        ? std::max(outputReadyUs, paced.decoderOutputUs() + decodeDelayUs) : outputReadyUs;
     const TimestampPacing::Policy::Decision decision =
         m_Policy.schedule(paced.timestampValid(), paced.frameNumber(), paced.rtpTimestamp(),
                           readyUs, paced.hostLatencyUs(), paced.decoderQueueUs());
@@ -235,6 +250,7 @@ void TimestampPacer::submit(PacedFrame&& paced)
         row.decodeCompleteUs = paced.decodeCompleteUs();
         row.decoderQueueUs = paced.decoderQueueUs();
         row.readyUs = readyUs;
+        row.decodeDelayUs = decodeDelayUs;
         row.admitted = decision.admitted;
         row.repeat = decision.repeat;
         row.restarted = decision.restarted;
@@ -318,14 +334,21 @@ void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs
     const TraceOnReturn record { this, row };
 
     // Display times off a fixed refresh grid would only mislead it
-    if (m_DisplayMode != DisplayMode::Unknown && m_DisplayMode != DisplayMode::FixedRefresh) {
+    if (!modeUsesGrid(m_DisplayMode)) {
         return;
     }
-    // The compositor's own refresh period beats the nominal display mode,
-    // which under Gamescope need not match the panel
-    if (refreshPeriodUs != 0 &&
-            std::fabs(double(refreshPeriodUs) - m_Grid.nominalPeriodUs()) > m_Grid.nominalPeriodUs() * 0.01) {
-        m_Grid.configure(double(refreshPeriodUs));
+    // The renderer's refresh period beats the nominal display mode, which
+    // under Gamescope need not match the panel. A refresh rate the
+    // compositor reports itself beats both: Gamescope's WSI layer starts
+    // each swapchain at 60 Hz and Gamescope resends the real cycle only when
+    // it changes, so a recreated swapchain keeps 60 Hz (2026-10-08 capture).
+    if (m_CompositorRefreshHz == 0 && refreshPeriodUs != 0 &&
+            std::fabs(double(refreshPeriodUs) - m_RefreshPeriodUs) > m_RefreshPeriodUs * 0.01) {
+        m_RefreshPeriodUs = double(refreshPeriodUs);
+        m_Grid.configure(m_LimitRefreshes * m_RefreshPeriodUs);
+    }
+    if (m_DisplayMode == DisplayMode::FrameLimited) {
+        noteLimitedDisplayLocked(displayUs, row.eventUs);
     }
     m_Grid.observe(displayUs);
 
@@ -367,7 +390,7 @@ void TimestampPacer::onFrameDisplayed(uint64_t presentStartUs, uint64_t displayU
     row.gridPeriodUs = uint64_t(m_Grid.periodUs());
     const TraceOnReturn record { this, row };
 
-    if (m_DisplayMode != DisplayMode::Unknown && m_DisplayMode != DisplayMode::FixedRefresh) {
+    if (!modeUsesGrid(m_DisplayMode)) {
         return;
     }
 
@@ -428,8 +451,10 @@ void TimestampPacer::refreshDisplayMode(std::unique_lock<std::mutex>& lock, uint
         // The probe may talk to the compositor, so never hold the lock over it
         const DisplayModeProbe probe = m_DisplayModeProbe;
         lock.unlock();
-        mode = probe();
+        const CompositorState state = probe();
         lock.lock();
+        mode = state.mode;
+        applyCompositorRefreshLocked(state.refreshHz, nowUs);
     }
     else {
         switch (m_RefreshClass.result()) {
@@ -442,8 +467,8 @@ void TimestampPacer::refreshDisplayMode(std::unique_lock<std::mutex>& lock, uint
     if (mode == m_DisplayMode) {
         return;
     }
-    const bool gridBefore = m_DisplayMode == DisplayMode::FixedRefresh || m_DisplayMode == DisplayMode::Unknown;
-    const bool gridAfter = mode == DisplayMode::FixedRefresh || mode == DisplayMode::Unknown;
+    const bool gridBefore = modeUsesGrid(m_DisplayMode);
+    const bool gridAfter = modeUsesGrid(mode);
     if (m_DisplayModeProbe) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Timestamp pacing: compositor presentation is now %s%s",
@@ -459,17 +484,14 @@ void TimestampPacer::refreshDisplayMode(std::unique_lock<std::mutex>& lock, uint
     }
     if (mode == DisplayMode::FrameLimited) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "Timestamp pacing: Steam's frame limit forces FIFO presentation, which queues frames instead of replacing them. Turn the frame limit off for timestamp pacing.");
+                    "Timestamp pacing: Steam's frame limit is on, so Gamescope presents in FIFO. Frames are placed on the V-blank grid, at most one per refresh; a limit below the refresh rate is measured from display times and the grid follows it.");
     }
     m_DisplayMode = mode;
     // Display times from another mode are not V-blank times. Start the grid
     // and the lock over, unless both modes use the grid, which then still
     // holds.
     if (gridBefore != gridAfter || m_DisplayModeProbe) {
-        m_Grid.configure(m_Grid.nominalPeriodUs());
-        m_PhaseLock.reset();
-        m_Releases = {};
-        m_Misses.reset();
+        resetGridLocked();
     }
     m_Telemetry->recordTimestampDisplayMode(uint8_t(mode), !m_DisplayModeProbe);
 
@@ -480,17 +502,105 @@ void TimestampPacer::refreshDisplayMode(std::unique_lock<std::mutex>& lock, uint
     row.displayModeMeasured = !m_DisplayModeProbe;
     row.refreshSharePerMille = m_DisplayModeProbe ? 0 : uint32_t(std::lround(m_RefreshClass.lastShare() * 1000));
     row.gridPeriodUs = uint64_t(m_Grid.periodUs());
+    row.limitRefreshes = m_LimitRefreshes;
+    trace(row);
+}
+
+void TimestampPacer::resetGridLocked()
+{
+    m_LimitRefreshes = 1;
+    m_LimitIntervalCount = 0;
+    m_LastLimitedDisplayUs = 0;
+    m_Grid.configure(m_RefreshPeriodUs);
+    m_PhaseLock.reset();
+    m_Releases = {};
+    m_LastVblankUs = 0;
+    m_Misses.reset();
+}
+
+void TimestampPacer::noteLimitedDisplayLocked(uint64_t displayUs, uint64_t nowUs)
+{
+    const uint64_t lastUs = m_LastLimitedDisplayUs;
+    m_LastLimitedDisplayUs = displayUs;
+    // Repeated reports and long gaps (an overlay, a stall) say nothing
+    if (lastUs == 0 || displayUs <= lastUs || displayUs - lastUs > 200000) {
+        return;
+    }
+    m_LimitIntervals[m_LimitIntervalCount++] = uint32_t(displayUs - lastUs);
+    if (m_LimitIntervalCount < m_LimitIntervals.size()) {
+        return;
+    }
+    m_LimitIntervalCount = 0;
+
+    // Gamescope doesn't publish the limit, but FIFO shows a frame every
+    // limited period, so the shorter display intervals are that period.
+    // A frame not ready in time only lengthens an interval.
+    std::array<uint32_t, 32> sorted = m_LimitIntervals;
+    const size_t rank = sorted.size() / 4;
+    std::nth_element(sorted.begin(), sorted.begin() + rank, sorted.end());
+    uint32_t refreshes = uint32_t(std::max(1L, std::lround(sorted[rank] / m_RefreshPeriodUs)));
+    // A stream slower than that spaces its frames out by itself, and a
+    // grid spaced to it would only drop frames
+    if (refreshes > 1 && m_SourcePeriodUs >= refreshes * m_RefreshPeriodUs * 0.9) {
+        refreshes = 1;
+    }
+    refreshes = std::min<uint32_t>(refreshes, 8);
+    if (refreshes == m_LimitRefreshes) {
+        return;
+    }
+
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Timestamp pacing: frames are shown every %u refresh%s (%.1f FPS) under the frame limit; V-blank grid period %.3f ms",
+                refreshes, refreshes == 1 ? "" : "es", 1000000.0 / (refreshes * m_RefreshPeriodUs),
+                refreshes * m_RefreshPeriodUs / 1000.0);
+    m_LimitRefreshes = refreshes;
+    m_Grid.configure(refreshes * m_RefreshPeriodUs);
+    m_PhaseLock.reset();
+    m_Releases = {};
+    m_LastVblankUs = 0;
+    m_Misses.reset();
+
+    TimestampTrace::Row row;
+    row.event = TimestampTrace::Event::DisplayMode;
+    row.eventUs = nowUs;
+    row.displayMode = uint8_t(m_DisplayMode);
+    row.gridPeriodUs = uint64_t(m_Grid.periodUs());
+    row.limitRefreshes = m_LimitRefreshes;
+    trace(row);
+}
+
+void TimestampPacer::applyCompositorRefreshLocked(int refreshHz, uint64_t nowUs)
+{
+    if (refreshHz <= 0 || refreshHz == m_CompositorRefreshHz) {
+        return;
+    }
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Timestamp pacing: compositor reports a %d Hz output; V-blank grid period %.3f ms (was %.3f ms)",
+                refreshHz, 1000.0 / refreshHz, m_Grid.nominalPeriodUs() / 1000.0);
+    m_CompositorRefreshHz = refreshHz;
+    // V-blanks of the old period don't line up with the new ones, and a
+    // frame limit is measured again against the new refresh
+    m_RefreshPeriodUs = 1000000.0 / refreshHz;
+    resetGridLocked();
+
+    TimestampTrace::Row row;
+    row.event = TimestampTrace::Event::DisplayMode;
+    row.eventUs = nowUs;
+    row.displayMode = uint8_t(m_DisplayMode);
+    row.gridPeriodUs = uint64_t(m_Grid.periodUs());
+    row.limitRefreshes = m_LimitRefreshes;
     trace(row);
 }
 
 bool TimestampPacer::gridUsableLocked(uint64_t nowUs) const
 {
     return m_UseVblankGrid &&
-           (m_DisplayMode == DisplayMode::Unknown || m_DisplayMode == DisplayMode::FixedRefresh) &&
+           modeUsesGrid(m_DisplayMode) &&
            m_Grid.valid(nowUs);
 }
 
-void TimestampPacer::notePresented(uint64_t renderStartUs, uint64_t presentUs, bool rtpValid, uint32_t rtpTimestamp)
+void TimestampPacer::notePresented(uint64_t renderStartUs, uint64_t presentUs, uint64_t decoderOutputUs,
+                                   uint64_t decodeWaitUs, bool rtpValid, uint32_t rtpTimestamp)
 {
     TimestampTrace::Row row;
     row.event = TimestampTrace::Event::Presented;
@@ -499,6 +609,27 @@ void TimestampPacer::notePresented(uint64_t renderStartUs, uint64_t presentUs, b
     row.rtpTimestamp = rtpTimestamp;
     row.renderStartUs = renderStartUs;
     row.presentUs = presentUs;
+    row.decoderOutputUs = decoderOutputUs;
+    row.decodeWaitUs = decodeWaitUs;
+
+    // Learn when decodes finish, relative to decoder output. A render that
+    // waited for its decode shows when it finished; one that didn't shows
+    // the decode was done by the time it began. Rise quickly to a slow
+    // decode and fall back slowly, as the render lead does. A renderer that
+    // never reports a wait leaves this at zero.
+    if (decoderOutputUs != 0 && renderStartUs >= decoderOutputUs && renderStartUs - decoderOutputUs < 100000) {
+        const uint64_t startedAfterUs = renderStartUs - decoderOutputUs;
+        uint64_t delayUs = m_DecodeDelayUs.load(std::memory_order_relaxed);
+        if (decodeWaitUs > k_DecodeWaitThresholdUs) {
+            const uint64_t doneUs = startedAfterUs + decodeWaitUs;
+            delayUs = doneUs > delayUs ? delayUs + (doneUs - delayUs) / 4 : delayUs - (delayUs - doneUs) / 32;
+        }
+        else if (startedAfterUs + decodeWaitUs < delayUs) {
+            delayUs -= (delayUs - startedAfterUs - decodeWaitUs) / 32;
+        }
+        m_DecodeDelayUs.store(std::min<uint64_t>(delayUs, 20000), std::memory_order_relaxed);
+    }
+    row.decodeDelayUs = m_DecodeDelayUs.load(std::memory_order_relaxed);
 
     uint64_t sampleUs, leadUs, plannedPresentUs;
     {
@@ -513,8 +644,10 @@ void TimestampPacer::notePresented(uint64_t renderStartUs, uint64_t presentUs, b
         }
 
         // Rise quickly to a slow frame and fall back slowly, so the lead
-        // covers most frames rather than the average one
+        // covers most frames rather than the average one. Waiting for the
+        // decode is not rendering: readiness accounts for it.
         sampleUs = presentUs - m_LastReleaseUs;
+        sampleUs -= std::min(sampleUs, decodeWaitUs);
         if (sampleUs > m_RenderLeadUs) {
             m_RenderLeadUs += (sampleUs - m_RenderLeadUs) / 4;
         }
@@ -559,8 +692,24 @@ uint64_t TimestampPacer::releaseTimeLocked(const Entry& entry, bool vblankGrid) 
     }
 
     const uint64_t leadUs = leadUsLocked(vblankGrid);
-    const uint64_t showUs = vblankGrid ? m_PhaseLock.assign(entry.targetUs, m_Grid) : entry.targetUs;
+    const uint64_t showUs = vblankGrid ? vblankForLocked(entry.targetUs) : entry.targetUs;
     return showUs > leadUs ? showUs - leadUs : 0;
+}
+
+// The V-blank a frame is planned for. Under a frame limit Gamescope presents
+// in FIFO, which shows every queued frame at a refresh of its own. A frame
+// whose V-blank an earlier release already took waits for the next one, and
+// a newer frame due by then replaces it, so FIFO never holds a backlog. On a
+// Deck capture (2026-10-08, 90 FPS at 60 Hz), releasing them all queued
+// frames and blocked presents for up to 14 ms.
+uint64_t TimestampPacer::vblankForLocked(uint64_t targetUs) const
+{
+    const uint64_t vblankUs = m_PhaseLock.assign(targetUs, m_Grid);
+    if (m_DisplayMode != DisplayMode::FrameLimited || m_LastVblankUs == 0 ||
+            double(vblankUs) > double(m_LastVblankUs) + m_Grid.periodUs() / 2) {
+        return vblankUs;
+    }
+    return m_Grid.atOrAfter(double(m_LastVblankUs) + m_Grid.periodUs() / 2);
 }
 
 void TimestampPacer::run()
@@ -628,7 +777,7 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
     // one), and otherwise those whose release has also come. Only the newest
     // of them is shown, as a mailbox swapchain would.
     const Entry& front = m_Queue.front();
-    const uint64_t frontVblankUs = vblankGrid && front.paced ? m_PhaseLock.assign(front.targetUs, m_Grid) : 0;
+    const uint64_t frontVblankUs = vblankGrid && front.paced ? vblankForLocked(front.targetUs) : 0;
     size_t dueCount = 1;
     for (size_t i = 1; i < m_Queue.size(); i++) {
         const Entry& entry = m_Queue[i];
@@ -665,12 +814,16 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
     bool vblankWaitValid = false;
     int64_t vblankWaitUs = 0;
     if (vblankGrid && shown.paced) {
-        const uint64_t vblankUs = m_PhaseLock.assign(shown.targetUs, m_Grid);
+        // The phase lock learns from the V-blank the target falls on, not
+        // one a frame limit postponed it to
+        const uint64_t assignedUs = m_PhaseLock.assign(shown.targetUs, m_Grid);
+        const uint64_t vblankUs = vblankForLocked(shown.targetUs);
         vblankWaitValid = true;
         vblankWaitUs = int64_t(vblankUs) - int64_t(shown.targetUs);
-        m_PhaseLock.update(shown.targetUs, vblankUs, m_Grid.periodUs(), m_SourcePeriodUs);
+        m_PhaseLock.update(shown.targetUs, assignedUs, m_Grid.periodUs(), m_SourcePeriodUs);
         m_Releases[m_NextRelease] = { nowUs, vblankUs };
         m_NextRelease = (m_NextRelease + 1) % m_Releases.size();
+        m_LastVblankUs = vblankUs;
     }
     m_LastReleaseUs = nowUs;
     const int64_t trimUs = int64_t(m_PhaseLock.trimUs());
@@ -693,6 +846,7 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
         row.sourcePeriodUs = uint64_t(m_SourcePeriodUs);
         row.gridPeriodUs = vblankGrid ? uint64_t(m_Grid.periodUs()) : 0;
         row.displayMode = uint8_t(m_DisplayMode);
+        row.limitRefreshes = m_LimitRefreshes;
         for (size_t i = 0; i < supersededCount; i++) {
             TimestampTrace::Row supersededRow = frameRow(TimestampTrace::Event::Superseded, superseded[i], nowUs);
             supersededRow.queueDepth = row.queueDepth;

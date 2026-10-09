@@ -2607,6 +2607,9 @@ void Session::exec()
 
     m_InputHandler->setWindow(m_Window);
 
+    // Under Gamescope, record what each display source says for this stream
+    m_DisplayProbe.start(m_Window);
+
     QSvgRenderer svgIconRenderer(QString(":/res/moonlight.svg"));
     QImage svgImage(ICON_SIZE, ICON_SIZE, QImage::Format_RGBA8888);
     svgImage.fill(0);
@@ -3208,6 +3211,8 @@ DispatchDeferredCleanup:
         }
 #endif
     }
+
+    m_DisplayProbe.stop();
 
     // This must be called after the decoder is deleted, because
     // the renderer may want to interact with the window

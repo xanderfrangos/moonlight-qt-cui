@@ -239,7 +239,7 @@ private slots:
         callbacks.release = [&](AVFrame* frame) {
             released++;
             const uint64_t nowUs = LiGetMicroseconds();
-            pacer->notePresented(nowUs, nowUs + 500, true, uint32_t(frame->pts));
+            pacer->notePresented(nowUs, nowUs + 500, 0, 0, true, uint32_t(frame->pts));
             av_frame_free(&frame);
         };
         callbacks.drop = [&](AVFrame* frame, bool) {

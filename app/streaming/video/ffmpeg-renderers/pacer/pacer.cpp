@@ -635,30 +635,46 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
             });
         }
 
-        // Gamescope can switch between fixed refresh, VRR, tearing and a
-        // FIFO frame limit from Steam's quick access menu mid-stream. Follow
-        // it: only a fixed refresh rate has a V-blank grid to place frames on.
+        // Gamescope can switch between fixed refresh, VRR, a frame limit and
+        // tearing from Steam's quick access menu mid-stream. Follow it:
+        // fixed refresh and the frame limit's FIFO show frames at refreshes,
+        // so they use the V-blank grid, whose period comes from Gamescope's
+        // reported output refresh. The limit forces FIFO, which overrides
+        // Allow Tearing.
         if (GamescopeDisplayState::runningUnderGamescope()) {
             auto gamescope = std::make_shared<GamescopeDisplayState>();
-            m_TimestampPacer->setDisplayModeProbe([gamescope, opened = false]() mutable {
+            m_TimestampPacer->setDisplayModeProbe([gamescope, opened = false, warnedLimitedVrr = false]() mutable {
                 if (!opened) {
                     opened = true;
                     gamescope->open();
                 }
+                TimestampPacer::CompositorState result;
                 const GamescopeDisplayState::State state = gamescope->read();
                 if (!state.valid) {
-                    return TimestampPacer::DisplayMode::Unknown;
+                    return result;
                 }
-                if (state.fpsLimit != 0) {
-                    return TimestampPacer::DisplayMode::FrameLimited;
+                result.refreshHz = int(state.refreshHz);
+                // With VRR the display follows the limited cadence, which
+                // Gamescope doesn't report, so there is no grid to use
+                const bool limitedVrr = state.vrrInUse && state.frameLimited;
+                if (limitedVrr && !warnedLimitedVrr) {
+                    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                                "Timestamp pacing: Steam's frame limit is on with VRR, so Gamescope presents in FIFO. A limit below the stream's frame rate makes frames queue; turn it off or set it at or above the stream's frame rate.");
                 }
+                warnedLimitedVrr = limitedVrr;
                 if (state.vrrInUse) {
-                    return TimestampPacer::DisplayMode::Adaptive;
+                    result.mode = TimestampPacer::DisplayMode::Adaptive;
                 }
-                if (state.tearingAllowed) {
-                    return TimestampPacer::DisplayMode::Tearing;
+                else if (state.frameLimited) {
+                    result.mode = TimestampPacer::DisplayMode::FrameLimited;
                 }
-                return TimestampPacer::DisplayMode::FixedRefresh;
+                else if (state.tearingAllowed) {
+                    result.mode = TimestampPacer::DisplayMode::Tearing;
+                }
+                else {
+                    result.mode = TimestampPacer::DisplayMode::FixedRefresh;
+                }
+                return result;
             });
         }
 #ifdef Q_OS_WIN32
@@ -732,7 +748,8 @@ void Pacer::renderFrame(AVFrame* frame)
         afterRender >= beforeRender ? afterRender - beforeRender : 0,
         afterRender, rtpTimestampValid, rtpTimestamp);
     if (m_TimestampPacer != nullptr) {
-        m_TimestampPacer->notePresented(beforeRender, afterRender, rtpTimestampValid, rtpTimestamp);
+        m_TimestampPacer->notePresented(beforeRender, afterRender, decoderOutputUs,
+                                        m_VsyncRenderer->lastDecodeWaitUs(), rtpTimestampValid, rtpTimestamp);
     }
 
     // Wait until after next frame to free this one to ensure the GPU

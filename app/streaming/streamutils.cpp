@@ -1,4 +1,5 @@
 #include "streamutils.h"
+#include "video/ffmpeg-renderers/pacer/gamescopedisplaystate.h"
 
 #include <Qt>
 #include <QDir>
@@ -218,6 +219,21 @@ bool StreamUtils::tryGetDisplayRefreshRate(SDL_Window* window, int& outHz)
                          SDL_GetError());
             return false;
         }
+    }
+
+    // Under Gamescope, SDL reads the game's Xwayland, whose mode keeps the
+    // refresh rate of when it was created or last resized: a Deck capture
+    // (2026-10-08) showed 90 Hz there while the panel ran at 60. Gamescope
+    // reports its output's current refresh rate itself.
+    const uint32_t gamescopeHz = GamescopeDisplayState::readRefreshHz();
+    if (gamescopeHz != 0) {
+        if (int(gamescopeHz) != mode.refresh_rate) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Using Gamescope's %u Hz output refresh rate (SDL reports %d Hz)",
+                        gamescopeHz, mode.refresh_rate);
+        }
+        outHz = int(gamescopeHz);
+        return true;
     }
 
     // SDL uses zero for an undefined refresh rate.  A strict caller must be

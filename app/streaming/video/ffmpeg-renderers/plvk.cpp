@@ -2979,6 +2979,15 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
         return;
     }
 
+    // VAAPI returns frames before their GPU decode finishes, and mapping
+    // waits for it. Wait here instead, so the wait is timed and timestamp
+    // pacing can keep it out of its render lead; the mapping's own sync then
+    // returns at once. The VRR path has already waited.
+    m_LastDecodeWaitUs = 0;
+    if (!m_VrrPreparingFrame && !m_VrrRenderIntoDeferred) {
+        m_LastDecodeWaitUs = waitForDecode(frame);
+    }
+
     const auto mapStartUs = m_GpuTrace ? LiGetMicroseconds() : 0;
     const bool mapped = mapAvFrameToPlacebo(frame, &mappedFrame);
     if (m_GpuTrace && m_VrrPreparingFrame) m_GpuTrace->record({"surface_import",

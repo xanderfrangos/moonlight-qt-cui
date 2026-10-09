@@ -106,6 +106,9 @@ struct PacerTelemetrySnapshot {
 struct PacerTelemetryCounters {
     uint64_t renderedFrames = 0;
     uint64_t pacerDroppedFrames = 0;
+    // TimestampPacer::DisplayMode right now, and whether it was measured
+    uint8_t timestampDisplayMode = 0;
+    bool timestampDisplayModeMeasured = false;
 };
 
 // Per-sample statistics of one measure, in microseconds. Signed, since some
@@ -255,7 +258,8 @@ public:
     PacerTelemetryCounters counters() const
     {
         QMutexLocker lock(&m_Lock);
-        return { m_Snapshot.renderedFrames, m_Snapshot.pacerDroppedFrames };
+        return { m_Snapshot.renderedFrames, m_Snapshot.pacerDroppedFrames,
+                 m_Snapshot.timestampDisplayMode, m_Snapshot.timestampDisplayModeMeasured };
     }
 
     // Just the VRR readiness window, without the percentile work snapshot()

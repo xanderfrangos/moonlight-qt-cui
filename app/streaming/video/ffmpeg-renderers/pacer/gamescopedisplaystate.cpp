@@ -56,8 +56,9 @@ XwaylandIdentity identify(Display* display)
 
 struct GamescopeDisplayState::Impl {
     Display* display = nullptr;
-    Atom fpsLimit = None;
+    Atom refreshRate = None;
     Atom vrrFeedback = None;
+    Atom limiterFeedback = None;
     Atom allowTearing = None;
 
     // A missing property reads as zero, which is what Gamescope assumes too
@@ -133,8 +134,9 @@ bool GamescopeDisplayState::open()
             return false;
         }
     }
-    m_Impl->fpsLimit = XInternAtom(m_Impl->display, "GAMESCOPE_FPS_LIMIT", False);
+    m_Impl->refreshRate = XInternAtom(m_Impl->display, "GAMESCOPE_DISPLAY_REFRESH_RATE_FEEDBACK", False);
     m_Impl->vrrFeedback = XInternAtom(m_Impl->display, "GAMESCOPE_VRR_FEEDBACK", False);
+    m_Impl->limiterFeedback = XInternAtom(m_Impl->display, "GAMESCOPE_LIMITER_FEEDBACK", False);
     m_Impl->allowTearing = XInternAtom(m_Impl->display, "GAMESCOPE_ALLOW_TEARING", False);
     return true;
 }
@@ -146,8 +148,9 @@ GamescopeDisplayState::State GamescopeDisplayState::read()
         return state;
     }
     state.valid = true;
-    state.fpsLimit = m_Impl->cardinal(m_Impl->fpsLimit);
+    state.refreshHz = m_Impl->cardinal(m_Impl->refreshRate);
     state.vrrInUse = m_Impl->cardinal(m_Impl->vrrFeedback) != 0;
+    state.frameLimited = m_Impl->cardinal(m_Impl->limiterFeedback) != 0;
     state.tearingAllowed = m_Impl->cardinal(m_Impl->allowTearing) != 0;
     return state;
 }
@@ -174,3 +177,15 @@ GamescopeDisplayState::State GamescopeDisplayState::read()
 }
 
 #endif
+
+uint32_t GamescopeDisplayState::readRefreshHz()
+{
+    if (!runningUnderGamescope()) {
+        return 0;
+    }
+    GamescopeDisplayState state;
+    if (!state.open()) {
+        return 0;
+    }
+    return state.read().refreshHz;
+}

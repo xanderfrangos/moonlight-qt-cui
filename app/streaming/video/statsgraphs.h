@@ -73,6 +73,10 @@ struct StatsGraphStreamInfo {
     StatsGraphSyncMode syncMode = StatsGraphSyncMode::Off;
     // Frames are paced to their host timestamps
     bool timestampPacing = false;
+    // How the display presents, when the compositor says (Gamescope) or it
+    // was measured (Windows): a TimestampPacer::DisplayMode value, where 0
+    // means unknown. It changes mid-stream with Steam's settings.
+    uint8_t displayMode = 0;
 };
 
 // Cumulative counters read once per sampling interval. The graphs plot the

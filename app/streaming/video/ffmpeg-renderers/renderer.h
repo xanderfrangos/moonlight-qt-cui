@@ -166,6 +166,9 @@ public:
     virtual bool initialize(PDECODER_PARAMETERS params) = 0;
     virtual bool prepareDecoderContext(AVCodecContext* context, AVDictionary** options) = 0;
     virtual void renderFrame(AVFrame* frame) = 0;
+    // How long the last renderFrame() waited for its frame's GPU decode to
+    // finish, for renderers that wait for it explicitly
+    virtual uint64_t lastDecodeWaitUs() { return 0; }
     virtual GpuTrace* gpuDiagnosticTrace() { return nullptr; }
 
     enum class InitFailureReason

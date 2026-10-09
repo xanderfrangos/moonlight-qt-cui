@@ -56,6 +56,8 @@
 #include "backend/computermanager.h"
 #include "backend/systemproperties.h"
 #include "streaming/session.h"
+#include "streaming/displayprobe.h"
+#include "streaming/video/ffmpeg-renderers/pacer/gamescopedisplaystate.h"
 #include "settings/streamingpreferences.h"
 #include "streaming/video/pyrowave/pyrowavecalibrator.h"
 #include "backend/networkbuffers.h"
@@ -1078,6 +1080,19 @@ int main(int argc, char *argv[])
         }
         qputenv("SDL_VIDEODRIVER", "x11");
     }
+
+    // Under Gamescope, SDL and Qt see only the Xwayland output Gamescope
+    // created, so a tracing launcher also records what every other source
+    // says the display is (nothing is written without VRR tracing).
+    // MOONLIGHT_DISPLAY_PROBE=active runs the full probe, for launchers that
+    // cannot pass arguments (e.g. a Flatpak Steam shortcut).
+    if (commandLineParserResult == GlobalCommandLineParser::ProbeDisplayRequested ||
+            qgetenv("MOONLIGHT_DISPLAY_PROBE") == "active") {
+        return DisplayProbe::runActiveProbe();
+    }
+    if (GamescopeDisplayState::runningUnderGamescope()) {
+        DisplayProbe::writePassiveReport("startup");
+    }
     else if (QGuiApplication::platformName().startsWith("wayland")) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Detected Wayland");
         qputenv("SDL_VIDEODRIVER", "wayland");
@@ -1282,6 +1297,9 @@ int main(int argc, char *argv[])
             hasGUI = false;
             break;
         }
+    case GlobalCommandLineParser::ProbeDisplayRequested:
+        // Ran and returned before the GUI was set up
+        break;
     }
 
     if (hasGUI) {

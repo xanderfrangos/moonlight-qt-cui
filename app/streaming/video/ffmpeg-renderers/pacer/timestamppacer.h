@@ -8,6 +8,7 @@
 #include <QString>
 
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -46,11 +47,23 @@ public:
         Adaptive,
         // Tearing allowed: a frame flips the moment it arrives
         Tearing,
-        // A compositor frame limiter forces FIFO presentation
+        // A compositor frame limiter forces FIFO presentation: each queued
+        // frame is shown at its own refresh. Uses the V-blank grid, which
+        // releases at most one frame per refresh, so surplus frames are
+        // dropped here rather than queued behind a blocking present.
         FrameLimited,
     };
-    using DisplayModeProbe = std::function<DisplayMode()>;
+    // What the probe reads from the compositor
+    struct CompositorState {
+        DisplayMode mode = DisplayMode::Unknown;
+        // The compositor's output refresh rate, zero when it doesn't say.
+        // It sets the V-blank grid's period in place of the renderer's
+        // reported refresh cycle.
+        int refreshHz = 0;
+    };
+    using DisplayModeProbe = std::function<CompositorState()>;
     static const char* displayModeName(DisplayMode mode);
+    static bool modeUsesGrid(DisplayMode mode);
 
     // Frames waiting for their target. Kept to the fixed pacing queue's bound
     // so the decoder's surface pool still covers every frame held here.
@@ -102,9 +115,12 @@ public:
     void onFrameDisplayed(uint64_t presentStartUs, uint64_t displayUs, uint64_t refreshPeriodUs);
 
     // The renderer finished presenting the most recently released frame.
-    // renderStartUs is when its render began, and the RTP timestamp
-    // identifies it in the trace.
-    void notePresented(uint64_t renderStartUs, uint64_t presentUs, bool rtpValid, uint32_t rtpTimestamp);
+    // renderStartUs is when its render began, decoderOutputUs when the
+    // decoder returned it, and decodeWaitUs how long the render waited for
+    // its GPU decode to finish (zero when the renderer doesn't say). The RTP
+    // timestamp identifies it in the trace.
+    void notePresented(uint64_t renderStartUs, uint64_t presentUs, uint64_t decoderOutputUs,
+                       uint64_t decodeWaitUs, bool rtpValid, uint32_t rtpTimestamp);
 
     size_t queueDepth();
 
@@ -126,12 +142,19 @@ private:
 
     void run();
     void refreshDisplayMode(std::unique_lock<std::mutex>& lock, uint64_t nowUs);
+    // Takes the grid's period from the compositor's reported refresh rate
+    void applyCompositorRefreshLocked(int refreshHz, uint64_t nowUs);
     bool gridUsableLocked(uint64_t nowUs) const;
     uint64_t leadUsLocked(bool vblankGrid) const;
     uint64_t releaseTimeLocked(const Entry& entry, bool vblankGrid) const;
+    uint64_t vblankForLocked(uint64_t targetUs) const;
     void releaseDueLocked(std::unique_lock<std::mutex>& lock, bool vblankGrid);
     void learnWakeLead(uint64_t schedulerDelayUs);
     bool noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs);
+    // Under a frame limit, spaces the grid at the interval frames are shown at
+    void noteLimitedDisplayLocked(uint64_t displayUs, uint64_t nowUs);
+    // Puts the grid back at one V-blank per refresh
+    void resetGridLocked();
     void trace(const TimestampTrace::Row& row);
     // Records a display report's row on every return, under the lock
     struct TraceOnReturn {
@@ -158,9 +181,18 @@ private:
     TimestampPacing::VblankGrid m_Grid;
     TimestampPacing::PhaseLock m_PhaseLock;
     double m_SourcePeriodUs = 0;
-    // Release-to-present time of recent frames, biased toward the slow ones
+    // Release-to-present time of recent frames, biased toward the slow ones,
+    // without the time spent waiting for their decode
     uint64_t m_RenderLeadUs = 1000;
+    // How long after the decoder returns a frame its GPU decode is finished,
+    // biased toward the slow ones. VAAPI returns frames before decoding
+    // them; on a Deck (2026-10-08) the render then waited about 6 ms.
+    // Frames are treated as ready this long after decoder output. Read by
+    // the submitting thread.
+    std::atomic<uint64_t> m_DecodeDelayUs { 0 };
     uint64_t m_LastReleaseUs = 0;
+    // The V-blank the last grid release was planned for
+    uint64_t m_LastVblankUs = 0;
     // When the most recently released frame's present should return
     uint64_t m_PlannedPresentUs = 0;
     bool m_Stopping = false;
@@ -184,7 +216,15 @@ private:
 
     DisplayModeProbe m_DisplayModeProbe;
     DisplayMode m_DisplayMode = DisplayMode::Unknown;
+    int m_CompositorRefreshHz = 0;
     uint64_t m_DisplayModeCheckedUs = 0;
+    // The display's refresh period, and under a frame limit how many
+    // refreshes apart frames are shown, measured from display reports
+    double m_RefreshPeriodUs = 16667;
+    uint32_t m_LimitRefreshes = 1;
+    std::array<uint32_t, 32> m_LimitIntervals {};
+    size_t m_LimitIntervalCount = 0;
+    uint64_t m_LastLimitedDisplayUs = 0;
 
     VrrTargetWaiter m_Waiter;
     // Pacing thread only. How far the precise waiter's sleeps have recently

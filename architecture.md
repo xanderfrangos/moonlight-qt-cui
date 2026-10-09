@@ -4755,6 +4755,14 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
   refresh period (`vkGetRefreshCycleDurationGOOGLE`, queried at most once a
   second). These times build the V-blank grid when V-Sync is on and no
   V-sync source exists. The grid ignores repeated or slightly late reports.
+  Since 2026-10-08 the grid's period comes from the display-mode probe's
+  `GAMESCOPE_DISPLAY_REFRESH_RATE_FEEDBACK` whenever Gamescope reports it,
+  and the renderer's refresh period is then ignored: the WSI layer starts
+  each swapchain at 16.67 ms and Gamescope resends the real cycle only when
+  it changes, so a recreated swapchain read 60 Hz on a 120 Hz display (see
+  "Gamescope display probe" below). A change in the reported rate
+  reconfigures the grid, resets the phase lock, releases and miss detector,
+  logs, and writes a `display_mode` trace row with the new grid period.
 - **Submit margin:** starts at 4.5 ms instead of 2 ms
   (`TimestampPacingOptions::GamescopeVsyncMarginUs`, 2026-10-08), unless the
   `timestamptestvsyncmarginus` test key sets one. On a `mailbox-test` Deck
@@ -4773,14 +4781,38 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
   mode unknown. The pacing thread polls it every 250 ms with its lock
   released.
   Precedence:
-  1. `GAMESCOPE_FPS_LIMIT` nonzero: frame limited (FIFO).
-  2. `GAMESCOPE_VRR_FEEDBACK`: VRR.
+  1. `GAMESCOPE_VRR_FEEDBACK`: VRR. If `GAMESCOPE_LIMITER_FEEDBACK` is also
+     set, the probe warns once: FIFO queues frames when the limit is below
+     the stream's rate, and Gamescope does not report the limited cadence a
+     grid would need.
+  2. `GAMESCOPE_LIMITER_FEEDBACK`: frame limited (FIFO). It comes before
+     tearing because the limit's FIFO overrides Allow Tearing.
   3. `GAMESCOPE_ALLOW_TEARING`: tearing.
   4. Otherwise: fixed refresh.
-- **Pacing per mode:** only fixed refresh (or no probe) uses the grid; the
-  other modes present at target minus render lead. A mode change resets the
-  grid, phase lock and release records, and logs. Frame limited also warns,
-  because FIFO queues frames.
+  `GAMESCOPE_FPS_LIMIT` is not read. Until 2026-10-08 a nonzero value came
+  first and meant frame limited. Captures showed it stuck at 60 on a Steam
+  Machine and 90 on a Deck whether or not a limit applied, which locked whole
+  streams out of the grid and VRR. Gamescope rewrites the limiter feedback
+  whenever its effective target FPS becomes zero or nonzero
+  (`update_runtime_info()`), through either Steam's property or
+  `gamescope_control`. On a Deck capture, it read 1 exactly while the
+  renderer's presents blocked at the refresh rate (60, 53, 77 and 90 Hz).
+  It does not give the limit's value.
+- **Pacing per mode:** fixed refresh, frame limited and no probe use the
+  grid (`TimestampPacer::modeUsesGrid()`); VRR and tearing present at target
+  minus render lead. Under a frame limit, FIFO shows each queued frame at
+  its own refresh, so the grid's release of at most one frame (the newest)
+  per V-blank drops surplus frames instead of queuing them. That reduction
+  only works among frames waiting together, and nearly every frame under
+  Gamescope is ready after its target and released at once, so under a
+  frame limit `vblankForLocked()` also moves a frame whose V-blank an
+  earlier release already took to the next V-blank. A newer frame due by
+  then replaces it. The phase lock still learns from the V-blank the target
+  falls on. Gamescope doesn't publish the limit itself, so a limit below
+  the refresh rate is measured from display intervals and the grid spaced
+  to it (see "Frame limit period" below); until then it queues. Entering
+  frame limited logs a warning.
+  A mode change resets the grid, phase lock and release records, and logs.
 - **Missed V-blank detection:** each grid release records its planned
   V-blank. Each reported display time is matched to the release planned for
   the nearest V-blank at or before it (within −1.5 to +0.5 refresh).
@@ -4828,6 +4860,191 @@ syncs itself:
 - Not validated on SteamOS. In particular, that Mailbox and Immediate behave
   alike for Xwayland clients with Allow Tearing off comes from the timestamp
   pacing notes above, not a fresh capture.
+
+**Gamescope display probe (2026-10-08, diagnostic).** On a 120 Hz VRR
+display Moonlight was seeing 60 Hz fixed refresh in Game Mode.
+[displayprobe.cpp](app/streaming/displayprobe.cpp) records what every source
+reports so a Steam Machine capture can show which one is wrong. From Gamescope
+source (ValveSoftware/gamescope `36848c2f`, 2026-10-05):
+- Each Xwayland's `wl_output` (and so its RandR mode, which SDL and Qt read)
+  gets its refresh when the Xwayland is created: the nested refresh (`-r`)
+  if given, else `g_nOutputRefresh` at that moment, which `drm_unset_mode()`
+  sets to 60 Hz when nothing better is known. With more than one Xwayland,
+  an output mode change updates only server 0 (Steam's). A game's server,
+  which is Moonlight's `DISPLAY`, changes only when Steam resizes it through
+  `GAMESCOPE_XWAYLAND_MODE_CONTROL`, and then takes the refresh of that moment
+  (`steamcompmgr.cpp`, `wlserver_set_xwayland_server_mode()`).
+- Gamescope publishes the live values on server 0's root:
+  `GAMESCOPE_DISPLAY_REFRESH_RATE_FEEDBACK` (current output refresh, Hz),
+  `GAMESCOPE_VRR_CAPABLE` (connector supports VRR), `GAMESCOPE_VRR_ENABLED`
+  (Steam's VRR setting), `GAMESCOPE_VRR_FEEDBACK` (KMS VRR active right now,
+  `IsVRRActive()`), `GAMESCOPE_DISPLAY_MODE_LIST_EXTERNAL` and
+  `GAMESCOPE_DISPLAY_EDID_PATH` (`update_vrr_atoms()`, `update_mode_atoms()`).
+  The Timestamp Pacing probe reads only `VRR_FEEDBACK`, so a capable,
+  enabled display that is not refreshing adaptively at that instant reads as
+  fixed refresh.
+- `gamescope_control` (v2+) sends `active_display_info`: connector, make,
+  model, internal/HDR/VRR flags and the valid refresh rates.
+
+Each report reads, independently: environment and OS; SDL's display modes
+(and the stream window's, plus `StreamUtils::tryGetDisplayRefreshRate()`); Qt's
+screens; every X server `:0` to `:32` (all root properties, RandR outputs,
+CRTCs and modes); Gamescope process command lines and `gamescope --version`;
+the Gamescope and session Wayland sockets (globals, `wl_output`,
+`gamescope_control`); KMS through raw DRM ioctls on every card node (all
+connector and CRTC properties, `vrr_capable`, `VRR_ENABLED`, the active and
+listed modes with exact refresh, the EDID); sysfs connector state and
+amdgpu's debugfs `vrr_range` where readable; and Gamescope's patched EDID.
+Xrandr and libwayland-client are loaded with `dlopen()` and DRM uses kernel
+uapi headers, because the AppImage is built with `disable-wayland` and
+`disable-libdrm`. Connectors are read like `drmModeGetConnectorCurrent()`, so
+the probe never forces a connector probe.
+- Only while VRR tracing is on (`MOONLIGHT_VRR_TRACE`, set by the tracing
+  launchers at startup or by Settings' diagnostic capture at session start)
+  and under Gamescope: startup writes `<trace base>.display-startup.txt`
+  and each stream `<trace base>.display-stream.txt` beside the trace (in a
+  capture folder, `Moonlight.display-stream.txt`; a later stream in the same
+  process adds an epoch suffix). The stream's `DisplayProbe::StreamSampler`
+  thread then appends Gamescope's root state and each active CRTC's mode and
+  `VRR_ENABLED` once a second when they change (otherwise every 30 s).
+  Summary lines also go to the log. Without tracing nothing is read or
+  written (2026-10-08; before that every Gamescope launch and stream wrote
+  to `~/moonlight-display-probe`).
+- `moonlight probe-display` (or `MOONLIGHT_DISPLAY_PROBE=active` for
+  launchers that cannot pass arguments) writes the passive report, then
+  opens a fullscreen Vulkan window and, for each present mode the surface
+  offers (FIFO, Mailbox, Immediate, FIFO relaxed), presents unpaced, at 53 FPS
+  and at 77 FPS (rates on no common fixed grid) for `MOONLIGHT_DISPLAY_PROBE_SECONDS` (default 4) each. It
+  also lists `VK_KHR_display` displays and modes. It records
+  `VK_GOOGLE_display_timing` display times and the refresh cycle, and
+  summarizes display intervals as a histogram, with each interval's fit to
+  60–240 Hz grids and to the pacing. Gamescope's state is sampled
+  mid-phase. Fixed 120 Hz shows 53 FPS as 16.7/25 ms intervals, fixed 60 Hz
+  as 16.7/33.3 ms, and VRR as 18.9 ms.
+- The explicit `probe-display` report goes to `$MOONLIGHT_DISPLAY_PROBE_DIR`,
+  else `~/moonlight-display-probe`, else the app data directory (Flatpak has
+  no home access), else the log directory, whether or not tracing is on.
+- Built into the WSL AppImage and run under WSLg (no Gamescope, no KMS,
+  llvmpipe without display timing): every section reports and all four
+  present modes run.
+- First SteamOS captures (2026-10-08, SteamOS 20260925.101, Gamescope
+  3.16.30, two active probes; no stream reports yet):
+  - Steam Machine (NAVI33) on an LG TV over HDMI, 120 Hz, VRR 24–120 Hz.
+    SDL, Qt, both Xwayland RandR modes, `wl_output`, KMS and
+    `GAMESCOPE_DISPLAY_REFRESH_RATE_FEEDBACK` all said 120 Hz. KMS
+    `VRR_ENABLED` and `GAMESCOPE_VRR_FEEDBACK` were 1 throughout, and paced
+    frames were displayed at the pacing interval, on no fixed grid.
+  - `vkGetRefreshCycleDurationGOOGLE` said 120 Hz for the probe's first
+    swapchain (FIFO) and 60 Hz for its second (Mailbox) on the same window.
+    The Gamescope WSI layer starts each swapchain at 16.67 ms, and Gamescope
+    sends `refresh_cycle` only when the per-surface value changes
+    (`handle_presented_for_window()`), so a recreated swapchain keeps 60 Hz.
+    The Timestamp Pacing grid takes its period from this query.
+  - `GAMESCOPE_FPS_LIMIT` read 60 while the probe's FIFO frames were
+    displayed at 120 Hz and the swapchain's refresh cycle was unlimited. On
+    a docked Deck it read 90 (the internal panel's) on a 60 Hz external
+    display. The atom is set from Steam's property but reset internally by
+    `_update_app_target_refresh_cycle()`, so it is not the active limit.
+  - Under VRR, about half the paced frames were displayed within 1 ms of the
+    pacing interval; present-to-display time fell in two clusters one
+    120 Hz period apart, as if commits still latch on a 120 Hz schedule.
+    The display times are Gamescope's scheduled V-blank
+    (`ulTargetVBlank`), not a measured flip.
+  - Steam Machine stream (116 FPS, 2560x1440, VRR, Allow Tearing, Steam's
+    VRR, tearing and frame limit toggled during it): Timestamp Pacing
+    entered "frame limited (FIFO)" at once from `GAMESCOPE_FPS_LIMIT=60` and
+    never left it, so it never used a grid or followed VRR. The atom stayed
+    60 throughout, including while a limit Gamescope applied held frames to
+    25 ms. `GAMESCOPE_VRR_ENABLED`, `GAMESCOPE_VRR_FEEDBACK` and KMS
+    `VRR_ENABLED` changed together within the sampler's 1 s resolution on
+    every toggle. Display reports followed the 8.6 ms stream cadence with VRR
+    and 8.33/16.67/25 ms without it. The renderer's refresh cycle read
+    16.67 ms for the first 48 s (the renderer had been recreated after the
+    window was shown) and changed only when the frame limit changed
+    Gamescope's value (25 ms, then 8.33 ms).
+  - Deck internal panel stream (old build, 90 FPS; Allow Tearing, refresh
+    rate and frame limit toggled): the panel switched KMS modes (90.004,
+    80.003, 60.003, 53.000, 77.029 Hz) and
+    `GAMESCOPE_DISPLAY_REFRESH_RATE_FEEDBACK` followed each, at most one 1 s
+    sample behind KMS. The renderer's refresh cycle read 16.67 ms for the
+    first 135 s at 90 Hz, then was right after every change. With
+    `GAMESCOPE_LIMITER_FEEDBACK` 0 at 80 Hz, 90 presents a second gave about
+    70 displayed (Mailbox replacing); with it 1, presents blocked at the
+    refresh rate. `GAMESCOPE_FPS_LIMIT` and `GAMESCOPE_DYNAMIC_REFRESH` stayed
+    90 throughout. `GAMESCOPE_VRR_ENABLED` was 1 on the non-VRR panel
+    (`GAMESCOPE_VRR_CAPABLE` and `_FEEDBACK` 0). In three stretches, display
+    reports fell to 5–12 a second with gaps up to 0.9 s while presents
+    stayed at 90 and focus did not change; possibly the Quick Access menu.
+  - Deck internal panel stream with the new probe (90 FPS, Steam's frame
+    limit, refresh rate and Allow Tearing toggled): every mode and refresh
+    change was logged and the grid period followed. Fixed refresh at 90 Hz:
+    a frame every refresh, release to present 1.9 ms. Frame limited at
+    60 Hz before the one-per-V-blank rule: all 90 frames a second were
+    released on the grid but only 60 presented, 15 replaced in the whole
+    stream, release to present 9.7–11.6 ms median (14 ms p95), the render
+    lead pinned at its 8 ms cap and the average frame queue delay was 15 ms.
+    Tearing at 90 Hz: renders took 6.3 ms (1.9 ms with tearing off), which
+    raised the learned render lead above the 2–9 ms buffer, so frames were
+    released as soon as they were ready, and Gamescope reported display
+    times for only 40–49 of the 90 frames a second. The longer render is not
+    a tearing or present cost: in every mode, a render started within 2 ms
+    of the decoder returning the frame took 5.8–6.2 ms, one started 4 ms or
+    more after took 1.2–1.6 ms. `renderFrame()` waits for VAAPI's GPU decode
+    (about 6 ms for 2560x1600 10-bit HEVC on the Deck), which tearing exposes
+    because it releases frames on arrival while the grid holds them about
+    5.5 ms. `waitToRender()` (swap_buffers and acquire) runs before a frame
+    is taken, so it is not in this time. Timestamp pacing treats decoder
+    output as ready and learns that wait into the render lead; VRR Pacing
+    Mode tracks GPU readiness separately (`PacedFrame::noteGpuReadyUs()`).
+  - Docked Deck (VANGOGH) on a 60 Hz non-VRR LG monitor over DP at 4K: all
+    sources agreed on 60 Hz fixed. FIFO displayed every refresh, but
+    Mailbox displayed only 22–24 frames a second (33–67 ms intervals) with
+    presents blocking 25–42 ms, with Allow Tearing on for the shortcut.
+
+**Decode readiness, frame limit period, session refresh and overlay chips
+(2026-10-08).** Follow-ups to the Deck and Steam Machine captures above:
+- **Decode readiness.** `PlVkRenderer::renderFrame()` now calls
+  `waitForDecode()` (an explicit, timed `vaSyncSurface()`, or PyroWave's
+  completion wait) before mapping the frame, outside the VRR path, which
+  already waited; libplacebo's own sync then returns at once. The wait is
+  reported through `IFFmpegRenderer::lastDecodeWaitUs()` (zero for other
+  renderers) and `Pacer::renderFrame()` passes it, with the frame's decoder
+  output time, to `TimestampPacer::notePresented()`.
+  - The render lead learns from release-to-present time minus that wait.
+  - `m_DecodeDelayUs` learns when decodes finish relative to decoder
+    output: a render that waited more than 250 us gives (render start −
+    output + wait), rising by a quarter of the gap; one that didn't bounds
+    it at (render start − output + wait), falling by 1/32. Capped at 20 ms.
+  - `submit()` treats a frame as ready at max(decode complete, decoder
+    output + `m_DecodeDelayUs`), which the policy, lateness and the trace
+    use. Renderers that report no wait (D3D11, EGL, SDL) leave the delay at
+    zero, so their pacing is unchanged.
+  - Trace columns appended (schema unchanged): `decode_wait_us` and
+    `decode_delay_us` on presented rows, `decode_delay_us` on scheduled rows.
+  - Not yet captured on hardware.
+- **Frame limit period.** Under frame limited, each display report's
+  interval is recorded (`noteLimitedDisplayLocked()`); every 32, the 25th
+  percentile rounded to whole refreshes (1 to 8) becomes the grid period,
+  unless the stream's own period is at least 90% of it (then the stream,
+  not the limit, spaces frames). A change logs, resets the phase lock,
+  releases and miss detector, and writes a `display_mode` trace row with
+  `limit_refreshes`. Leaving frame limited or a new compositor refresh
+  rate puts the grid back at one refresh (`resetGridLocked()`). The FIFO
+  one-per-V-blank rule uses the spaced grid. Not yet captured.
+- **Session refresh.** `StreamUtils::tryGetDisplayRefreshRate()` returns
+  `GamescopeDisplayState::readRefreshHz()`
+  (`GAMESCOPE_DISPLAY_REFRESH_RATE_FEEDBACK`, read over a fresh connection)
+  when it is available, logging when it differs from SDL's. This feeds the
+  session's refresh, the pacer's initial grid, and VRR Pacing Mode's
+  mid-stream refresh check. The settings page's refresh list still comes
+  from SDL's modes.
+- **Overlay chips.** The graph overlay's sync chip now reads "VRR Pacing"
+  for VRR Pacing Mode. Otherwise, when the timestamp pacer knows the
+  display mode (Gamescope's probe or Windows' measurement), it shows that
+  mode live: "V-Sync" (fixed refresh), "VRR", "Tearing" or "Frame limit".
+  `PacerTelemetryCounters` carries the mode to
+  `StatsGraphStreamInfo::displayMode`. With no mode known it falls back to
+  "V-Sync" when V-Sync is on.
 
 **Windows VRR detection (2026-10-08).** On a display refreshing as frames
 arrive, snapping targets to a V-blank grid only adds jitter and delay. Windows

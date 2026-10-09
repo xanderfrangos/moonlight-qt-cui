@@ -677,9 +677,20 @@ QStringList streamInfoChips(const StatsGraphStreamInfo& info)
     if (info.frameRate > 0) {
         chips.append(QStringLiteral("%1 FPS").arg(info.frameRate));
     }
-    // Nothing is shown when presentation isn't synchronized at all
+    // Nothing is shown when presentation isn't synchronized at all. Plain
+    // "VRR" is the display's own adaptive sync; Moonlight's mode is "VRR
+    // Pacing". Under Gamescope V-Sync is always on, so the chip shows how
+    // Gamescope presents instead (TimestampPacer::DisplayMode values).
+    static const char* const k_DisplayModeChips[] = {
+        nullptr, "V-Sync", "VRR", "Tearing", "Frame limit"
+    };
+    const char* displayMode = info.displayMode < sizeof(k_DisplayModeChips) / sizeof(k_DisplayModeChips[0])
+                                  ? k_DisplayModeChips[info.displayMode] : nullptr;
     if (info.syncMode == StatsGraphSyncMode::Vrr) {
-        chips.append(QStringLiteral("VRR"));
+        chips.append(QStringLiteral("VRR Pacing"));
+    }
+    else if (displayMode != nullptr) {
+        chips.append(QString::fromUtf8(displayMode));
     }
     else if (info.syncMode == StatsGraphSyncMode::VSync) {
         chips.append(QStringLiteral("V-Sync"));

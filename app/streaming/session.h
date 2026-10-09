@@ -12,6 +12,7 @@
 #include "audio/audiostats.h"
 #include "video/overlaymanager.h"
 #include "diagnostics/diagnosticcapture.h"
+#include "displayprobe.h"
 #include "video/overlaypainter.h"
 
 class SupportedVideoFormatList : public QList<int>
@@ -356,6 +357,7 @@ private:
     StreamingPreferences* m_Preferences;
     PresentationSettings m_PresentationSettings;
     std::unique_ptr<DiagnosticCapture> m_DiagnosticCapture;
+    DisplayProbe::StreamSampler m_DisplayProbe;
     bool m_IsFullScreen;
     bool m_HevcPacingAlternative = false;
     SupportedVideoFormatList m_SupportedVideoFormats; // Sorted in order of descending priority

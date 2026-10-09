@@ -74,6 +74,7 @@ public:
     virtual bool initialize(PDECODER_PARAMETERS params) override;
     virtual bool prepareDecoderContext(AVCodecContext* context, AVDictionary** options) override;
     virtual void renderFrame(AVFrame* frame) override;
+    virtual uint64_t lastDecodeWaitUs() override { return m_LastDecodeWaitUs; }
     virtual IVrrFramePresenter* getVrrFramePresenter() override;
     virtual VrrFallbackReason checkSupport() const override;
     virtual bool canLatchAdaptivePresent() const override;
@@ -284,6 +285,7 @@ private:
     // must always be submitted before it is resized, destroyed, or replaced.
     pl_swapchain_frame m_SwapchainFrame = {};
     bool m_HasPendingSwapchainFrame = false;
+    uint64_t m_LastDecodeWaitUs = 0;
 
     // VRR presentation state. The pacing worker is the only thread that
     // touches the non-atomic fields after initialization. Window callbacks on

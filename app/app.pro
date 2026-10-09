@@ -207,6 +207,7 @@ SOURCES += \
     streaming/input/reltouch.cpp \
     streaming/session.cpp \
     streaming/gpuperformancehold.cpp \
+    streaming/displayprobe.cpp \
     streaming/gamescopecomposition.cpp \
     streaming/audio/audio.cpp \
     streaming/audio/renderers/sdlaud.cpp \
@@ -281,6 +282,7 @@ HEADERS += \
     streaming/video/pyrowave/pyrowavebandwidth.h \
     streaming/video/pyrowave/pyrowavelinkpolicy.h \
     streaming/video/pyrowave/pyrowavebitrate.h \
+    streaming/displayprobe.h \
     streaming/gamescopecomposition.h \
     streaming/audio/audiostats.h     streaming/audio/renderers/renderer.h \
     streaming/audio/renderers/sdl.h \
@@ -569,6 +571,10 @@ gpuslow {
     message(GPU slow build)
 
     DEFINES += GL_IS_SLOW VULKAN_IS_SLOW
+}
+linux {
+    # The display probe loads Xrandr and libwayland-client at runtime
+    LIBS += -ldl
 }
 wayland {
     linux {

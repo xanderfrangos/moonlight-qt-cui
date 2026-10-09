@@ -13,6 +13,7 @@ SOURCES += \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/vt_base.mm \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/macdisplaytiming.mm \
     $$PWD/../../app/streaming/streamutils.cpp \
+    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/gamescopedisplaystate.cpp \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrrpacingworker.cpp \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/tracefile.cpp \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/vrrtimingcontroller.cpp \

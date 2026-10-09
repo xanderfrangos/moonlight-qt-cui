@@ -131,6 +131,11 @@ public:
         bool presentFlipsImmediately = false;
         bool compositorProbe = false;
         bool measureRefresh = false;
+
+        // Appended after schema 1's original columns
+        uint64_t decodeWaitUs = 0;
+        uint64_t decodeDelayUs = 0;
+        uint32_t limitRefreshes = 0;
     };
 
     // The trace path for a VRR trace path: its .vrrtrace (or other) suffix
