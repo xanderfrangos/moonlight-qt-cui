@@ -535,6 +535,116 @@ void refreshClassifierTellsFixedFromAdaptive()
     check(between.result() == Result::Unknown, "90% of the nominal rate decides nothing");
 }
 
+// A frame limit's FIFO with the pacer's grid in the loop: at each refresh
+// the newest frame that has arrived is shown, if the last one shown is at
+// least the grid's spacing and the limit's refreshes behind. Returns how
+// many were shown in each second.
+struct LimitLoop {
+    static constexpr double RefreshUs = 1000000.0 / 90;
+    LimitMeter meter;
+    uint64_t refresh = 1000;
+    uint64_t lastShown = 0;
+    bool pending = false;
+    // Refreshes spent with the grid at one refresh while measuring again
+    uint64_t probingRefreshes = 0;
+
+    uint64_t nowUs() const { return uint64_t(refresh * RefreshUs); }
+
+    // arrivals: frame times, in order, from nowUs() onward
+    std::vector<int> run(const std::vector<uint64_t>& arrivals, double seconds, uint32_t limit,
+                         uint64_t reportGapUs = 0)
+    {
+        std::vector<int> shown;
+        size_t next = 0;
+        const uint64_t end = refresh + uint64_t(seconds * 90);
+        int count = 0;
+        // Reports pause (Quick Access) while frames are still shown
+        const uint64_t reportsFrom = refresh + uint64_t(reportGapUs / RefreshUs);
+        while (refresh < end) {
+            refresh++;
+            while (next < arrivals.size() && arrivals[next] <= nowUs()) {
+                meter.noteArrival();
+                pending = true;
+                next++;
+            }
+            const uint64_t spacing = std::max<uint64_t>(meter.refreshes(), limit);
+            probingRefreshes += meter.probing();
+            if (pending && refresh - lastShown >= spacing) {
+                pending = false;
+                lastShown = refresh;
+                if (refresh >= reportsFrom) {
+                    meter.observe(nowUs(), nowUs(), RefreshUs, 11111);
+                }
+                count++;
+            }
+            if ((refresh - 1000) % 90 == 0) {
+                shown.push_back(count);
+                count = 0;
+            }
+        }
+        return shown;
+    }
+
+    std::vector<uint64_t> steady(double fps, double seconds) const
+    {
+        std::vector<uint64_t> times;
+        for (double t = 0; t < seconds * 1000000; t += 1000000 / fps) {
+            times.push_back(nowUs() + uint64_t(t) + 5000);
+        }
+        return times;
+    }
+};
+
+// A slow stream isn't a frame limit, a limit the grid follows can still be
+// lifted, and a real limit holds
+void frameLimitIsMeasuredWithoutConfirmingItself()
+{
+    // The Deck capture (2026-10-09): a desktop sending a frame every 57 ms
+    // (with one 2.6 ms behind every third), a loading screen at 16 FPS, then
+    // the game at 90 FPS, with the limit at the refresh rate
+    LimitLoop desktop;
+    std::vector<uint64_t> times;
+    for (int i = 0; i < 30 * 1000 / 57; i++) {
+        const uint64_t t = desktop.nowUs() + uint64_t(i) * 57000;
+        times.push_back(t);
+        if (i % 3 == 0) {
+            times.push_back(t + 2600);
+        }
+    }
+    desktop.run(times, 30, 1);
+    check(desktop.meter.refreshes() == 1, "a desktop sending a frame every 57 ms is not a frame limit");
+    desktop.run(desktop.steady(16, 10), 10, 1);
+    check(desktop.meter.refreshes() == 1, "nor is a 16 FPS loading screen");
+    const std::vector<int> game = desktop.run(desktop.steady(90, 30), 30, 1);
+    check(*std::min_element(game.begin() + 1, game.end()) >= 89, "a 90 FPS game after them is shown at 90 FPS");
+
+    // A stream between two limits mixes their intervals
+    LimitLoop between;
+    between.run(between.steady(51, 30), 30, 1);
+    check(between.meter.refreshes() == 1, "a 51 FPS stream at 90 Hz is not a 45 FPS limit");
+
+    // A real 30 FPS limit holds, and measuring it again costs little
+    LimitLoop limited;
+    const std::vector<int> thirty = limited.run(limited.steady(90, 120), 120, 3);
+    check(limited.meter.refreshes() == 3, "a 30 FPS limit is measured");
+    check(*std::min_element(thirty.begin() + 1, thirty.end()) >= 29, "and frames are shown at 30 FPS throughout");
+    check(limited.probingRefreshes < 120 * 90 / 50, "re-measuring it takes under 2% of the time");
+
+    // Lifted with Quick Access closing (a gap in reports), the limit goes
+    // within a second or so
+    const std::vector<int> lifted = limited.run(limited.steady(90, 10), 10, 1, 500000);
+    check(limited.meter.refreshes() == 1, "a lifted limit is noticed after a gap in reports");
+    check(*std::min_element(lifted.begin() + 2, lifted.end()) >= 89, "within two seconds of Quick Access closing");
+
+    // Lifted without a gap, it goes by the next re-measurement at the latest
+    LimitLoop silent;
+    silent.run(silent.steady(90, 120), 120, 3);
+    const std::vector<int> later = silent.run(silent.steady(90, 40), 40, 1);
+    check(silent.meter.refreshes() == 1, "a limit lifted without a gap in reports goes too");
+    const size_t secondsLimited = size_t(std::count_if(later.begin(), later.end(), [](int n) { return n < 89; }));
+    check(secondsLimited <= LimitMeter::MaxProbeUs / 1000000 + 1, "by the next re-measurement at the latest");
+}
+
 int main()
 {
     smoothingRemovesStampNoise();
@@ -552,6 +662,7 @@ int main()
     phaseLockAvoidsBoundaryFlicker();
     missesAreJudgedAgainstUsualLag();
     refreshClassifierTellsFixedFromAdaptive();
+    frameLimitIsMeasuredWithoutConfirmingItself();
 
     if (failures == 0) {
         std::printf("tst_timestamppacing: all checks passed\n");

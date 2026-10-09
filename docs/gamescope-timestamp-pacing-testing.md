@@ -210,6 +210,7 @@ These come from reading Gamescope's source (ValveSoftware/gamescope
 | 13 | Steam Machine, 120 FPS, VRR in use throughout: tearing + limit, tearing, limit, VRR (249 s) | Render lead from render start | VRR at the panel's ceiling: a 62 s beat between the host's and the display's clocks. Without the limit, latency drifted 4 → 11 ms with bursts of replaced frames at each wrap (1.3–2.7% overall); with it, none replaced but 10–16 ms latency. | None (see open questions) |
 | 14 | Steam Machine, 120 FPS: limit off (77 s), then on (73 s) | VRR at the ceiling paced on the grid; decode delay decay | On the grid, replaced frames fell only to 0.97/s, still in bursts (11–33 per 5 s); decoder output → display 13.8 ms median. The release lead (4.5 ms Gamescope margin, up to 3.5 ms more from replaced frames, 1.2 ms render) was about a whole refresh, so presents collided with the previous frame's latch, each replacement widened the margin, and the late shift was on for 69% of frames. With the limit, the sawtooth of capture 13's no-limit stretches, unlike its limit stretch. Decode delay settled at 1.5–1.9 ms. | Grid pacing at the ceiling reverted; Recommended frame rate (116 FPS at 120 Hz) offered instead |
 | 15 | Deck, 90 FPS at 90 Hz: limit, no limit, limit (76 s) | Same | Limit 99.95%/99.91% single refreshes, no limit 99.63%; decoder output → display 17.5 / 14.1 ms median (host sent only about 51 FPS in the last stretch). No pacer drops, no extra margin. Decode delay decayed 5.56 → 4.72 ms against a real 4.5 ms decode, median waits 0.02 ms. | None |
+| 16 | Deck, 90 FPS at 90 Hz, 90 FPS limit on throughout: a launch that began on the host's desktop (120 s), then a resume straight into the game (73 s) | Same | The launch was jittery in game until near the end. The desktop sent a frame every 50–60 ms (about 20 FPS, in bursts) and the loading screen 16 FPS, which the limit measurement read as frames every 3–5 refreshes; the host's frame clock still said 90 FPS, so the slow-stream check passed. With the grid at 5 refreshes the pacer released one frame in 5, so frames were shown 55.6 ms apart and each measurement confirmed it: the game at a steady 90 FPS was shown at 18 FPS for 30 s (about 72 frames a second dropped; 39% overall). It escaped only when the grid's fitted period drifted 3% short, a few frames landed 4 refreshes apart, and the reconfigured grid let frames through at full rate for a moment. The resume never saw a slow stream: one refresh throughout, 2 replaced, 0.11% dropped. | Slow-stream check also by arrival rate; limit measured again at one refresh after 5 s (doubling to 30 s) and after report gaps; third shortest of 32 intervals instead of the 25th percentile |
 
 ### Smoothness and latency by mode (Deck, 90 FPS)
 
@@ -266,8 +267,14 @@ extra latency.
 12. **VRR-with-limit warning logged 4 times a second** (captures 12 and 13).
     The pacer copies the probe for each poll, which reset the probe's own
     "warned" flag. Its state is now shared between copies.
+13. **The frame limit's period confirmed itself** (capture 16). A grid
+    spaced to a measured limit shows frames no closer, so the measurement
+    can't see that the limit was wrong or has gone. A slow desktop got it
+    there: the slow-stream check used the host's frame clock, which stays
+    at the stream rate while the host skips frames. Raising the limit in
+    Quick Access had the same blind spot.
 
-## Current behaviour under Gamescope (as built after capture 13)
+## Current behaviour under Gamescope (as built after capture 16)
 
 - **Mode,** polled every 250 ms from server 0:
   1. VRR in use: no grid; frames go out at their target minus the render
@@ -278,7 +285,10 @@ extra latency.
   4. Otherwise: fixed refresh, on the grid.
 - **Grid period:** Gamescope's output refresh rate. While frame-limited, a
   multiple of it once display intervals show frames every N refreshes and
-  the stream is faster than that.
+  the stream (by its frame clock and by how often frames arrive) is faster
+  than that. A limit above one refresh is measured again at one refresh 5 s
+  later, then every 10, 20 and 30 s while it holds, and after any gap in
+  reports over 200 ms.
 - **Readiness:** decoder output plus the learned decode delay. The render
   lead excludes the decode wait, and under Gamescope it is timed from when
   rendering begins. The delay also decays 2% a second while renders it
@@ -334,3 +344,10 @@ extra latency.
   captures would still be needed to confirm nothing changed.
 - **Limiter detection timing:** `GAMESCOPE_LIMITER_FEEDBACK` was trusted
   from one Deck capture and the stream logs after it.
+- **Re-measuring a frame limit** (after capture 16) is tested only against a
+  model of FIFO. Under a real limit, each re-measurement sends a frame every
+  refresh for 8 reports (about 0.27 s at 30 FPS), which may queue a frame
+  or two in FIFO, as at the start of a limited session. A capture with a
+  30 or 45 FPS limit should check latency around the re-measurements, and
+  one that raises the limit in Quick Access should show it followed within
+  a second.

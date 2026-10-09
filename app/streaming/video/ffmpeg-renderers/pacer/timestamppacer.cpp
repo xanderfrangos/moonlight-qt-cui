@@ -235,6 +235,7 @@ void TimestampPacer::submit(PacedFrame&& paced)
         }
 
         m_SourcePeriodUs = m_Policy.sourcePeriodUs();
+        m_Limit.noteArrival();
         // Ready too late to be handed over before its target
         late = entry.paced && entry.targetUs < readyUs + m_RenderLeadUs;
         renderLeadUs = m_RenderLeadUs;
@@ -358,7 +359,7 @@ void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs
     if (m_CompositorRefreshHz == 0 && refreshPeriodUs != 0 &&
             std::fabs(double(refreshPeriodUs) - m_RefreshPeriodUs) > m_RefreshPeriodUs * 0.01) {
         m_RefreshPeriodUs = double(refreshPeriodUs);
-        m_Grid.configure(m_LimitRefreshes * m_RefreshPeriodUs);
+        m_Grid.configure(m_Limit.refreshes() * m_RefreshPeriodUs);
     }
     if (m_DisplayMode == DisplayMode::FrameLimited) {
         noteLimitedDisplayLocked(displayUs, row.eventUs);
@@ -562,7 +563,7 @@ void TimestampPacer::refreshDisplayMode(std::unique_lock<std::mutex>& lock, uint
     row.displayModeMeasured = !m_DisplayModeProbe;
     row.refreshSharePerMille = m_DisplayModeProbe ? 0 : uint32_t(std::lround(m_RefreshClass.lastShare() * 1000));
     row.gridPeriodUs = uint64_t(m_Grid.periodUs());
-    row.limitRefreshes = m_LimitRefreshes;
+    row.limitRefreshes = m_Limit.refreshes();
     trace(row);
 }
 
@@ -621,9 +622,7 @@ void TimestampPacer::resetGridLocked()
     m_LateIndex = 0;
     m_LateCount = 0;
     m_LateFilled = 0;
-    m_LimitRefreshes = 1;
-    m_LimitIntervalCount = 0;
-    m_LastLimitedDisplayUs = 0;
+    m_Limit.reset();
     m_Grid.configure(m_RefreshPeriodUs);
     m_PhaseLock.reset();
     m_Releases = {};
@@ -633,41 +632,23 @@ void TimestampPacer::resetGridLocked()
 
 void TimestampPacer::noteLimitedDisplayLocked(uint64_t displayUs, uint64_t nowUs)
 {
-    const uint64_t lastUs = m_LastLimitedDisplayUs;
-    m_LastLimitedDisplayUs = displayUs;
-    // Repeated reports and long gaps (an overlay, a stall) say nothing
-    if (lastUs == 0 || displayUs <= lastUs || displayUs - lastUs > 200000) {
-        return;
+    const TimestampPacing::LimitMeter::Update update =
+        m_Limit.observe(displayUs, nowUs, m_RefreshPeriodUs, m_SourcePeriodUs);
+    if (update.measured) {
+        const uint32_t refreshes = m_Limit.refreshes();
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Timestamp pacing: frames are shown every %u refresh%s (%.1f FPS) under the frame limit; V-blank grid period %.3f ms",
+                    refreshes, refreshes == 1 ? "" : "es", 1000000.0 / (refreshes * m_RefreshPeriodUs),
+                    refreshes * m_RefreshPeriodUs / 1000.0);
     }
-    m_LimitIntervals[m_LimitIntervalCount++] = uint32_t(displayUs - lastUs);
-    if (m_LimitIntervalCount < m_LimitIntervals.size()) {
-        return;
+    if (update.changed) {
+        applyLimitLocked(nowUs);
     }
-    m_LimitIntervalCount = 0;
+}
 
-    // Gamescope doesn't publish the limit, but FIFO shows a frame every
-    // limited period, so the shorter display intervals are that period.
-    // A frame not ready in time only lengthens an interval.
-    std::array<uint32_t, 32> sorted = m_LimitIntervals;
-    const size_t rank = sorted.size() / 4;
-    std::nth_element(sorted.begin(), sorted.begin() + rank, sorted.end());
-    uint32_t refreshes = uint32_t(std::max(1L, std::lround(sorted[rank] / m_RefreshPeriodUs)));
-    // A stream slower than that spaces its frames out by itself, and a
-    // grid spaced to it would only drop frames
-    if (refreshes > 1 && m_SourcePeriodUs >= refreshes * m_RefreshPeriodUs * 0.9) {
-        refreshes = 1;
-    }
-    refreshes = std::min<uint32_t>(refreshes, 8);
-    if (refreshes == m_LimitRefreshes) {
-        return;
-    }
-
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "Timestamp pacing: frames are shown every %u refresh%s (%.1f FPS) under the frame limit; V-blank grid period %.3f ms",
-                refreshes, refreshes == 1 ? "" : "es", 1000000.0 / (refreshes * m_RefreshPeriodUs),
-                refreshes * m_RefreshPeriodUs / 1000.0);
-    m_LimitRefreshes = refreshes;
-    m_Grid.configure(refreshes * m_RefreshPeriodUs);
+void TimestampPacer::applyLimitLocked(uint64_t nowUs)
+{
+    m_Grid.configure(m_Limit.refreshes() * m_RefreshPeriodUs);
     m_PhaseLock.reset();
     m_Releases = {};
     m_LastVblankUs = 0;
@@ -678,7 +659,7 @@ void TimestampPacer::noteLimitedDisplayLocked(uint64_t displayUs, uint64_t nowUs
     row.eventUs = nowUs;
     row.displayMode = uint8_t(m_DisplayMode);
     row.gridPeriodUs = uint64_t(m_Grid.periodUs());
-    row.limitRefreshes = m_LimitRefreshes;
+    row.limitRefreshes = m_Limit.refreshes();
     trace(row);
 }
 
@@ -701,7 +682,7 @@ void TimestampPacer::applyCompositorRefreshLocked(int refreshHz, uint64_t nowUs)
     row.eventUs = nowUs;
     row.displayMode = uint8_t(m_DisplayMode);
     row.gridPeriodUs = uint64_t(m_Grid.periodUs());
-    row.limitRefreshes = m_LimitRefreshes;
+    row.limitRefreshes = m_Limit.refreshes();
     trace(row);
 }
 
@@ -1017,7 +998,7 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
         row.sourcePeriodUs = uint64_t(m_SourcePeriodUs);
         row.gridPeriodUs = vblankGrid ? uint64_t(m_Grid.periodUs()) : 0;
         row.displayMode = uint8_t(m_DisplayMode);
-        row.limitRefreshes = m_LimitRefreshes;
+        row.limitRefreshes = m_Limit.refreshes();
         row.lateShift = m_LateShift;
         for (size_t i = 0; i < supersededCount; i++) {
             TimestampTrace::Row supersededRow = frameRow(TimestampTrace::Event::Superseded, superseded[i], nowUs);

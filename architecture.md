@@ -4604,7 +4604,7 @@ An opt-in fourth presentation mode, built from
 [the proposal](docs/timestamp-pacing-proposal.md). Offline evaluation, known
 gaps and next steps are in
 [timestamp-pacing-findings.md](docs/timestamp-pacing-findings.md). Under
-Gamescope it was tested on a Steam Deck and a Steam Machine over fifteen
+Gamescope it was tested on a Steam Deck and a Steam Machine over sixteen
 captures (2026-10-08 to 2026-10-09); each capture, its finding and the change
 it led to are in
 [gamescope-timestamp-pacing-testing.md](docs/gamescope-timestamp-pacing-testing.md).
@@ -4638,15 +4638,18 @@ Windows has only the earlier pacing logs.
   4.5–6 ms later on the Deck (2560x1600 HEVC 10-bit), 1.8 ms on the Steam
   Machine. A finished decode's sync can still wait 0.25–1.3 ms (driver
   contention). The stats line's decode time is the CPU side only.
-- **Learned values must not learn from their own effects.** Four bugs had
+- **Learned values must not learn from their own effects.** Five bugs had
   that shape: the decode delay (holding frames for it kept renders late
   enough to raise it), the render lead (FIFO back-pressure counted as
   rendering), the margin under FIFO (gaps in reports read as replaced
-  frames) and the margin at VRR's ceiling (a release lead near a whole
-  refresh made frames collide, and each collision widened it). Each value
-  now learns only from samples it can't cause itself, is bounded, and has a
-  way back down that doesn't depend on the condition it creates (for the
-  decode delay, the median-wait decay).
+  frames), the margin at VRR's ceiling (a release lead near a whole
+  refresh made frames collide, and each collision widened it) and the
+  frame limit's period (a grid spaced to it shows frames no closer, so a
+  slow desktop held a 90 FPS game at 18 FPS). Each value now learns only
+  from samples it can't cause itself, is bounded, and has a way back down
+  that doesn't depend on the condition it creates (for the decode delay,
+  the median-wait decay; for the limit, measuring it again at one
+  refresh).
 - **Per-frame fixes collide.** Moving individual late frames to the next
   V-blank made them collide (up to 394 frames dropped in a stretch); one
   shift for all frames with hysteresis replaced it.
@@ -5218,15 +5221,29 @@ the probe never forces a connector probe.
   45.0 frames a second were shown, all on single 22.2 ms intervals, with
   the other 45 dropped in the pacer (none queued) and decoder output to
   present 16.6 ms median. A 60 Hz limit showed 59.8 a second.
-- **Frame limit period.** Under frame limited, each display report's
-  interval is recorded (`noteLimitedDisplayLocked()`); every 32, the 25th
-  percentile rounded to whole refreshes (1 to 8) becomes the grid period,
-  unless the stream's own period is at least 90% of it (then the stream,
-  not the limit, spaces frames). A change logs, resets the phase lock,
-  releases and miss detector, and writes a `display_mode` trace row with
+- **Frame limit period** (`TimestampPacing::LimitMeter`, fed by
+  `noteLimitedDisplayLocked()` and a count of submitted frames). Under
+  frame limited, each display report's interval is recorded; every 32,
+  the third shortest rounded to whole refreshes (1 to 8) becomes the grid
+  period, unless the stream is at least 90% that slow by its frame clock
+  or by how often frames actually arrived in the window (then the stream,
+  not the limit, spaces frames). A grid spaced to a limit shows frames no
+  closer, so it can't see the limit go: 5 s after a limit is found, the
+  grid goes back to one refresh for 8 reports and the limit is measured
+  again (second shortest of the 8), then at doubling intervals up to 30 s
+  while it holds, and at the next report after a gap of over 200 ms in
+  reports (Quick Access, where the limit is changed, pauses them). Only a
+  changed result logs. Every grid change resets the phase lock, releases
+  and miss detector, and writes a `display_mode` trace row with
   `limit_refreshes`. Leaving frame limited or a new compositor refresh
   rate puts the grid back at one refresh (`resetGridLocked()`). The FIFO
-  one-per-V-blank rule uses the spaced grid. Not yet captured.
+  one-per-V-blank rule uses the spaced grid. Before 2026-10-09 the
+  measurement used the 25th percentile and the frame clock only, with no
+  re-measurement: a Deck session that began on the host's desktop
+  (capture 16 in the testing notes) measured 3-5 refreshes from the
+  desktop's sparse frames and held the game at 18 FPS for 30 s.
+  `tst_timestamppacing` runs the meter in a loop with a modelled FIFO and
+  grid; the old rules fail 8 of its checks.
 - **Session refresh.** `StreamUtils::tryGetDisplayRefreshRate()` returns
   `GamescopeDisplayState::readRefreshHz()`
   (`GAMESCOPE_DISPLAY_REFRESH_RATE_FEEDBACK`, read over a fresh connection)

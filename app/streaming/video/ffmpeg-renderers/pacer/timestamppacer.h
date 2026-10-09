@@ -158,6 +158,7 @@ private:
     bool noteDisplayLagLocked(uint64_t displayUs, uint64_t vblankUs, double periodUs);
     // Under a frame limit, spaces the grid at the interval frames are shown at
     void noteLimitedDisplayLocked(uint64_t displayUs, uint64_t nowUs);
+    void applyLimitLocked(uint64_t nowUs);
     // Puts the grid back at one V-blank per refresh
     void resetGridLocked();
     // Shifts every frame a refresh later while most are ready too late
@@ -236,10 +237,7 @@ private:
     // The display's refresh period, and under a frame limit how many
     // refreshes apart frames are shown, measured from display reports
     double m_RefreshPeriodUs = 16667;
-    uint32_t m_LimitRefreshes = 1;
-    std::array<uint32_t, 32> m_LimitIntervals {};
-    size_t m_LimitIntervalCount = 0;
-    uint64_t m_LastLimitedDisplayUs = 0;
+    TimestampPacing::LimitMeter m_Limit;
     // Whether each of the last grid releases was ready too late for its own
     // V-blank, and whether frames are planned a refresh later for it
     std::array<uint8_t, 64> m_LateFlags {};

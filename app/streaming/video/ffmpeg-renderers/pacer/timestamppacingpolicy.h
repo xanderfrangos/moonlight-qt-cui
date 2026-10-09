@@ -674,6 +674,146 @@ private:
     size_t m_Next = 0;
 };
 
+// Under a compositor frame limit, how many refreshes apart frames are shown,
+// from display times. Gamescope doesn't publish the limit, but its FIFO
+// shows a frame every limited period, so the shortest display intervals are
+// that period; a frame not ready in time only lengthens one. The grid then
+// releases a frame only that often.
+//
+// A limit above one refresh confirms itself: the grid releases no more
+// frames than it allows, so they can't be shown closer together. On a Deck
+// capture (2026-10-09) a desktop sending a frame every 50-60 ms measured
+// as a 3-5 refresh limit, which then held a 90 FPS game at 18 FPS for 30 s.
+// So a stream slower than the limit (by its arrival rate, since the host's
+// frame clock stays at the stream rate while it skips frames) leaves the
+// grid at one refresh, and a limit above one refresh is measured again at
+// one refresh after a while, sooner after a gap in display reports (Quick
+// Access, where the limit is changed, pauses them).
+class LimitMeter
+{
+public:
+    static constexpr size_t Window = 32;
+    // Intervals a re-measurement takes: under a real limit, frames go out
+    // every refresh for this long and wait in FIFO
+    static constexpr size_t ProbeWindow = 8;
+    // Reports further apart say nothing about the limit
+    static constexpr uint64_t GapUs = 200000;
+    // A limit found is measured again this long after, then at doubling
+    // intervals up to the maximum while it holds
+    static constexpr uint64_t FirstProbeUs = 5000000;
+    static constexpr uint64_t MaxProbeUs = 30000000;
+    static constexpr uint32_t MaxRefreshes = 8;
+
+    struct Update {
+        // The grid's spacing changed
+        bool changed = false;
+        // A new measured limit, rather than a re-measurement starting or
+        // confirming the old one
+        bool measured = false;
+    };
+
+    void reset()
+    {
+        m_Refreshes = 1;
+        m_Count = 0;
+        m_LastDisplayUs = 0;
+        m_Probing = false;
+        m_ProbeAtUs = 0;
+        m_ProbeIntervalUs = FirstProbeUs;
+    }
+
+    // A frame arrived from the host
+    void noteArrival() { m_Arrivals++; }
+
+    // A frame was shown at displayUs, reported at nowUs. sourcePeriodUs is
+    // the host's frame clock period.
+    Update observe(uint64_t displayUs, uint64_t nowUs, double refreshPeriodUs, double sourcePeriodUs)
+    {
+        Update update;
+        const uint64_t lastUs = m_LastDisplayUs;
+        m_LastDisplayUs = displayUs;
+        if (lastUs != 0 && displayUs > lastUs + GapUs && m_Refreshes > 1 && !m_Probing) {
+            m_ProbeAtUs = 0;
+        }
+        // Repeated reports and long gaps (an overlay, a stall) say nothing
+        if (lastUs == 0 || displayUs <= lastUs || displayUs - lastUs > GapUs) {
+            return update;
+        }
+        if (m_Refreshes > 1 && !m_Probing && nowUs >= m_ProbeAtUs) {
+            m_Probing = true;
+            m_ProbeFrom = m_Refreshes;
+            m_Refreshes = 1;
+            m_Count = 0;
+            update.changed = true;
+            return update;
+        }
+
+        if (m_Count == 0) {
+            m_WindowStartUs = nowUs;
+            m_WindowArrivals = m_Arrivals;
+        }
+        m_Intervals[m_Count++] = uint32_t(displayUs - lastUs);
+        const size_t window = m_Probing ? ProbeWindow : Window;
+        if (m_Count < window) {
+            return update;
+        }
+        m_Count = 0;
+
+        // Under a real limit every interval is at least the limit. A stream
+        // between two limits mixes both lengths, and the shorter ones are
+        // fewer the closer it is to the slower one, so only the shortest few
+        // decide: a 51 FPS stream at 90 Hz has 23% one-refresh intervals.
+        std::array<uint32_t, Window> sorted = m_Intervals;
+        const size_t rank = std::max<size_t>(1, window / 16);
+        std::nth_element(sorted.begin(), sorted.begin() + rank, sorted.begin() + window);
+        uint32_t refreshes = uint32_t(std::max(1L, std::lround(sorted[rank] / refreshPeriodUs)));
+        // A stream slower than that spaces its frames out by itself, and a
+        // grid spaced to it would only drop frames
+        const uint64_t arrivals = m_Arrivals - m_WindowArrivals;
+        const double arrivalPeriodUs = arrivals != 0 ? double(nowUs - m_WindowStartUs) / double(arrivals)
+                                                     : double(GapUs);
+        if (refreshes > 1 && std::max(sourcePeriodUs, arrivalPeriodUs) >= refreshes * refreshPeriodUs * 0.9) {
+            refreshes = 1;
+        }
+        refreshes = std::min(refreshes, MaxRefreshes);
+
+        const bool probe = m_Probing;
+        const uint32_t before = probe ? m_ProbeFrom : m_Refreshes;
+        m_Probing = false;
+        if (refreshes == before) {
+            if (probe) {
+                m_ProbeIntervalUs = std::min(m_ProbeIntervalUs * 2, MaxProbeUs);
+                m_ProbeAtUs = nowUs + m_ProbeIntervalUs;
+                m_Refreshes = refreshes;
+                update.changed = true;
+            }
+            return update;
+        }
+        update.measured = true;
+        update.changed = refreshes != m_Refreshes;
+        m_Refreshes = refreshes;
+        m_ProbeIntervalUs = FirstProbeUs;
+        m_ProbeAtUs = nowUs + FirstProbeUs;
+        return update;
+    }
+
+    uint32_t refreshes() const { return m_Refreshes; }
+    bool probing() const { return m_Probing; }
+
+private:
+    std::array<uint32_t, Window> m_Intervals {};
+    size_t m_Count = 0;
+    uint64_t m_LastDisplayUs = 0;
+    uint32_t m_Refreshes = 1;
+    uint64_t m_Arrivals = 0;
+    uint64_t m_WindowStartUs = 0;
+    uint64_t m_WindowArrivals = 0;
+    bool m_Probing = false;
+    uint32_t m_ProbeFrom = 1;
+    uint64_t m_ProbeAtUs = 0;
+    uint64_t m_ProbeIntervalUs = FirstProbeUs;
+};
+
 // Chooses each frame's target from its timestamp and readiness
 class Policy
 {
