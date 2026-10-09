@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <deque>
 #include <exception>
 
 using namespace Overlay;
@@ -74,6 +75,36 @@ float StatsGraphs::scale() const
     return viewportHeight > 0 ? std::clamp(viewportHeight / 1080.0f, 0.75f, 3.0f) : 1.0f;
 }
 
+namespace {
+
+// Keeps the last few measurements of one cost, for the card's footer
+struct CostHistory {
+    std::deque<float> values;
+
+    void add(float value, size_t limit)
+    {
+        values.push_back(value);
+        while (values.size() > limit) {
+            values.pop_front();
+        }
+    }
+
+    void summarize(int& count, float& mean, float& peak) const
+    {
+        count = (int)values.size();
+        mean = peak = 0;
+        for (float value : values) {
+            mean += value;
+            peak = std::max(peak, value);
+        }
+        if (count != 0) {
+            mean /= count;
+        }
+    }
+};
+
+}
+
 void StatsGraphs::run()
 {
     using Clock = std::chrono::steady_clock;
@@ -90,6 +121,10 @@ void StatsGraphs::run()
     // with every update, and following it exactly would resize a card that
     // has been squeezed beside it once a second.
     int textWidth = 0;
+    // What the card costs, over as many repaints as fit in the plotted window
+    const size_t costLimit = (size_t)std::max(1, (m_Config.windowSeconds * 1000) / k_RepaintIntervalMs);
+    CostHistory paintCost;
+    CostHistory uploadCost;
 
     for (;;) {
         {
@@ -120,6 +155,22 @@ void StatsGraphs::run()
             // tick the graphs are turned on so they don't appear blank.
             if (!wasEnabled ||
                     now - lastRepaint >= std::chrono::milliseconds(k_RepaintIntervalMs)) {
+                // The upload of the card painted last time. Whatever was
+                // measured before the graphs last appeared is stale, and may
+                // be the hand-off of their removal.
+                const int64_t uploadNs = m_OverlayManager->takeOverlayDispatchNs(OverlayDebugGraphs);
+                if (!wasEnabled) {
+                    paintCost.values.clear();
+                    uploadCost.values.clear();
+                }
+                else if (uploadNs >= 0) {
+                    uploadCost.add((float)(uploadNs / 1000000.0), costLimit);
+                }
+
+                StatsGraphOverlayCost cost;
+                paintCost.summarize(cost.paintCount, cost.paintMs, cost.paintMaxMs);
+                uploadCost.summarize(cost.uploadCount, cost.uploadMs, cost.uploadMaxMs);
+
                 // The summary stands in for the text overlay, so it only
                 // appears while that is hidden.
                 const bool textShown = m_OverlayManager->isOverlayEnabled(OverlayDebug);
@@ -136,13 +187,19 @@ void StatsGraphs::run()
                     maxWidth = std::max(1, maxWidth - textWidth);
                 }
 
+                // The card shows the cost of the paints before it, since its
+                // own isn't known until it is done.
+                const auto paintStarted = Clock::now();
                 SDL_Surface* surface = Painter::paintStatsGraphs(m_Points,
                                                                  m_MaxSamples,
                                                                  m_Config,
                                                                  counters.streamInfo,
                                                                  !textShown,
+                                                                 cost,
                                                                  scale(),
                                                                  QSize(maxWidth, maxHeight));
+                paintCost.add(std::chrono::duration<float, std::milli>(Clock::now() - paintStarted).count(),
+                              costLimit);
                 if (surface != nullptr || !publishedBlank) {
                     // Not retained: this repaints often enough to cover a
                     // renderer change by itself.

@@ -245,6 +245,20 @@ struct StatsGraphPoint {
     float audioDeviceRequestMs = 0;
 };
 
+// What the graph card itself costs to produce, for the footer it shows that
+// in. Means and peaks over the plotted window, in milliseconds. Each count is
+// zero until there is a measurement to show.
+struct StatsGraphOverlayCost {
+    // Painting the card on the CPU
+    int paintCount = 0;
+    float paintMs = 0;
+    float paintMaxMs = 0;
+    // Handing the painted card to the renderer, which uploads it as a texture
+    int uploadCount = 0;
+    float uploadMs = 0;
+    float uploadMaxMs = 0;
+};
+
 // Samples stream statistics on a fixed interval and publishes a painted plot of
 // the last few seconds to the debug graph overlay. While the debug text overlay
 // is hidden, the card also summarizes the stream it would otherwise describe.

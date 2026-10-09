@@ -353,6 +353,11 @@ int OverlayManager::getOverlayWidth(OverlayType type)
     return SDL_AtomicGet(&m_Overlays[type].publishedWidth);
 }
 
+int64_t OverlayManager::takeOverlayDispatchNs(OverlayType type)
+{
+    return m_Overlays[type].dispatchNs.exchange(-1, std::memory_order_relaxed);
+}
+
 int OverlayManager::getOverlayMaxTextLength()
 {
     return sizeof(m_Overlays[0].text);
@@ -613,8 +618,10 @@ void OverlayManager::run()
         if (publish) {
             const auto dispatch = Clock::now();
             m_Renderer->notifyOverlayUpdated(type);
+            const int64_t dispatchNs = ns(Clock::now() - dispatch);
+            overlay.dispatchNs.store(dispatchNs, std::memory_order_relaxed);
             m_Renderer->recordOverlayTiming({type, revision, ns(started - queued),
-                                            ns(rasterized - started), ns(Clock::now() - dispatch)});
+                                            ns(rasterized - started), dispatchNs});
         }
     }
 }

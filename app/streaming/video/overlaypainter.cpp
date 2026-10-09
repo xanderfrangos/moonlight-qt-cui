@@ -724,6 +724,26 @@ QStringList streamInfoChips(const StatsGraphStreamInfo& info)
     return chips;
 }
 
+// The footer's account of what the card costs, as mean and peak. Costs under a
+// millisecond get a second decimal so they don't all read as 0.0.
+QString overlayCostText(const StatsGraphOverlayCost& cost)
+{
+    auto part = [](const char* name, int count, float mean, float peak) {
+        if (count == 0) {
+            return QStringLiteral("%1 --").arg(QString::fromUtf8(name));
+        }
+        const int decimals = peak < 1 ? 2 : 1;
+        return QStringLiteral("%1 %2 ms (peak %3)")
+                .arg(QString::fromUtf8(name))
+                .arg(mean, 0, 'f', decimals)
+                .arg(peak, 0, 'f', decimals);
+    };
+
+    return QStringLiteral("Overlay cost:  %1  ·  %2")
+            .arg(part("paint", cost.paintCount, cost.paintMs, cost.paintMaxMs),
+                 part("upload", cost.uploadCount, cost.uploadMs, cost.uploadMaxMs));
+}
+
 }
 
 SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& points,
@@ -731,6 +751,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
                                        const StatsGraphConfig& config,
                                        const StatsGraphStreamInfo& streamInfo,
                                        bool showStreamInfo,
+                                       const StatsGraphOverlayCost& cost,
                                        qreal scale,
                                        QSize maxSize)
 {
@@ -935,6 +956,7 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
 
     QFontMetricsF headerMetrics(headerFont);
     QFontMetricsF chipMetrics(chipFont);
+    QFontMetricsF scaleMetrics(scaleFont);
 
     // Chips flow left to right and wrap within the width the graphs set
     std::vector<QRectF> chipRects;
@@ -968,6 +990,9 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
         cardHeight += headerMetrics.height() + graphGap +
                       (graphHeight * graphRows) + (graphGap * (graphRows - 1));
     }
+    // The cost footer, below whatever the card shows above it
+    const qreal footerHeight = scaleMetrics.height();
+    cardHeight += graphGap + footerHeight;
 
     // Shrink to fit the space available rather than running off the screen,
     // down to a size that is still legible.
@@ -1132,6 +1157,14 @@ SDL_Surface* Painter::paintStatsGraphs(const std::vector<StatsGraphPoint>& point
                       opacityFactor, frametimeMin, frametimeMax);
         }
     }
+
+    const QRectF footerRect(contentLeft, cardRect.bottom() - cardPadding - footerHeight,
+                            contentRight - contentLeft, footerHeight);
+    painter.setFont(scaleFont);
+    painter.setPen(palette.secondaryText);
+    painter.drawText(footerRect, Qt::AlignLeft | Qt::AlignVCenter,
+                     scaleMetrics.elidedText(overlayCostText(cost), Qt::ElideRight,
+                                             footerRect.width()));
 
     painter.end();
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -117,6 +118,13 @@ public:
     // or 0 if nothing is shown. Safe to call from any thread.
     int getOverlayWidth(OverlayType type);
 
+    // How long the renderer took to take the last surface published for an
+    // overlay, in nanoseconds. That is the texture upload on renderers that do
+    // it on the overlay worker; those that defer it to their render thread
+    // return almost at once. Each measurement is returned once, and -1 means
+    // nothing was published since the last call. Safe to call from any thread.
+    int64_t takeOverlayDispatchNs(OverlayType type);
+
     // Places an overlay of the given size within a viewport and returns the size
     // it should be drawn at, which differs from the surface size for anchors that
     // scale. Renderers whose coordinate space puts the origin in the lower-left
@@ -169,6 +177,8 @@ private:
 
         // Written by the overlay worker when it publishes
         SDL_atomic_t publishedWidth = {};
+        // Written by the overlay worker after the renderer takes the surface
+        std::atomic<int64_t> dispatchNs{-1};
 
         TTF_Font* font = nullptr; // Owned exclusively by the overlay worker.
         SDL_Surface* surface = nullptr; // Atomic ownership transfer to renderer.

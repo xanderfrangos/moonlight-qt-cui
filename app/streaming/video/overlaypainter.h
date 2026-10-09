@@ -42,7 +42,8 @@ SDL_Surface* paintGamepadMenu(const QString& title,
 // maxPoints is the number of samples a full window holds. The config picks
 // which graphs appear and how they look. showStreamInfo adds a summary of the
 // stream above the graphs; its frame rate also sets the frametime graphs'
-// target line. The card is drawn at the given scale, shrunk as needed to fit
+// target line. A footer reports what the card itself costs to paint and
+// upload. The card is drawn at the given scale, shrunk as needed to fit
 // maxSize where that is set. Returns an ARGB8888 surface owned by the caller,
 // or nullptr if there is nothing to draw or on failure.
 SDL_Surface* paintStatsGraphs(const std::vector<StatsGraphPoint>& points,
@@ -50,6 +51,7 @@ SDL_Surface* paintStatsGraphs(const std::vector<StatsGraphPoint>& points,
                               const StatsGraphConfig& config,
                               const StatsGraphStreamInfo& streamInfo,
                               bool showStreamInfo,
+                              const StatsGraphOverlayCost& cost,
                               qreal scale,
                               QSize maxSize);
 
