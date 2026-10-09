@@ -564,6 +564,12 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
     const qreal plotRange = scale - baseline;
     const qreal midY = plotRect.center().y();
 
+    // The data is drawn without antialiasing. Every plot redraws a long
+    // polygon and polyline on every repaint, and antialiased fills and strokes
+    // are among the slowest things QPainter's raster engine does, which adds
+    // up on slower CPUs such as the Steam Deck's.
+    painter.setRenderHint(QPainter::Antialiasing, false);
+
     // Draw the target only when it fits the data-focused frametime view.
     // An off-scale target must not flatten the observed variation.
     if (target > baseline && target < scale) {
@@ -646,6 +652,8 @@ void drawGraph(QPainter& painter, const QRectF& plotRect, const GraphSpec& spec,
 
         painter.setClipping(false);
     }
+
+    painter.setRenderHint(QPainter::Antialiasing, true);
 
     // The window's range, so min and max are readable as numbers and not only
     // as the extent of the band.
