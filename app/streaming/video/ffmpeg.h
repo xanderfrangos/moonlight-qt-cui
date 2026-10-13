@@ -14,6 +14,7 @@
 #include "ffmpeg-renderers/pacer/pacer.h"
 #include "statsgraphs.h"
 #include "pyrowave/pyrowaveframing.h"
+#include "pyrowave/pyrowavepacketlosswarning.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -65,7 +66,7 @@ private:
 
     bool finishRenderInitialization(PDECODER_PARAMETERS params);
 
-    void stringifyVideoStats(VIDEO_STATS& stats, char* output, int length);
+    void stringifyVideoStats(VIDEO_STATS& stats, char* output, int length, bool detailed = false);
 
     void logVideoStats(VIDEO_STATS& stats, const char* title);
 
@@ -167,6 +168,7 @@ private:
     // sampling starts rather than on every sample.
     uint32_t m_StatsGraphPacketWireBytes;
     ClientPacingWarning m_ClientPacingWarning;
+    PyroWavePacketLossWarning m_PyroWavePacketLossWarning;
     uint64_t m_LastTimingGraphUs = 0;
     bool m_VrrUsesMaximumBuffer = false;
     std::set<IFFmpegRenderer::RendererType> m_FailedRenderers;
@@ -192,6 +194,8 @@ private:
     QQueue<uint64_t> m_FrameSubmitTimeQueue;
     // Parallel to m_FrameSubmitTimeQueue: deliberate hold before submission.
     QQueue<uint64_t> m_FrameDecodeHoldQueue;
+    // Parallel to m_FrameDecodeHoldQueue: PyroWave packets zero-filled for loss.
+    QQueue<uint32_t> m_FrameLostPacketsQueue;
 
 #ifdef HAVE_PYROWAVE
     std::unique_ptr<PyroWaveDecoder> m_PyroWave;

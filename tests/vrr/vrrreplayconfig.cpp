@@ -362,8 +362,26 @@ bool validateVrrTimingParameters(const VrrTimingParameters& value,
             value.renderStartPreserveLearnedLead > 1 ||
             value.playoutDelayCapUsesObservedPeriod > 1 ||
             value.playoutCapacityTelemetry > 1 ||
+            value.playoutAbsorbedJitterRelease > 1 ||
+            value.playoutInputPercentileEnabled > 1 ||
             value.playoutGpuReadinessAdaptation > 1) {
-        return fail("prediction-only, display event requirement, native hitch adaptation, readiness adaptation, stable smoothness reference, learned preparation lead, observed-period cap, capacity telemetry, and GPU readiness flags must be 0 or 1");
+        return fail("prediction-only, display event requirement, native hitch adaptation, readiness adaptation, stable smoothness reference, learned preparation lead, observed-period cap, capacity telemetry, absorbed jitter release, and GPU readiness flags must be 0 or 1");
+    }
+    if (value.playoutInputPercentileToleranceUs != 0 &&
+        (value.playoutInputPercentileToleranceUs < 250 || value.playoutInputPercentileToleranceUs > 2000 ||
+         value.playoutInputPercentileToleranceUs % 250 != 0)) {
+        return fail("input percentile tolerance must be zero for historical strict coverage, or 250..2000us in 250us steps");
+    }
+    if (value.playoutInputPercentileEnabled &&
+        (value.playoutResponsiveBuffer < 12 || value.playoutPredictionOnly != 1 ||
+         value.playoutInputPercentileTargetPerMillion < 900000 ||
+         value.playoutInputPercentileTargetPerMillion > 999900 ||
+         value.playoutInputPercentileWindowUs < 10000000 ||
+         value.playoutInputPercentileWindowUs > 300000000 ||
+         value.playoutInputPercentileRiseUsPerSecond < 250 ||
+         value.playoutInputPercentileRiseUsPerSecond > 1000 ||
+         value.playoutInputPercentileFallUsPerSecond != 250)) {
+        return fail("experimental input percentile requires revision12+, prediction-only, explicit90..99.99% INPUT coverage,10..300s history,250..1000us/s rise and250us/s fall");
     }
     if (value.baseGuardDivisor == 0 ||
             value.pacingLatencyExtraPeriodDenominator == 0 ||
@@ -436,6 +454,9 @@ bool validateVrrTimingParameters(const VrrTimingParameters& value,
     if (value.nativeSynchronizedPresentation > 1) {
         return fail("native_synchronized_presentation must be 0 or 1");
     }
+    if (value.nativeScheduledPresentation > 1) {
+        return fail("native_scheduled_presentation must be 0 or 1");
+    }
     if (value.latencyFixEnabled > 1 || value.latencyFixAllRates > 1 || value.latencyFixDelayPeriodPerMille > 1000) {
         return fail("latency_fix_enabled and latency_fix_all_rates must be 0 or 1 and latency_fix_delay_period_per_mille must be in 0..1000");
     }
@@ -484,7 +505,7 @@ bool validateVrrTimingParameters(const VrrTimingParameters& value,
             value.playoutIntervalInitialMinimumSamples > 512) {
         return fail("initial interval calibration requires 250000..1000000 us and 2..512 samples");
     }
-    if (value.playoutResponsiveBuffer > 9 || (value.playoutResponsiveBuffer &&
+    if (value.playoutResponsiveBuffer > 12 || (value.playoutResponsiveBuffer &&
             (!value.playoutPredictionOnly || value.playoutReadinessHitchThresholdUs))) {
         return fail("playout_responsive_buffer requires prediction-only playout without historical hitch feedback");
     }

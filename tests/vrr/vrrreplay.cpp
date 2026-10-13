@@ -41,7 +41,6 @@ constexpr uint64_t kSyncAnchorTranslationJitterToleranceUs = 50;
 constexpr uint64_t kRawQpcTranslationToleranceUs = 2;
 constexpr uint64_t kSyncAnchorMinimumIntervalToleranceUs = 500;
 constexpr uint64_t kDisplaySignalConsistencyTolerancePpm = 100;
-constexpr uint64_t kCapturedWorkerQueueCapacity = 3;
 constexpr uint64_t kNativeBackendDxgi = 1;
 constexpr uint64_t kNativeBackendVulkan = 2;
 constexpr uint64_t kNativeBackendComposition = 3;
@@ -272,6 +271,8 @@ bool validateTraceRowSyntax(const QList<QByteArray>& header,
                             QString& error)
 {
     static const QSet<QByteArray> signedColumns {
+        "trajectory_successor_frame",
+        "input_percentile_last_input_required_us",
         "frame",
         "display_refresh_hz",
         "stream_rate_hz",
@@ -297,6 +298,8 @@ bool validateTraceRowSyntax(const QList<QByteArray>& header,
         "flip_protection_query_result",
     };
     static const QSet<QByteArray> booleanColumns {
+        "native_scheduled_presentation",
+        "decode_readiness_observed",
         "prepared_ahead",
         "flip_protection_checked",
         "flip_protection_pending",
@@ -531,6 +534,9 @@ struct Columns {
     int recordedTargetUs = -1;
     int presentStartUs = -1;
     int submissionBoundaryUs = -1;
+    int nativeScheduledPresentation = -1;
+    int nativeTargetUs = -1;
+    int schedulingBoundaryUs = -1;
     int presenterSubmissionTimeValid = -1;
     int presenterSubmissionTimeUs = -1;
     int presenterSubmissionTimeUsed = -1;
@@ -567,6 +573,11 @@ struct Columns {
     int externalRebaseFlags = -1;
     int midframeWindowStateFlags = -1;
     int deepTrace = -1;
+    int flipProtectionChecked = -1;
+    int flipProtectionQueryResult = -1;
+    int flipProtectionQueryStartUs = -1;
+    int flipProtectionQueryEndUs = -1;
+    int flipProtectionPending = -1;
     int nativePresentTimingValid = -1;
     int nativePresentStartUs = -1;
     int nativePresentEndUs = -1;
@@ -848,6 +859,9 @@ struct Columns {
         recordedTargetUs = find("target_us");
         presentStartUs = find("present_start_us");
         submissionBoundaryUs = find("submission_boundary_us");
+        nativeScheduledPresentation = find("native_scheduled_presentation");
+        nativeTargetUs = find("native_target_us");
+        schedulingBoundaryUs = find("scheduling_boundary_us");
         presenterSubmissionTimeValid =
             find("presenter_submission_time_valid");
         presenterSubmissionTimeUs =
@@ -888,6 +902,11 @@ struct Columns {
         midframeWindowStateFlags =
             find("midframe_window_state_flags");
         deepTrace = find("deep_trace");
+        flipProtectionChecked = find("flip_protection_checked");
+        flipProtectionQueryResult = find("flip_protection_query_result");
+        flipProtectionQueryStartUs = find("flip_protection_query_start_us");
+        flipProtectionQueryEndUs = find("flip_protection_query_end_us");
+        flipProtectionPending = find("flip_protection_pending");
         nativePresentTimingValid = find("native_present_timing_valid");
         nativePresentStartUs = find("native_present_start_us");
         nativePresentEndUs = find("native_present_end_us");
@@ -1967,6 +1986,17 @@ struct Metrics {
     uint64_t nativeOutcomeRelationshipMismatchRows = 0;
     uint64_t hadPriorSubmissionMismatches = 0;
     uint64_t submissionBoundaryMismatches = 0;
+    uint64_t nativeScheduledRows = 0;
+    uint64_t nativeScheduledAcceptedRows = 0;
+    uint64_t nativeScheduledAheadRows = 0;
+    Distribution nativeEnqueueLeadUs;
+    Distribution nativeEnqueueLatenessUs;
+    uint64_t nativeSchedulingRelationshipMismatches = 0;
+    uint64_t nativeTargetClockObservedRows = 0;
+    uint64_t nativeTargetClockRelationshipMismatches = 0;
+    uint64_t nativeQueueEvidenceMismatches = 0;
+    uint64_t nativeDisplayTargetComparisons = 0;
+    uint64_t nativeDisplayBeforeTargetRows = 0;
     uint64_t submitErrorMismatches = 0;
     uint64_t submissionSpacingMismatches = 0;
     uint64_t spacingMarginMismatches = 0;
@@ -3519,6 +3549,9 @@ QJsonObject summaryObject(const Metrics& metrics, qint64 elapsedMs,
         metrics.presenterSubmissionTimingRelationshipMismatchRows == 0 &&
         metrics.hadPriorSubmissionMismatches == 0 &&
         metrics.submissionBoundaryMismatches == 0 &&
+        metrics.nativeSchedulingRelationshipMismatches == 0 &&
+        metrics.nativeTargetClockRelationshipMismatches == 0 &&
+        metrics.nativeQueueEvidenceMismatches == 0 &&
         metrics.submitErrorMismatches == 0 &&
         metrics.submissionSpacingMismatches == 0 &&
         metrics.spacingMarginMismatches == 0 &&
@@ -3650,6 +3683,16 @@ QJsonObject summaryObject(const Metrics& metrics, qint64 elapsedMs,
         static_cast<qint64>(metrics.submitErrorMismatches);
     semanticIntegrity["submission_spacing_mismatches"] =
         static_cast<qint64>(metrics.submissionSpacingMismatches);
+    semanticIntegrity["native_scheduled_rows"] =
+        static_cast<qint64>(metrics.nativeScheduledRows);
+    semanticIntegrity["native_scheduling_relationship_mismatches"] =
+        static_cast<qint64>(metrics.nativeSchedulingRelationshipMismatches);
+    semanticIntegrity["native_target_clock_observed_rows"] =
+        static_cast<qint64>(metrics.nativeTargetClockObservedRows);
+    semanticIntegrity["native_target_clock_relationship_mismatches"] =
+        static_cast<qint64>(metrics.nativeTargetClockRelationshipMismatches);
+    semanticIntegrity["native_queue_evidence_mismatches"] =
+        static_cast<qint64>(metrics.nativeQueueEvidenceMismatches);
     semanticIntegrity["spacing_margin_mismatches"] =
         static_cast<qint64>(metrics.spacingMarginMismatches);
     semanticIntegrity[
@@ -3676,6 +3719,21 @@ QJsonObject summaryObject(const Metrics& metrics, qint64 elapsedMs,
         static_cast<qint64>(metrics.tearRiskMismatches);
     semanticIntegrity["valid"] = semanticIntegrityReady;
     capture["row_semantic_integrity"] = semanticIntegrity;
+    QJsonObject nativeScheduling;
+    nativeScheduling["requested_lifecycle_rows"] = static_cast<qint64>(metrics.nativeScheduledRows);
+    nativeScheduling["accepted_rows"] = static_cast<qint64>(metrics.nativeScheduledAcceptedRows);
+    nativeScheduling["enqueued_before_target_rows"] = static_cast<qint64>(metrics.nativeScheduledAheadRows);
+    nativeScheduling["enqueued_at_or_after_target_rows"] = static_cast<qint64>(
+        metrics.nativeScheduledAcceptedRows - metrics.nativeScheduledAheadRows);
+    nativeScheduling["positive_enqueue_lead_us"] = distributionObject(metrics.nativeEnqueueLeadUs);
+    nativeScheduling["enqueue_lateness_us"] = distributionObject(metrics.nativeEnqueueLatenessUs);
+    nativeScheduling["native_target_clock_observed_rows"] = static_cast<qint64>(metrics.nativeTargetClockObservedRows);
+    nativeScheduling["matched_display_target_comparisons"] = static_cast<qint64>(metrics.nativeDisplayTargetComparisons);
+    nativeScheduling["display_before_target_outside_uncertainty_rows"] = static_cast<qint64>(metrics.nativeDisplayBeforeTargetRows);
+    nativeScheduling["display_target_scope"] =
+        "Windows attempts presentation close to the requested target. Earlier or later observed display events are diagnostics, not corrupted capture evidence.";
+    nativeScheduling["display_queue_counterfactual_available"] = false;
+    capture["native_scheduling"] = nativeScheduling;
 
     const uint64_t presentedFrames = metrics.presentedFrames;
     const auto exactScheduledDistribution =
@@ -5060,6 +5118,8 @@ QJsonObject summaryObject(const Metrics& metrics, qint64 elapsedMs,
         metrics.nativePresentBoundaryMismatches == 0;
     nativeBoundaryConsistency["native_present_start_minus_submission_boundary_us"] =
         signedAccumulatorObject(metrics.observedNativePresentBoundaryDelta);
+    nativeBoundaryConsistency["native_scheduled_boundary_scope"] =
+        "Native scheduled composition retains the presentation wrapper bracket and reports the actual IPresentationManager::Present call inside it; identity with wrapper start is not required.";
     telemetryCoverage["native_present_boundary_consistency"] =
         nativeBoundaryConsistency;
     QJsonObject syncAnchorIntegrity;
@@ -5577,6 +5637,9 @@ QJsonObject summaryObject(const Metrics& metrics, qint64 elapsedMs,
     simulation["native_presentation_permission_scope"] =
         "Retains the captured session's tearing permission. Controller spacing and raster classifications remain timing proxies; disabling permission does not establish optical tear absence or model changed native blocking.";
     simulation["can_latch_present"] = simulatedCanLatch;
+    simulation["native_future_target_queue_model_available"] = false;
+    simulation["native_scheduled_execution_scope"] =
+        "Native scheduled captures retain actual CPU enqueue, requested display deadline and post-enqueue cadence hold independently. Candidate execution retains captured native service; it does not simulate a changed Windows presentation queue or establish physical display smoothness.";
     simulation["scenario"] = scenario.name;
     simulation["mode"] = scenario.mode;
     QJsonObject resolvedParameters;
@@ -6102,6 +6165,7 @@ QJsonObject summaryObject(const Metrics& metrics, qint64 elapsedMs,
         metrics.presentOperationDurationMismatchRows == 0 &&
         metrics.nativePresentOrderViolations == 0 &&
         metrics.nativePresentDurationMismatchRows == 0 &&
+        metrics.nativeRasterTimingOrderMismatchRows == 0 &&
         metrics.gpuReadyOrderViolations == 0 &&
         metrics.gpuReadyDurationMismatchRows == 0 &&
         (!metrics.gpuReadyStageTimingTelemetryAvailable ||
@@ -7962,6 +8026,9 @@ int main(int argc, char* argv[])
     QCommandLineOption exactOption(
         "require-exact-baseline",
         "Fail unless the trace sequence is complete and an unmodified configuration exactly reproduces all controller decision fields, submissions, tear classes, and raster-envelope classes");
+    QCommandLineOption restoredStartSeedOption(
+        "recorded-start-delay-seed-us",
+        "Explicitly restore an externally corroborated startup seed omitted by an older trace writer; retain every original decision audit and label the reconstructed input in fidelity", "us");
     QCommandLineOption controllerReadyOption(
         "require-controller-ready",
         "Fail unless the capture passes every controller-replay readiness gate");
@@ -8000,6 +8067,7 @@ int main(int argc, char* argv[])
     parser.addOption(outputOption);
     parser.addOption(timelineOption);
     parser.addOption(exactOption);
+    parser.addOption(restoredStartSeedOption);
     parser.addOption(controllerReadyOption);
     parser.addOption(diagnosticCaptureReadyOption);
     parser.addOption(rasterReadyOption);
@@ -8054,6 +8122,15 @@ int main(int argc, char* argv[])
         std::fprintf(stderr,
                      "--require-exact-baseline cannot be used with candidate overrides\n");
         return 2;
+    }
+    uint64_t restoredStartSeedUs = 0;
+    if (parser.isSet(restoredStartSeedOption)) {
+        bool seedOk = false;
+        restoredStartSeedUs = parser.value(restoredStartSeedOption).toULongLong(&seedOk);
+        if (!seedOk || restoredStartSeedUs > uint64_t(std::numeric_limits<qint64>::max())) {
+            std::fprintf(stderr, "--recorded-start-delay-seed-us must be a nonnegative integer within signed 64-bit range\n");
+            return 2;
+        }
     }
     int displayOverrideHz = 0;
     int streamOverrideFps = 0;
@@ -8214,6 +8291,8 @@ int main(int argc, char* argv[])
             if (parser.isSet(streamOption)) arguments << "--stream-fps" << parser.value(streamOption);
             if (parser.isSet(latchOption)) arguments << "--no-latch";
             if (parser.isSet(compareOption)) arguments << "--compare" << parser.value(compareOption);
+            if (parser.isSet(restoredStartSeedOption))
+                arguments << "--recorded-start-delay-seed-us" << parser.value(restoredStartSeedOption);
             if (parser.isSet(controllerReadyOption))
                 arguments << "--require-controller-ready";
             if (parser.isSet(diagnosticCaptureReadyOption))
@@ -8595,6 +8674,7 @@ int main(int argc, char* argv[])
     VrrSessionConfig capturedConfig;
     VrrSessionConfig simulatedConfig;
     VrrTimingParameters capturedParameters;
+    uint64_t serializedStartSeedUs = 0;
     QMap<int, QByteArray> capturedParameterValues;
     std::unique_ptr<VrrTimingController> referenceController;
     std::unique_ptr<VrrTimingController> simulatedController;
@@ -8668,6 +8748,8 @@ int main(int argc, char* argv[])
         bool recordedValidationCounted = false;
         bool simulatedValidationCounted = false;
         bool simulatedRefreshCompared = false;
+        uint64_t nativeDisplayDeadlineUs = 0;
+        uint64_t nativeDisplayDeadlineUncertaintyUs = 0;
     };
     std::deque<SubmissionBand> pendingSubmissionBands;
 
@@ -8862,6 +8944,16 @@ int main(int argc, char* argv[])
             fields, traceHeader.indexOf("flip_protection_latched")) != 0;
         const uint64_t rowFlipProtectionReferenceUs = optionalUnsignedField(
             fields, traceHeader.indexOf("flip_protection_reference_us"));
+        const bool rowFlipProtectionChecked = optionalUnsignedField(
+            fields, columns.flipProtectionChecked) != 0;
+        const int64_t rowFlipProtectionQueryResult = optionalSignedField(
+            fields, columns.flipProtectionQueryResult);
+        const uint64_t rowFlipProtectionQueryStartUs = optionalUnsignedField(
+            fields, columns.flipProtectionQueryStartUs);
+        const uint64_t rowFlipProtectionQueryEndUs = optionalUnsignedField(
+            fields, columns.flipProtectionQueryEndUs);
+        const bool rowFlipProtectionPending = optionalUnsignedField(
+            fields, columns.flipProtectionPending) != 0;
         const bool rowAllowTearing = columns.sessionAllowTearing < 0 ||
             unsignedField(fields, columns.sessionAllowTearing) != 0;
         const bool deepTraceRow = optionalUnsignedField(
@@ -8871,6 +8963,12 @@ int main(int argc, char* argv[])
             unsignedField(fields, columns.presented) != 0;
         const bool cancelled =
             unsignedField(fields, columns.cancelled) != 0;
+        const bool nativeScheduledLifecycle = optionalUnsignedField(
+            fields, columns.nativeScheduledPresentation) != 0;
+        const uint64_t nativeTargetUs = optionalUnsignedField(
+            fields, columns.nativeTargetUs);
+        const uint64_t priorActualSubmissionUs = priorRecordedSubmissionUs;
+        metrics.nativeScheduledRows += nativeScheduledLifecycle ? 1 : 0;
         const bool presenterSubmissionTimeDeclared =
             optionalUnsignedField(
                 fields, columns.presenterSubmissionTimeValid) != 0;
@@ -10526,26 +10624,35 @@ int main(int argc, char* argv[])
                         nativeRasterAfterQueryResult)];
             }
 
-            const bool beforeQueryExpected =
+            const bool alignmentQueryExpected =
                 nativeDxgiPresentAttempt &&
                 deepTraceRow &&
                 nativeRasterSamplingRequested &&
                 nativeRasterSourceDeclared;
-            const bool afterQueryExpected = beforeQueryExpected;
+            // Production protection may take a single before-Present raster
+            // sample without enabling paired alignment diagnostics. It can
+            // also veto before querying the raster, so this sample is optional.
+            const bool protectionQueryAllowed =
+                nativeDxgiPresentAttempt && rowFlipProtectionChecked &&
+                rowFlipProtectionQueryResult == 0 && !rowFlipProtectionPending &&
+                nativeSameGpuOutput && nativeVblankVirtualizationDisabled &&
+                nativeDisplayPathDeclared && nativeDisplayTargetAvailable &&
+                nativeDisplaySignalDeclared && nativeRenderAdapterLuidDeclared &&
+                nativeDisplaySourceAdapterLuid == nativeRenderAdapterLuid &&
+                nativeRasterSourceDeclared &&
+                nativeRasterVidPnSourceId == nativeDisplaySourceId;
             const bool relationshipValid =
                 (!nativeRasterSamplingRequested ||
                  nativeDxgiPresentAttempt) &&
-                (nativeRasterOpenResultDeclared ==
-                    nativeRasterSamplingRequested) &&
+                (!nativeRasterOpenResultDeclared || nativeDxgiPresentAttempt) &&
+                (!nativeRasterSamplingRequested || nativeRasterOpenResultDeclared) &&
                 (nativeRasterSourceDeclared ==
                     (nativeRasterOpenResultDeclared &&
                      nativeRasterOpenResult == 0)) &&
-                (!nativeRasterSourceDeclared ||
-                 nativeRasterSamplingRequested) &&
-                (nativeRasterBeforeQueryResultDeclared ==
-                    beforeQueryExpected) &&
-                (nativeRasterAfterQueryResultDeclared ==
-                    afterQueryExpected) &&
+                (nativeRasterBeforeQueryResultDeclared ?
+                    (alignmentQueryExpected || protectionQueryAllowed) :
+                    !alignmentQueryExpected) &&
+                (nativeRasterAfterQueryResultDeclared == alignmentQueryExpected) &&
                 (!nativeRasterBeforeQueryResultDeclared ||
                  nativeRasterBeforeQueryResult == 0 ||
                  (!nativeRasterBeforeInVerticalBlank &&
@@ -10566,6 +10673,13 @@ int main(int argc, char* argv[])
                         nativeRasterBeforeQueryEndUs &&
                     nativeRasterBeforeQueryEndUs <=
                         nativePresentStartUs;
+                if (!alignmentQueryExpected) {
+                    timingOrderValid = timingOrderValid &&
+                        rowFlipProtectionQueryStartUs != 0 &&
+                        rowFlipProtectionQueryStartUs <= nativeRasterBeforeQueryStartUs &&
+                        nativeRasterBeforeQueryEndUs <= rowFlipProtectionQueryEndUs &&
+                        rowFlipProtectionQueryEndUs <= nativePresentStartUs;
+                }
                 if (nativeRasterBeforeQueryEndUs >=
                         nativeRasterBeforeQueryStartUs) {
                     metrics.nativeRasterBeforeQueryDurationUs.add(
@@ -10627,7 +10741,7 @@ int main(int argc, char* argv[])
                     optionalUnsignedField(
                         fields, columns.nativePresentStartUs) :
                     0;
-            const SubmissionBand submissionBand {
+            SubmissionBand submissionBand {
                 optionalUnsignedField(fields, columns.submissionId),
                 roundedRateForPeriod(unsignedField(
                     fields, columns.sourcePeriodUs)),
@@ -10639,6 +10753,12 @@ int main(int argc, char* argv[])
                  rowFlipProtectionLatched) &&
                     unsignedField(fields, columns.canLatch) != 0,
             };
+            if (nativeScheduledLifecycle && !cancelled) {
+                submissionBand.nativeDisplayDeadlineUs = nativeTargetUs;
+                submissionBand.nativeDisplayDeadlineUncertaintyUs =
+                    optionalUnsignedField(fields,
+                        traceHeader.indexOf("native_target_uncertainty_us"));
+            }
             if (haveLatch && submissionBand.id < priorLatchSubmission) {
                 ++metrics.submissionSequenceResets;
                 haveLatch = false;
@@ -10670,20 +10790,23 @@ int main(int argc, char* argv[])
             fields, columns.queueDepthAfter);
         const uint64_t completionQueueDepth = optionalUnsignedField(
             fields, columns.completionQueueDepth);
+        const uint64_t capturedWorkerQueueCapacity = vrrRecordedWorkerQueueCapacity(
+            optionalUnsignedField(fields, columns.capturedParameterColumns.value(
+                "controller.playout_queue_frames", -1)));
         const uint64_t expectedQueueDepthAfter = queueAccepted ?
             std::min(
                 saturatingAdd(queueDepthBefore, 1),
-                kCapturedWorkerQueueCapacity) :
+                capturedWorkerQueueCapacity) :
             queueDepthBefore;
         const bool queueStateValid =
-            queueDepthBefore <= kCapturedWorkerQueueCapacity &&
-            queueDepthAfter <= kCapturedWorkerQueueCapacity &&
+            queueDepthBefore <= capturedWorkerQueueCapacity &&
+            queueDepthAfter <= capturedWorkerQueueCapacity &&
             queueDepthAfter == expectedQueueDepthAfter &&
             queueAccepted == (disposition != "arrival_rejected");
         metrics.queueStateMismatches += queueStateValid ? 0 : 1;
         if (metrics.completionQueueDepthTelemetryAvailable) {
             metrics.completionQueueDepthOutOfRangeRows +=
-                completionQueueDepth <= kCapturedWorkerQueueCapacity ? 0 : 1;
+                completionQueueDepth <= capturedWorkerQueueCapacity ? 0 : 1;
             metrics.observedCompletionQueueDepth.add(completionQueueDepth);
         }
         if (scenario.mode == "worker") {
@@ -10787,7 +10910,8 @@ int main(int argc, char* argv[])
                 // switched to actual post-wait clock readings. Source-map
                 // selection is independent of that timestamp contract.
                 optionalUnsignedField(fields, columns.capturedParameterColumns.value(
-                    QStringLiteral("controller.playout_serial_service_gate"), -1)) >= 2);
+                    QStringLiteral("controller.playout_serial_service_gate"), -1)) >= 2,
+                optionalUnsignedField(fields, traceHeader.indexOf("decode_readiness_observed")) != 0);
         const auto stageField = [&](const char* name) {
             return optionalUnsignedField(fields, traceHeader.indexOf(name));
         };
@@ -11764,6 +11888,14 @@ int main(int argc, char* argv[])
                     return 1;
                 }
             }
+            serializedStartSeedUs = capturedParameters.playoutDelayStartSeedUs;
+            if (parser.isSet(restoredStartSeedOption)) {
+                capturedParameters.playoutDelayStartSeedUs = restoredStartSeedUs;
+                std::fprintf(stderr,
+                    "Startup input reconstructed explicitly: serialized start-delay seed=%llu us, restored=%llu us; original decision audits remain active\n",
+                    (unsigned long long)serializedStartSeedUs,
+                    (unsigned long long)restoredStartSeedUs);
+            }
             capturedConfig.latencyFix = capturedParameters.latencyFixEnabled != 0 &&
                 capturedParameters.latencyFixAllRates == 0;
             capturedConfig.latencyMode = capturedParameters.latencyFixAllRates != 0 ?
@@ -11805,7 +11937,8 @@ int main(int argc, char* argv[])
                 scenario.controller = vrrTimingParametersForSession(
                     simulatedConfig, simulatedCanLatch &&
                         (capturedParameters.nativeSynchronizedPresentation != 0 ||
-                         (nativeBackendDeclared && nativeBackend == kNativeBackendComposition)));
+                         (nativeBackendDeclared && nativeBackend == kNativeBackendComposition)),
+                    capturedParameters.nativeScheduledPresentation != 0);
                 // The start seed came from this machine's cache, not policy.
                 scenario.controller.playoutDelayStartSeedUs =
                     capturedParameters.playoutDelayStartSeedUs;
@@ -12028,6 +12161,19 @@ int main(int argc, char* argv[])
             }
             const bool freshLatch =
                 !haveLatch || latchSubmission > priorLatchSubmission;
+            if (freshLatch && latchSubmissionInfo != nullptr &&
+                    latchSubmissionInfo->nativeDisplayDeadlineUs != 0 &&
+                    optionalUnsignedField(fields,
+                        traceHeader.indexOf("latch_time_kind")) == 2) {
+                const uint64_t uncertaintyUs = saturatingAdd(
+                    latchSubmissionInfo->nativeDisplayDeadlineUncertaintyUs,
+                    optionalUnsignedField(fields,
+                        traceHeader.indexOf("presentation_uncertainty_us")));
+                ++metrics.nativeDisplayTargetComparisons;
+                metrics.nativeDisplayBeforeTargetRows +=
+                    saturatingAdd(syncSampleUs, uncertaintyUs) <
+                        latchSubmissionInfo->nativeDisplayDeadlineUs ? 1 : 0;
+            }
             if (freshLatch && latchSubmissionInfo != nullptr) {
                 ++metrics.freshLatchSamplesMatchedToSubmission;
             }
@@ -12389,6 +12535,9 @@ int main(int argc, char* argv[])
                 columns.targetWaitFinalUs,
                 columns.presentStartUs,
                 columns.submissionBoundaryUs,
+                columns.nativeScheduledPresentation,
+                columns.nativeTargetUs,
+                columns.schedulingBoundaryUs,
                 columns.presenterSubmissionTimeValid,
                 columns.presenterSubmissionTimeUs,
                 columns.presenterSubmissionTimeUsed,
@@ -12695,6 +12844,12 @@ int main(int argc, char* argv[])
                          unsignedField(fields, columns.rtpValid) != 0,
                          decoderOutputUs);
         frame.noteGpuReadyUs(decodeCompleteUs);
+        const uint64_t lostPackets = optionalUnsignedField(fields, traceHeader.indexOf("lost_packets"));
+        if (lostPackets > UINT32_MAX) {
+            std::fprintf(stderr, "Packet loss input exceeds uint32 on frame %d\n", frameNumber);
+            return 2;
+        }
+        frame.setLostPackets(uint32_t(lostPackets));
         frame.noteDecodeSyncWaitUs(
             optionalUnsignedField(fields, columns.decodeSyncWaitUs));
         frame.setDeliveryTimeline(
@@ -12877,11 +13032,11 @@ int main(int argc, char* argv[])
             const bool submissionFloorPresent =
                 recordedSpacingCheckUs != 0 ||
                 recordedPresentationFloorUs != 0;
-            if ((presented && !submissionFloorPresent) ||
+            if ((!nativeScheduledLifecycle && presented && !submissionFloorPresent) ||
                     (submissionFloorPresent &&
                      (recordedSpacingCheckUs == 0 ||
-                      recordedPresentationFloorUs <
-                        unsignedField(fields, columns.recordedTargetUs)))) {
+                      (!nativeScheduledLifecycle && recordedPresentationFloorUs <
+                        unsignedField(fields, columns.recordedTargetUs))))) {
                 ++metrics.waitBoundaryOrderViolations;
             }
 
@@ -13114,6 +13269,32 @@ int main(int argc, char* argv[])
             referenceController->schedule(frame, decisionUs);
         const VrrTimingDecision simulatedDecision =
             simulatedController->schedule(frame, simulatedDecisionUs);
+        if (traceHeader.contains("trajectory_resync_dropped")) {
+            const bool resyncDrop=optionalUnsignedField(fields,traceHeader.indexOf("trajectory_resync_dropped"))!=0;
+            const bool resyncDeferred=optionalUnsignedField(fields,traceHeader.indexOf("trajectory_resync_deferred"))!=0;
+            if ((resyncDrop && resyncDeferred) || ((resyncDrop || resyncDeferred) && !referenceDecision.trajectory.resyncRecommended) ||
+                (resyncDrop && disposition!="stale")) ++metrics.invalidControllerLifecycleRows;
+            const int64_t successorFrame=optionalSignedField(fields,traceHeader.indexOf("trajectory_successor_frame"));
+            const uint64_t successorProof=optionalUnsignedField(fields,traceHeader.indexOf("trajectory_successor_proof"));
+            if(resyncDrop && (successorFrame<=frameNumber || (successorProof!=1 && successorProof!=2)))
+                ++metrics.invalidControllerLifecycleRows;
+            // This validates the recorded reservation contract, not physical GPU completion.
+            if(resyncDrop) {referenceController->noteTrajectoryResyncDrop();simulatedController->noteTrajectoryResyncDrop();}
+            if(resyncDeferred) {referenceController->noteTrajectoryDeferred();simulatedController->noteTrajectoryDeferred();}
+        }
+        if (traceHeader.contains("input_buffer_miss_observation_us")) {
+            const uint64_t missAtUs = optionalUnsignedField(fields,
+                traceHeader.indexOf("input_buffer_miss_observation_us"));
+            const bool networkMiss = optionalUnsignedField(fields,
+                traceHeader.indexOf("input_network_buffer_miss")) != 0;
+            const bool decoderMiss = optionalUnsignedField(fields,
+                traceHeader.indexOf("input_decode_buffer_miss")) != 0;
+            if (missAtUs && (networkMiss || decoderMiss)) {
+                referenceController->noteInputBufferMiss(missAtUs, networkMiss, decoderMiss);
+                simulatedController->noteInputBufferMiss(missAtUs, networkMiss, decoderMiss);
+            }
+        }
+
         timelineDetails.simulatedSourcePeriodUs =
             simulatedDecision.sourcePeriodUs;
         timelineDetails.simulatedReadyOffsetUs =
@@ -13136,8 +13317,14 @@ int main(int argc, char* argv[])
             simulatedDecision.phaseDiscontinuity;
         timelineDetails.simulatedSourceRateHz = roundedRateForPeriod(
             simulatedDecision.sourcePeriodUs);
-        timelineDetails.simulatedLatched =
-            simulatedDecision.latchedPresentation && simulatedCanLatch;
+        // Native protection is recorded execution evidence, already reused by
+        // tear classification and the submission anchor below. Keep raster and
+        // mode metadata consistent with it without changing the planned latch.
+        // Counterfactual replay does not predict a different driver's guard.
+        const bool simulatedNativeLatched =
+            (simulatedDecision.latchedPresentation || rowFlipProtectionLatched) &&
+            simulatedCanLatch;
+        timelineDetails.simulatedLatched = simulatedNativeLatched;
         const uint64_t recordedTargetUs = unsignedField(
             fields, columns.recordedTargetUs);
         const uint64_t referenceTargetDrift = absoluteValue(
@@ -13199,6 +13386,25 @@ int main(int argc, char* argv[])
                 ++metrics.invalidControllerLifecycleRows;
             }
         };
+        if (traceHeader.contains("trajectory_target_us")) {
+            auditBufferField("trajectory_nominal_us",referenceDecision.trajectory.nominalUs);
+            auditBufferField("trajectory_existing_us",referenceDecision.trajectory.existingUs);
+            auditBufferField("trajectory_target_us",referenceDecision.trajectory.targetUs);
+            auditBufferField("trajectory_added_us",referenceDecision.trajectory.addedUs);
+            auditBufferField("trajectory_carry_us",referenceDecision.trajectory.carryUs);
+            auditBufferField("trajectory_minimum_interval_us",referenceDecision.trajectory.minimumIntervalUs);
+            auditBufferField("trajectory_physical_period_us",referenceDecision.trajectory.physicalPeriodUs);
+            auditBufferField("trajectory_allowance_us",referenceDecision.trajectory.allowanceUs);
+            auditBufferField("trajectory_intended_interval_us",referenceDecision.trajectory.intendedIntervalUs);
+            auditBufferField("trajectory_plans",referenceDecision.trajectory.plans);
+            auditBufferField("trajectory_limited",referenceDecision.trajectory.limited);
+            auditBufferField("trajectory_resets",referenceDecision.trajectory.resets);
+            auditBufferField("trajectory_resync_drops",referenceDecision.trajectory.resyncDrops);
+            auditBufferField("trajectory_deferred",referenceDecision.trajectory.deferred);
+            auditBufferField("trajectory_continuity",referenceDecision.trajectory.continuity);
+            auditBufferField("trajectory_no_headroom",referenceDecision.trajectory.noHeadroom);
+            auditBufferField("trajectory_resync_recommended",referenceDecision.trajectory.resyncRecommended);
+        }
         if (traceHeader.contains("buffer_cap_us")) {
             auditBufferField("buffer_cap_us", referenceDecision.playoutDelayMaximumUs);
             auditBufferField("buffer_queue_limit_us", referenceDecision.playoutQueueLimitUs);
@@ -13225,6 +13431,67 @@ int main(int argc, char* argv[])
             auditBufferField("buffer_clipped_increase_us", update.clippedIncreaseUs);
             auditBufferField("buffer_hold_remaining_us", update.holdRemainingUs);
             auditBufferField("buffer_cooldown_remaining_us", update.cooldownRemainingUs);
+            if (traceHeader.contains("input_release_allowed")) {
+                const auto stats = referenceController->intervalStats();
+                auditBufferField("input_release_allowed", stats.inputReleaseAllowed);
+                auditBufferField("input_release_held", stats.inputReleaseHeld);
+                auditBufferField("input_release_unknown", stats.inputReleaseUnknown);
+                auditBufferField("input_evidence_us", stats.inputEvidenceUs);
+                auditBufferField("input_candidate_us", stats.inputCandidateUs);
+                auditBufferField("input_candidate_loss_per_million", uint64_t(stats.inputCandidateLoss * 1000000));
+                auditBufferField("input_current_loss_per_million", uint64_t(stats.inputCurrentLoss * 1000000));
+            }
+            if (traceHeader.contains("input_percentile_target_us")) {
+                const auto stats = referenceController->intervalStats().inputPercentile;
+                auditBufferField("input_percentile_target_us", stats.targetUs);
+                auditBufferField("input_percentile_current_us", stats.currentUs);
+                auditBufferField("input_percentile_samples", stats.samples);
+                auditBufferField("input_percentile_window_us", stats.windowUs);
+                auditBufferField("input_percentile_probability_ppm", stats.probabilityPpm);
+                auditBufferField("input_percentile_tail_uncertain", stats.tailUncertain);
+                auditBufferField("input_percentile_evidence_valid", stats.evidenceValid);
+                auditBufferField("input_percentile_clipped", stats.clipped);
+                auditBufferField("input_percentile_expired_unknown", stats.expiredUnknown);
+                auditBufferField("input_percentile_history_truncated", stats.historyTruncated);
+                auditBufferField("input_percentile_eligible", stats.eligible);
+                auditBufferField("input_percentile_ineligible", stats.ineligible);
+                auditBufferField("input_percentile_absorbed", stats.absorbed);
+                auditBufferField("input_percentile_missed", stats.missed);
+                auditBufferField("input_percentile_raises", stats.raises);
+                auditBufferField("input_percentile_lowers", stats.lowers);
+                auditBufferField("input_percentile_unknown_release", stats.unknownRelease);
+                auditBufferField("input_percentile_epoch_resets", stats.epochResets);
+                if (traceHeader.contains("input_percentile_recent_eligible")) {
+                    auditBufferField("input_percentile_recent_eligible", stats.recentEligible);
+                    auditBufferField("input_percentile_recent_absorbed", stats.recentAbsorbed);
+                    auditBufferField("input_percentile_recent_missed", stats.recentMissed);
+                }
+                if (traceHeader.contains("input_percentile_release_factor_ppm")) {
+                    auditBufferField("input_percentile_release_samples", stats.recentReleaseSamples);
+                    auditBufferField("input_percentile_release_misses", stats.recentReleaseMisses);
+                    auditBufferField("input_percentile_release_factor_ppm", stats.releaseFactorPpm);
+                    auditBufferField("input_percentile_effective_fall_rate_us_per_second", stats.effectiveFallRateUsPerSecond);
+                    auditBufferField("input_percentile_proposed_misses", stats.recentProposedMisses);
+                    auditBufferField("input_percentile_effective_fall_rate_milli_us_per_second", stats.effectiveFallRateMilliUsPerSecond);
+                }
+                if (traceHeader.contains("input_percentile_hold_until_us")) {
+                    auditBufferField("input_percentile_hold_until_us", stats.holdUntilUs);
+                    auditBufferField("input_percentile_hold_remaining_us", stats.holdRemainingUs);
+                    auditBufferField("input_percentile_last_buffer_miss_us", stats.lastBufferMissUs);
+                    auditBufferField("input_percentile_last_network_miss_us", stats.lastNetworkMissUs);
+                    auditBufferField("input_percentile_last_decoder_miss_us", stats.lastDecoderMissUs);
+                    auditBufferField("input_percentile_network_misses", stats.cumulativeNetworkMisses);
+                    auditBufferField("input_percentile_decoder_misses", stats.cumulativeDecoderMisses);
+                }
+                if (traceHeader.contains("input_percentile_growth_blocked")) {
+                    auditBufferField("input_percentile_last_input_eligible", stats.lastInputEligible);
+                    auditBufferField("input_percentile_last_input_observation_us", stats.lastInputObservationUs);
+                    auditBufferField("input_percentile_growth_blocked", stats.growthBlocked);
+                    const int column = traceHeader.indexOf("input_percentile_last_input_required_us");
+                    if (column < 0 || optionalSignedField(fields, column) != stats.lastInputRequiredUs)
+                        ++metrics.invalidControllerLifecycleRows;
+                }
+            }
             if (traceHeader.contains("buffer_calibration_complete")) {
                 const auto stats = referenceController->intervalStats();
                 auditBufferField("buffer_calibration_complete", stats.initialCalibrationComplete);
@@ -13306,12 +13573,64 @@ int main(int argc, char* argv[])
             fields, columns.renderStartUs);
         const uint64_t recordedSubmissionUs = unsignedField(
             fields, columns.submissionBoundaryUs);
+        const uint64_t recordedSchedulingBoundaryUs =
+            columns.schedulingBoundaryUs >= 0 ? optionalUnsignedField(
+                fields, columns.schedulingBoundaryUs) : recordedSubmissionUs;
+        const auto nativeSchedulingAudit = evaluateVrrNativeScheduling(
+            nativeScheduledLifecycle, presented, cancelled, recordedSubmissionUs,
+            nativeTargetUs, recordedSchedulingBoundaryUs);
+        if (nativeScheduledLifecycle && presented && !cancelled) {
+            ++metrics.nativeScheduledAcceptedRows;
+            metrics.nativeScheduledAheadRows += nativeTargetUs > recordedSubmissionUs ? 1 : 0;
+            metrics.nativeEnqueueLeadUs.add(positiveDifference(nativeTargetUs, recordedSubmissionUs));
+            metrics.nativeEnqueueLatenessUs.add(positiveDifference(recordedSubmissionUs, nativeTargetUs));
+        }
+        metrics.nativeSchedulingRelationshipMismatches +=
+            !nativeSchedulingAudit.relationshipValid ||
+            (nativeScheduledLifecycle && (columns.nativeTargetUs < 0 ||
+                                         columns.schedulingBoundaryUs < 0)) ||
+            (nativeScheduledLifecycle &&
+             capturedParameters.nativeScheduledPresentation == 0) ||
+            (nativeScheduledLifecycle && presented && !cancelled &&
+             (nativeTargetUs != recordedTargetUs || !nativeBackendDeclared ||
+              nativeBackend != kNativeBackendComposition)) ? 1 : 0;
         const uint64_t recordedPresentStartUs = optionalUnsignedField(
             fields, columns.presentStartUs);
         const uint64_t recordedPresentEndUs = optionalUnsignedField(
             fields, columns.presentEndUs);
         const uint64_t recordedPresentCallUs = unsignedField(
             fields, columns.presentCallUs);
+        const auto nativeField = [&](const char* name) {
+            return optionalUnsignedField(fields, traceHeader.indexOf(name));
+        };
+        const uint64_t nativeTarget100ns = nativeField("native_target_100ns");
+        const uint64_t nativeTargetReference100ns = nativeField("native_target_reference_100ns");
+        const uint64_t nativeClockBeforeUs = nativeField("native_target_clock_before_us");
+        const uint64_t nativeClockAfterUs = nativeField("native_target_clock_after_us");
+        const uint64_t nativeClockUncertaintyUs = nativeField("native_target_uncertainty_us");
+        const bool nativeClockEvidence = nativeTarget100ns != 0 ||
+            nativeTargetReference100ns != 0 || nativeClockBeforeUs != 0 ||
+            nativeClockAfterUs != 0 || nativeClockUncertaintyUs != 0;
+        if (nativeClockEvidence) {
+            ++metrics.nativeTargetClockObservedRows;
+            const auto clockAudit = evaluateVrrNativeTargetClock(
+                nativeTargetUs, nativeTarget100ns, nativeTargetReference100ns,
+                nativeClockBeforeUs, nativeClockAfterUs, nativeClockUncertaintyUs);
+            metrics.nativeTargetClockRelationshipMismatches +=
+                !clockAudit.relationshipValid ||
+                !nativeBackendDeclared || nativeBackend != kNativeBackendComposition ||
+                nativeClockBeforeUs < recordedPresentStartUs ||
+                nativeClockAfterUs > recordedPresentEndUs ||
+                (presented && nativeClockAfterUs > recordedSubmissionUs) ? 1 : 0;
+        }
+        const uint64_t nativeOutstanding = nativeField("native_outstanding_presents");
+        const uint64_t nativeRetiringId = nativeField("native_retiring_present_id");
+        const uint64_t nativeStatusId = nativeField("native_status_id");
+        const uint64_t currentSubmissionId = optionalUnsignedField(fields, columns.submissionId);
+        metrics.nativeQueueEvidenceMismatches +=
+            nativeOutstanding > 5 ||
+            (submissionIdValid && (nativeRetiringId > currentSubmissionId ||
+                                   nativeStatusId > currentSubmissionId)) ? 1 : 0;
         const uint64_t preparationUs = unsignedField(fields,
                                                       columns.preparationUs);
         const uint64_t simulatedPreparationUs =
@@ -13411,7 +13730,8 @@ int main(int argc, char* argv[])
                 recordedTargetWaitEntryUs -
                     recordedPreparationEndUs : 0;
         const uint64_t simulatedTargetWaitEntryUs = saturatingAdd(
-            simulatedPreparationEndUs, targetWaitEntryOffsetUs);
+            simulatedPreparationEndUs, saturatingAdd(targetWaitEntryOffsetUs,
+                nativeScheduledLifecycle ? injectedSubmissionDelayUs : 0));
         const bool exactTargetWaitLifecycle =
             metrics.waitLifecycleTelemetryAvailable &&
             targetWaitEvidence.callEntryUs != 0;
@@ -13542,7 +13862,8 @@ int main(int argc, char* argv[])
         uint64_t derivedSpacingGuardFeedbackUs =
             recordedSpacingGuardFeedbackUs;
         if (normalPresentationLifecycle &&
-                metrics.spacingLifecycleTimingTelemetryAvailable) {
+                metrics.spacingLifecycleTimingTelemetryAvailable &&
+                !nativeScheduledLifecycle) {
             const uint64_t minimumUntornUs =
                 spacingHadPriorSubmission ?
                     saturatingAdd(
@@ -13561,9 +13882,11 @@ int main(int argc, char* argv[])
             // Schema 3 stores the combined wait correction, not whether the
             // second check also fired the guard-learning callback. Treating
             // every first-check wait as feedback incorrectly inflates guard.
-            referenceController->noteSpacingDeficit(0);
-            simulatedController->noteSpacingDeficit(0);
-            if (derivedSpacingGuardFeedbackUs != 0) {
+            if (!nativeScheduledLifecycle) {
+                referenceController->noteSpacingDeficit(0);
+                simulatedController->noteSpacingDeficit(0);
+            }
+            if (derivedSpacingGuardFeedbackUs != 0 && !nativeScheduledLifecycle) {
                 referenceController->noteSpacingDeficit(
                     derivedSpacingGuardFeedbackUs);
             }
@@ -13571,7 +13894,7 @@ int main(int argc, char* argv[])
                 std::max(
                     derivedSpacingGuardFeedbackUs,
                     injectedSpacingGuardFeedbackUs);
-            if (simulatedSpacingGuardFeedbackUs != 0) {
+            if (simulatedSpacingGuardFeedbackUs != 0 && !nativeScheduledLifecycle) {
                 simulatedController->noteSpacingDeficit(
                     simulatedSpacingGuardFeedbackUs);
             }
@@ -13634,8 +13957,8 @@ int main(int argc, char* argv[])
         uint64_t expectedSubmissionSpacingUs = 0;
         int64_t expectedSpacingMarginUs = 0;
         if (presented && expectedHadPriorSubmission) {
-            const uint64_t priorSubmissionUs =
-                referenceController->lastSubmissionUs();
+            const uint64_t priorSubmissionUs = nativeScheduledLifecycle ?
+                priorActualSubmissionUs : referenceController->lastSubmissionUs();
             expectedSubmissionSpacingUs =
                 recordedSubmissionUs >= priorSubmissionUs ?
                     recordedSubmissionUs - priorSubmissionUs : 0;
@@ -13653,7 +13976,7 @@ int main(int argc, char* argv[])
                 expectedSpacingMarginUs ? 1 : 0;
         const bool recordedLatchedRequest =
             unsignedField(fields, columns.latchedPresent) != 0 ||
-            rowFlipProtectionLatched;
+            rowFlipProtectionLatched || nativeScheduledLifecycle;
         const QByteArray expectedRecordedTear =
             simulatedTearClassification(
                 presented, recordedLatchedRequest, rowCanLatch,
@@ -13692,7 +14015,26 @@ int main(int argc, char* argv[])
             metrics.presenterSubmissionTimestampUsedRows +=
                 presenterSubmissionTimeUsed ? 1 : 0;
         }
-        if (metrics.spacingLifecycleTimingTelemetryAvailable) {
+        if (metrics.spacingLifecycleTimingTelemetryAvailable &&
+                nativeScheduledLifecycle) {
+            const bool nativeSpacingValid =
+                recordedPresentationFloorUs == 0 &&
+                recordedSpacingDeficitUs == 0 &&
+                recordedSpacingGuardFeedbackUs == 0 &&
+                !recordedSpacingCorrected &&
+                recordedSpacingCorrectedFloorUs == 0 &&
+                recordedCorrectionWaitStartUs == 0 &&
+                recordedCorrectionWaitEndUs == 0 &&
+                (!normalPresentationLifecycle || !hasPresentOperation ||
+                 (recordedSpacingCheckUs >= recordedPreparationEndUs &&
+                  recordedSpacingRecheckUs >= recordedSpacingCheckUs &&
+                  recordedPresentStartUs >= recordedSpacingRecheckUs));
+            metrics.spacingLifecycleTimingRelationshipMismatchRows +=
+                nativeSpacingValid ? 0 : 1;
+            metrics.spacingLifecycleTimingValidatedRows +=
+                normalPresentationLifecycle ? 1 : 0;
+        }
+        else if (metrics.spacingLifecycleTimingTelemetryAvailable) {
             const VrrSpacingLifecycleTimingAudit spacingTimingAudit =
                 evaluateVrrSpacingLifecycleTiming(
                     normalPresentationLifecycle,
@@ -13736,10 +14078,11 @@ int main(int argc, char* argv[])
         if (traceSchema >= 5) {
             if (targetWaitPresent &&
                     recordedTargetWaitEntryUs <
-                        recordedPreparationEndUs) {
+                        (nativeScheduledLifecycle && hasPresentOperation ?
+                            recordedPresentEndUs : recordedPreparationEndUs)) {
                 ++metrics.waitBoundaryOrderViolations;
             }
-            if (submissionFloorPresent &&
+            if (!nativeScheduledLifecycle && submissionFloorPresent &&
                     recordedSpacingCheckUs <
                         std::max(recordedPreparationEndUs,
                                  recordedTargetWaitFinalUs)) {
@@ -13755,9 +14098,9 @@ int main(int argc, char* argv[])
                 recordedPresentStartUs >= decisionUs &&
                 (!hasPreparationTelemetry ||
                  recordedPresentStartUs >= recordedPreparationEndUs) &&
-                (!targetWaitPresent ||
+                (nativeScheduledLifecycle || !targetWaitPresent ||
                  recordedPresentStartUs >= recordedTargetWaitFinalUs) &&
-                (!submissionFloorPresent ||
+                (nativeScheduledLifecycle || !submissionFloorPresent ||
                  (recordedPresentStartUs >= recordedSpacingCheckUs &&
                   recordedPresentStartUs >=
                       recordedPresentationFloorUs)) &&
@@ -14010,15 +14353,18 @@ int main(int argc, char* argv[])
         timelineDetails.recordedGpuReadyWaitUs =
             gpuReadyWaitUs;
         if (hasPreparationTelemetry || presented) {
+            // Preparation starts after the actual bounded wait returns. A
+            // stalled clock can legitimately exhaust the waiter's active
+            // phase before its nominal render deadline; the separately
+            // audited wait lifecycle preserves that execution evidence.
+            const uint64_t renderPreparationFloorUs =
+                metrics.waitLifecycleTelemetryAvailable ? recordedRenderWaitFinalUs :
+                    std::max(recordedRenderStartUs, recordedRenderWaitFinalUs);
             const bool preparationOrderValid =
                 recordedPreparationStartUs != 0 &&
                 recordedPreparationEndUs >= recordedPreparationStartUs &&
                 recordedPreparationStartUs >=
-                    std::max({
-                        decisionUs,
-                        recordedRenderStartUs,
-                        recordedRenderWaitFinalUs,
-                    });
+                    std::max(decisionUs, renderPreparationFloorUs);
             metrics.preparationOrderViolations +=
                 preparationOrderValid ? 0 : 1;
             if (preparationOrderValid &&
@@ -14143,7 +14489,10 @@ int main(int argc, char* argv[])
                     timelineDetails.recordedNativePresentBoundaryDeltaUs;
                 ++metrics.nativePresentBoundaryComparisons;
                 metrics.nativePresentBoundaryMismatches +=
-                    boundaryDeltaUs != 0 ? 1 : 0;
+                    (nativeScheduledLifecycle ?
+                        recordedSubmissionUs < nativePresentStartUs ||
+                        recordedSubmissionUs > nativePresentEndUs :
+                        boundaryDeltaUs != 0) ? 1 : 0;
                 metrics.observedNativePresentBoundaryDelta.add(
                     boundaryDeltaUs);
             }
@@ -14151,7 +14500,8 @@ int main(int argc, char* argv[])
 
         uint64_t simulatedSubmissionUs = 0;
         if (presented) {
-            const uint64_t recordedSubmissionFloorUs = std::max({
+            const uint64_t recordedSubmissionFloorUs = nativeScheduledLifecycle ?
+                recordedPreparationEndUs : std::max({
                 recordedPreparationEndUs,
                 recordedTargetUs,
                 exactTargetWaitLifecycle ?
@@ -14166,7 +14516,8 @@ int main(int argc, char* argv[])
             else {
                 ++metrics.invalidExecutionResiduals;
             }
-            const uint64_t simulatedSubmissionFloorUs = std::max({
+            const uint64_t simulatedSubmissionFloorUs = nativeScheduledLifecycle ?
+                simulatedPreparationEndUs : std::max({
                 simulatedPreparationEndUs,
                 simulatedDecision.targetUs,
                 exactTargetWaitLifecycle ?
@@ -14251,8 +14602,9 @@ int main(int argc, char* argv[])
         }
         const QByteArray simulatedTear = simulatedTearClassification(
             presented,
-            simulatedDecision.latchedPresentation || rowFlipProtectionLatched,
-            simulatedCanLatch, hadPriorSimulatedSubmission,
+            simulatedDecision.latchedPresentation || rowFlipProtectionLatched ||
+                nativeScheduledLifecycle,
+            simulatedCanLatch || nativeScheduledLifecycle, hadPriorSimulatedSubmission,
             simulatedSubmissionUs, priorSimulatedSubmissionUs,
             periodForRate(simulatedConfig.displayRefreshHz));
         ++metrics.simulatedTearClassifications[simulatedTear];
@@ -14305,8 +14657,7 @@ int main(int argc, char* argv[])
                     recordedRasterAnchorUs != 0) {
                 ++metrics.adaptivePrePresentAnchorValidRows;
             }
-            if (!(simulatedDecision.latchedPresentation &&
-                    simulatedCanLatch) &&
+            if (!simulatedNativeLatched &&
                     simulatedRasterAnchorUs != 0) {
                 ++metrics.simulatedAdaptivePrePresentAnchorValidRows;
             }
@@ -14315,8 +14666,7 @@ int main(int argc, char* argv[])
                 recordedRasterAnchorUs != 0 &&
                 recordedRasterAnchorUs != rowPrePresentSyncSampleUs ? 1 : 0;
             metrics.simulatedRasterAnchorFallbacks +=
-                !(simulatedDecision.latchedPresentation &&
-                    simulatedCanLatch) &&
+                !simulatedNativeLatched &&
                 simulatedRasterAnchorUs != 0 &&
                 simulatedRasterAnchorUs != rowPrePresentSyncSampleUs ? 1 : 0;
             observedRaster = evaluateVrrRasterPhase(
@@ -14326,8 +14676,7 @@ int main(int argc, char* argv[])
                 timelineDetails.recordedSourcePeriodUs,
                 rasterDisplayParameters);
             simulatedRaster = evaluateVrrRasterPhase(
-                true, simulatedDecision.latchedPresentation &&
-                    simulatedCanLatch,
+                true, simulatedNativeLatched,
                 simulatedSubmissionUs, simulatedRasterAnchorUs,
                 periodForRate(simulatedConfig.displayRefreshHz),
                 simulatedDecision.sourcePeriodUs,
@@ -14341,14 +14690,11 @@ int main(int argc, char* argv[])
             addRasterEnvelopeToBands(metrics.simulatedRateBands,
                 timelineDetails.simulatedSourceRateHz,
                 simulatedRaster.envelope);
-            const bool simulatedLatched =
-                simulatedDecision.latchedPresentation &&
-                simulatedCanLatch;
             if (scenario.mode != "fixed") {
                 counterfactualFreeRunningTracker.reset();
                 haveCounterfactualTransitionOrigin = false;
             }
-            else if (simulatedLatched) {
+            else if (simulatedNativeLatched) {
                 counterfactualFreeRunningTracker.reset();
                 haveCounterfactualTransitionOrigin = false;
                 ++metrics.counterfactualFreeRunningLatchedResets;
@@ -14689,8 +15035,7 @@ int main(int argc, char* argv[])
             metrics.simulatedProjectedSourceToSubmission.addElapsed(
                 simulatedSubmissionUs, simulatedDecision.sourceTimeUs);
 
-            if (simulatedDecision.latchedPresentation &&
-                    simulatedCanLatch) {
+            if (simulatedNativeLatched) {
                 ++metrics.simulatedLatchedFrames;
             }
             if (hadPriorSimulatedSubmission) {
@@ -14719,9 +15064,7 @@ int main(int argc, char* argv[])
                     submission.simulatedSubmissionUs = simulatedSubmissionUs;
                     submission.simulatedSourcePeriodUs =
                         simulatedDecision.sourcePeriodUs;
-                    submission.simulatedLatched =
-                        simulatedDecision.latchedPresentation &&
-                        simulatedCanLatch;
+                    submission.simulatedLatched = simulatedNativeLatched;
                     submission.simulatedPresentTransportUs =
                         simulatedPresentTransportUs;
                     submission.simulatedDisplayTransitionDelayUs =
@@ -14790,9 +15133,11 @@ int main(int argc, char* argv[])
             }
             else {
                 referenceController->noteSubmission(
-                    presented, cancelled, recordedSubmissionUs);
+                    presented, cancelled, recordedSchedulingBoundaryUs, recordedSubmissionUs);
                 simulatedController->noteSubmission(
-                    presented, cancelled, simulatedSubmissionUs);
+                    presented, cancelled, nativeScheduledLifecycle && presented && !cancelled ?
+                        std::max(simulatedSubmissionUs, simulatedDecision.targetUs) : simulatedSubmissionUs,
+                    simulatedSubmissionUs);
             }
         }
         else {
@@ -14803,9 +15148,11 @@ int main(int argc, char* argv[])
                     rowFlipProtectionReferenceUs);
             }
             referenceController->noteSubmission(presented, cancelled,
-                                                 recordedSubmissionUs);
+                                                 recordedSchedulingBoundaryUs, recordedSubmissionUs);
             simulatedController->noteSubmission(presented, cancelled,
-                                                 simulatedSubmissionUs);
+                nativeScheduledLifecycle && presented && !cancelled ?
+                    std::max(simulatedSubmissionUs, simulatedDecision.targetUs) : simulatedSubmissionUs,
+                simulatedSubmissionUs);
             addReferenceControllerDiagnostics(
                 metrics, referenceController->diagnostics(), fields, columns);
             auditBufferUpdate();
@@ -14844,7 +15191,7 @@ int main(int argc, char* argv[])
             // Recorded presentation latency is an external service sample, not
             // proof of the candidate's actual scanout. Move it with its submission.
             observation.timelineShift = signedDifference(simulatedSubmissionUs, recordedSubmissionUs);
-            observation.latched = fixedPresentationMode ? false : simulatedDecision.latchedPresentation;
+            observation.latched = fixedPresentationMode ? false : simulatedNativeLatched;
             observation.deadline = observation.timelineShift >= 0 ?
                 simulatedDecision.originalScanoutUs - std::min(simulatedDecision.originalScanoutUs, uint64_t(observation.timelineShift)) :
                 simulatedDecision.originalScanoutUs + uint64_t(-observation.timelineShift);
@@ -14906,6 +15253,19 @@ int main(int argc, char* argv[])
         capturedConfig.allowAdditionalQueuedFrame,
         capturedConfig.allowTearing, simulatedCanLatch, capturedParameters.playoutResponsiveBuffer,
         scenario);
+    QJsonObject startupInput;
+    startupInput["externally_reconstructed"] = parser.isSet(restoredStartSeedOption);
+    startupInput["serialized_start_delay_seed_us"] = static_cast<qint64>(serializedStartSeedUs);
+    startupInput["effective_start_delay_seed_us"] = static_cast<qint64>(capturedParameters.playoutDelayStartSeedUs);
+    startupInput["restoration_option"] = parser.isSet(restoredStartSeedOption) ?
+        QStringLiteral("--recorded-start-delay-seed-us") : QString();
+    startupInput["scope"] = "explicit startup parameter restoration only; every original decision audit remains active";
+    QJsonObject fidelityWithStartup = summary.value("fidelity").toObject();
+    fidelityWithStartup["startup_input"] = startupInput;
+    if (parser.isSet(restoredStartSeedOption))
+        fidelityWithStartup["baseline_scope"] = fidelityWithStartup.value("baseline_scope").toString() +
+            QStringLiteral("; startup seed reconstructed from explicit external input");
+    summary["fidelity"] = fidelityWithStartup;
     bool comparisonCompatible = true;
     if (parser.isSet(compareOption)) {
         QFile baselineFile(parser.value(compareOption));

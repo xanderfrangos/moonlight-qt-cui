@@ -1,4 +1,5 @@
 #include "computermodel.h"
+#include "onlinecomputerentries.h"
 
 #include <QThreadPool>
 
@@ -16,6 +17,12 @@ void ComputerModel::initialize(ComputerManager* computerManager)
     beginResetModel();
     m_Computers = m_ComputerManager->getComputers();
     endResetModel();
+    emit onlineHostsChanged();
+}
+
+QVariantList ComputerModel::onlineHosts() const
+{
+    return onlineComputerEntries(m_Computers);
 }
 
 QVariant ComputerModel::data(const QModelIndex& index, int role) const
@@ -171,6 +178,7 @@ void ComputerModel::deleteComputer(int computerIndex)
     m_Computers.removeAt(computerIndex);
 
     endRemoveRows();
+    emit onlineHostsChanged();
 }
 
 class DeferredWakeHostTask : public QRunnable
@@ -279,6 +287,7 @@ void ComputerModel::handleComputerStateChanged(NvComputer* computer)
         int index = m_Computers.indexOf(computer);
         emit dataChanged(createIndex(index, 0), createIndex(index, 0));
     }
+    emit onlineHostsChanged();
 }
 
 #include "computermodel.moc"

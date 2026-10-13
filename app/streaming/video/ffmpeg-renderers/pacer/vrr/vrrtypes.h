@@ -38,6 +38,12 @@ struct VrrSessionConfig {
     // The IDs are persisted and therefore remain stable across label changes.
     int latencyMode = 0;
     VrrTimingOptions timingOptions;
+    // Experimental activation marker; zero keeps normal policy. The effective
+    // profile smoothness target supplies probability (never this marker value).
+    bool experimentalBoundedCatchup = false;
+    uint64_t experimentalInputPercentilePpm = 0;
+    uint64_t experimentalInputPercentileWindowUs = 60000000;
+    uint64_t experimentalInputPercentileRiseUsPerSecond = 1000;
     // Session-native A/B choice, recorded separately from controller timing.
     bool allowTearing = true;
     std::string calibrationKey;
@@ -184,6 +190,18 @@ public:
         return m_DecodeHoldUs;
     }
 
+    // PyroWave data packets that arrived as zero-filled holes. Loss costs this
+    // frame detail, not timing: its lateness must not teach the pacer to buffer.
+    void setLostPackets(uint32_t lostPackets)
+    {
+        m_LostPackets = lostPackets;
+    }
+
+    uint32_t lostPackets() const
+    {
+        return m_LostPackets;
+    }
+
     // Reassembled -> decode submission, excluding a deliberate hold.
     uint64_t decoderQueueUs() const
     {
@@ -239,4 +257,5 @@ private:
     uint64_t m_DecodeHoldUs = 0;
     uint64_t m_DecodeBoundary = 0;
     uint32_t m_HostLatencyUs = 0;
+    uint32_t m_LostPackets = 0;
 };

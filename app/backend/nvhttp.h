@@ -5,6 +5,7 @@
 #include "nvaddress.h"
 #include "streaming/video/pyrowave/pyrowavelinkpolicy.h"
 #include <atomic>
+#include <functional>
 
 #include <Limelight.h>
 
@@ -129,7 +130,11 @@ public:
     // Returns measured Mbps, or throws on an unsupported/failed request.
     int probePyroWaveDownloadMbps();
 
-    PyroWaveLink::Result probePyroWaveUdp(int kbps, int packetSize, const std::atomic<bool>& cancelled);
+    // With burstFps set (PyroWaveUdpProbeBurstVersion 1), the host sends the
+    // same packets as video frames at that cadence, paced at paceKbps in the
+    // stream's 1 ms groups. Only loss is meaningful for those probes.
+    PyroWaveLink::Result probePyroWaveUdp(int kbps, int packetSize, const std::atomic<bool>& cancelled,
+                                        bool useHandshake = true, int burstFps = 0, int paceKbps = 0);
 
     static
     void
@@ -210,7 +215,8 @@ private:
                    QString command,
                    QString arguments,
                    int timeoutMs,
-                   NvLogLevel logLevel);
+                   NvLogLevel logLevel,
+                   const std::function<QString(QNetworkReply*)>& receiveHeaders = {});
 
     NvAddress m_Address;
     QNetworkAccessManager* m_Nam;

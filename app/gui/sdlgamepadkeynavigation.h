@@ -6,6 +6,9 @@
 #include <QColor>
 #include <QHash>
 #include <QPair>
+#include <QPointer>
+
+class QWindow;
 
 #include "SDL_compat.h"
 
@@ -83,7 +86,10 @@ private:
         ND_RIGHT
     };
 
-    void sendKey(QEvent::Type type, Qt::Key key, Qt::KeyboardModifiers modifiers = Qt::NoModifier, bool autoRepeat = false);
+    void sendKey(QEvent::Type type, Qt::Key key, Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                 bool autoRepeat = false, QWindow* target = nullptr);
+
+    void releaseControllerKeys();
 
     void sendDirection(NavDirection direction, bool autoRepeat);
 
@@ -133,5 +139,10 @@ private:
     int m_RepeatCount;
     // Popups can change navigation mode during a button press. Its release
     // must still match the key and modifiers sent for that same press.
-    QHash<quint64, QPair<Qt::Key, Qt::KeyboardModifiers>> m_PressedControllerKeys;
+    struct ControllerKey {
+        Qt::Key key;
+        Qt::KeyboardModifiers modifiers;
+        QPointer<QWindow> window;
+    };
+    QHash<quint64, ControllerKey> m_PressedControllerKeys;
 };

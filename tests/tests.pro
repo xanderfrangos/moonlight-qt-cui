@@ -5,10 +5,15 @@ CONFIG += ordered
 
 contains(CONFIG, tests) {
     SUBDIRS += common
+    SUBDIRS += updates
     SUBDIRS += vrr
     SUBDIRS += haptics
     SUBDIRS += pyrowave
     win32: SUBDIRS += rendering
+    toleranceInput.file = $$PWD/input/tolerance.pro
+    SUBDIRS += toleranceInput
+    calibrationHosts.file = $$PWD/qml/calibration-hosts.pro
+    SUBDIRS += calibrationHosts
     macx {
         controllerNavigation.file = $$PWD/qml/controller-navigation.pro
         SUBDIRS += controllerNavigation

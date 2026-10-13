@@ -7,6 +7,8 @@
 #include "readinessfeedback.h"
 #include "meanmissbuffer.h"
 #include "intervalbuffer.h"
+#include "inputpercentilebuffer.h"
+#include "phasetrajectory.h"
 
 #include <cstddef>
 #include <array>
@@ -27,6 +29,15 @@
     X(uint64_t, latency_fix_delay_period_per_mille, latencyFixDelayPeriodPerMille, 500) \
     X(uint64_t, playout_delay_cap_source_period_per_mille, playoutDelayCapSourcePeriodPerMille, 0) \
     X(uint64_t, playout_delay_cap_uses_observed_period, playoutDelayCapUsesObservedPeriod, 0) \
+    X(uint64_t, playout_absorbed_jitter_release, playoutAbsorbedJitterRelease, 0) \
+    X(uint64_t, bounded_catchup_enabled, boundedCatchupEnabled, 0) \
+    X(uint64_t, normalized_source_mapping, normalizedSourceMapping, 0) \
+    X(uint64_t, playout_input_percentile_enabled, playoutInputPercentileEnabled, 0) \
+    X(uint64_t, playout_input_percentile_target_per_million, playoutInputPercentileTargetPerMillion, 990000) \
+    X(uint64_t, playout_input_percentile_window_us, playoutInputPercentileWindowUs, 60000000) \
+    X(uint64_t, playout_input_percentile_tolerance_us, playoutInputPercentileToleranceUs, 0) \
+    X(uint64_t, playout_input_percentile_rise_us_per_second, playoutInputPercentileRiseUsPerSecond, 1000) \
+    X(uint64_t, playout_input_percentile_fall_us_per_second, playoutInputPercentileFallUsPerSecond, 250) \
     X(uint64_t, playout_capacity_telemetry, playoutCapacityTelemetry, 0) \
     X(uint64_t, playout_gpu_readiness_adaptation, playoutGpuReadinessAdaptation, 0) \
     X(uint64_t, playout_gpu_readiness_window_us, playoutGpuReadinessWindowUs, 10000000) \
@@ -227,7 +238,9 @@
     X(uint64_t, playout_epoch_sustain_us, playoutEpochSustainUs, 0) \
     X(uint64_t, playout_delay_decrease_slew_us, playoutDelayDecreaseSlewUs, 0) \
     X(uint64_t, playout_epoch_confirm_us, playoutEpochConfirmUs, 0) \
-    X(uint64_t, playout_smoothing_readiness_bound, playoutSmoothingReadinessBound, 0)
+    X(uint64_t, playout_smoothing_readiness_bound, playoutSmoothingReadinessBound, 0) \
+    /* Native future deadlines use the logical display clock, not CPU enqueue. */ \
+    X(uint64_t, native_scheduled_presentation, nativeScheduledPresentation, 0)
 
 // Every value that changes VRR policy remains replaceable by replay without
 // rebuilding the controller. Production callers use these defaults.
@@ -241,7 +254,8 @@ struct VrrTimingParameters {
 // Resolve mode-dependent production policy once for both the live worker and
 // the replay baseline. Candidate replay configs may still override any field.
 VrrTimingParameters vrrTimingParametersForSession(
-    const VrrSessionConfig& config, bool nativeSynchronizedPresentation = false);
+    const VrrSessionConfig& config, bool nativeSynchronizedPresentation = false,
+    bool nativeScheduledPresentation = false);
 
 struct VrrTimingDiagnostics {
     int64_t readinessPhaseUs = 0;
@@ -268,6 +282,7 @@ struct VrrTimingDiagnostics {
 // types; the worker translates platform observations into neutral timing
 // feedback.
 struct VrrTimingDecision {
+    Vrr13::PhaseTrajectory::Stats trajectory;
     uint64_t frameNumber = 0;
     uint64_t smoothnessProtectionUs = 0;
     uint64_t requestedPlayoutDelayUs = 0;
@@ -284,6 +299,9 @@ struct VrrTimingDecision {
     uint64_t sourceTimeUs = 0;
     uint64_t sourceIntervalUs = 0;
     uint64_t sourcePeriodUs = 0;
+    // Derived diagnostics only; no policy input or trace schema field.
+    uint64_t diagnosticSourceTimestampUs = 0;
+    bool diagnosticSourceTimestampValid = false;
 
     int64_t readyOffsetUs = 0;
     // How far the display floor pushed the target past the frame's own slot.
@@ -331,6 +349,22 @@ struct VrrTimingDecision {
 
 class VrrTimingController {
 public:
+    // Decode completion for the producer clock. The worker's completion time
+    // is exact only when it blocked on the decode (syncWait >= this); a frame
+    // that finished while queued is observed late, so its completion is
+    // estimated as decoder output + the learned typical GPU decode time,
+    // never later than the observation. Without a learned typical time the
+    // observation is used.
+    static constexpr uint64_t PreciseCompletionWaitUs = 200;
+    static uint64_t estimateDecodeCompleteUs(uint64_t decoderOutputUs, uint64_t observedCompleteUs,
+                                             uint64_t syncWaitUs, uint64_t typicalGpuUs)
+    {
+        if (observedCompleteUs <= decoderOutputUs) return decoderOutputUs;
+        if (syncWaitUs >= PreciseCompletionWaitUs || typicalGpuUs == 0) return observedCompleteUs;
+        const uint64_t estimate = decoderOutputUs + typicalGpuUs;
+        return estimate < observedCompleteUs ? estimate : observedCompleteUs;
+    }
+    uint64_t typicalDecodeGpuUs() const { return m_DecodeGpuTypicalUs; }
     explicit VrrTimingController(const VrrSessionConfig& config,
                                  bool canLatchPresentation = true);
     VrrTimingController(const VrrSessionConfig& config,
@@ -372,10 +406,20 @@ public:
     // this feedback adjusts one bounded guard for future frames.
     void noteSpacingDeficit(uint64_t deficitUs);
 
-    // The worker records its own call boundary and supplies only the neutral
-    // lifecycle result. The timing controller has no renderer/native types.
+    // submissionUs is the scheduling boundary (possibly a future accepted
+    // deadline). Supply the actual CPU enqueue separately for diagnostics.
+    // Immediate presenters may omit it because both boundaries are identical.
     void noteSubmission(bool submitted, bool cancelled,
-                        uint64_t submissionUs);
+                        uint64_t submissionUs, uint64_t actualSubmissionUs = 0);
+    // Worker supplies actual graph-stage misses against the applied buffer
+    // line for diagnostics. Release feedback uses corrected causal observations.
+    void noteInputBufferMiss(uint64_t atUs, bool networkMiss, bool decoderMiss) {
+        if (m_Parameters.playoutInputPercentileEnabled)
+            m_InputPercentileBuffer.noteBufferMiss(atUs, networkMiss, decoderMiss);
+    }
+    void noteTrajectoryResyncDrop() { m_PhaseTrajectory.noteResyncDrop(); }
+    void noteTrajectoryDeferred() { m_PhaseTrajectory.noteDeferred(); }
+    Vrr13::PhaseTrajectory::Stats trajectoryStats() const { return m_PhaseTrajectory.stats(); }
     void notePresentation(const Vrr13::PresentationObservation& observation);
     uint64_t nativeCadenceIntervals() const { return m_NativeCadenceIntervals; }
     uint64_t estimatedCadenceIntervals() const { return m_EstimatedCadenceIntervals; }
@@ -384,9 +428,36 @@ public:
     Vrr13::SmoothnessFeedback::Sample smoothnessSample(const VrrTimingDecision& decision) const;
     Vrr13::IntervalBuffer::Stats intervalStats() const {
         auto stats = m_IntervalBuffer.stats();
+        stats.inputPercentileEnabled = m_Parameters.playoutInputPercentileEnabled != 0;
+        if (stats.inputPercentileEnabled) {
+            stats.inputPercentile = m_InputPercentileBuffer.stats();
+            stats.update.beforeUs = m_InputPercentileBeforeUs;
+            stats.update.requestedUs = stats.inputPercentile.currentUs;
+            stats.update.minimumUs = stats.inputPercentile.minimumUs;
+            stats.update.maximumUs = stats.inputPercentile.maximumUs;
+            stats.update.holdRemainingUs = stats.inputPercentile.holdRemainingUs;
+            stats.update.cooldownRemainingUs = 0;
+            stats.update.attemptedIncreaseUs = stats.inputPercentile.currentUs > m_InputPercentileBeforeUs ?
+                stats.inputPercentile.currentUs - m_InputPercentileBeforeUs : 0;
+            stats.update.clippedIncreaseUs = 0;
+            using Action = Vrr13::IntervalBuffer::Action;
+            const bool releaseBackoff = stats.inputPercentile.releaseFactorPpm < 1000000 &&
+                stats.inputPercentile.targetUs < stats.inputPercentile.currentUs;
+            stats.update.action = releaseBackoff ? Action::InputPercentileBackoff :
+                stats.inputPercentile.growthBlocked ? Action::NotAbsorbable :
+                stats.inputPercentile.clipped ? Action::Capped :
+                stats.inputPercentile.expiredUnknown ? Action::InputPercentileUnknown :
+                !stats.inputPercentile.evidenceValid ? Action::NotAbsorbable :
+                stats.inputPercentile.targetUs > stats.inputPercentile.currentUs ? Action::InputPercentileGrow :
+                stats.inputPercentile.targetUs < stats.inputPercentile.currentUs ? Action::InputPercentileRelease :
+                Action::InputPercentileHold;
+        }
         stats.present = m_PresentTiming.stats();
+        stats.submissionCadence = m_SubmissionCadence.stats();
+        stats.displayCadence = m_DisplayCadence.stats();
         return stats;
     }
+    uint64_t intervalToleranceUs() const { return m_IntervalBuffer.stats().toleranceUs; }
     uint64_t typicalRenderUs() const;
     uint64_t recoveryHeadroomUs() const;
 
@@ -442,6 +513,9 @@ public:
     bool latencyFixActive() const { return m_LatencyFixActive; }
 
 private:
+    Vrr13::PhaseTrajectory m_PhaseTrajectory;
+    bool m_HaveMappingBasis = false;
+    bool m_CorrectedMappingBasis = false;
     void updateLatencyFixState();
     uint64_t latencyFixDelayLimitUs() const;
     uint64_t playoutDelayCapUs() const;
@@ -470,7 +544,13 @@ private:
         uint64_t deferredGpuReadyUs = 0;
         uint64_t preparationCompleteUs = 0;
         uint64_t intervalIntendedUs = 0;
+        uint64_t inputSlotUs = 0;
+        uint64_t inputObservationUs = 0;
+        int64_t inputReadinessBudgetUs = 0;
+        int64_t inputRequiredUs = 0;
+        bool inputValid = false;
         bool intervalValid = false;
+        bool trajectoryValid = false;
         // Metronome: the slot this frame occupies, committed as the schedule
         // basis only if the frame is actually presented so a dropped frame
         // frees its tick for the successor.
@@ -557,12 +637,14 @@ private:
     void noteIntervalBufferEpoch(uint64_t atUs);
     void updatePlayoutHistory(const PacedFrame& frame,
                               const CadenceObservation& cadence,
-                              bool rebased, int64_t requiredUs);
+                              bool rebased, int64_t requiredUs, uint64_t nowUs);
     static uint64_t scaledPerMille(uint64_t value, uint64_t perMille);
 
     void clearTimeline(bool retainLearnedBudgets);
     void initializeTimeline(const PacedFrame& frame);
     uint64_t sourceMappingUs(const PacedFrame& frame) const;
+    uint64_t estimatedDecodeCompleteUs(const PacedFrame& frame) const;
+    void learnDecodeGpu(const PacedFrame& frame);
     CadenceObservation observeCadence(const PacedFrame& frame);
     void observeRtpCadence(uint32_t rtpDelta,
                            CadenceObservation& observation);
@@ -677,6 +759,29 @@ private:
     Vrr13::ReadinessFeedback m_ReadinessFeedback;
     Vrr13::MeanMissBuffer m_MeanMissBuffer;
     Vrr13::IntervalBuffer m_IntervalBuffer;
+    Vrr13::InputPercentileBuffer m_InputPercentileBuffer;
+    // VRR headroom last applied to the input buffer; rescaled on rate change.
+    uint64_t m_InputHeadroomUs = 0;
+    // Layered input buffers, one per source-rate range. Lateness depends on
+    // the rate (2026-10-10 22:55: median 2.9 ms at 110 FPS, -0.35 ms at
+    // 30 FPS), so each layer keeps its own evidence, protection and coverage.
+    // The active layer lives in m_InputPercentileBuffer, anchored at
+    // m_InputLayerPeriodUs; stored layers wait for their rate to return.
+    struct InputLayer {
+        uint64_t periodUs = 0;
+        Vrr13::InputPercentileBuffer buffer;
+    };
+    enum class InputLayerChange { None, Restored, Created };
+    std::vector<InputLayer> m_InputLayers;
+    uint64_t m_InputLayerPeriodUs = 0;
+    uint64_t m_InputLayerEligibleAtStart = 0;
+    InputLayerChange updateInputLayer(uint64_t nowUs);
+    // Exact GPU decode durations (decoder output -> completion) from frames
+    // the worker blocked on; their median estimates unobserved completions.
+    std::array<uint64_t, 64> m_DecodeGpuSamples {};
+    size_t m_DecodeGpuNext = 0, m_DecodeGpuCount = 0;
+    uint64_t m_DecodeGpuTypicalUs = 0;
+    uint64_t m_InputPercentileBeforeUs = 0;
     // Interval-buffer demand remembered per source-rate epoch, keyed by
     // quarter-octave rate bucket.
     std::vector<std::pair<int, uint64_t>> m_EpochDemands;
@@ -686,6 +791,7 @@ private:
     uint64_t m_EpochCandidateSinceUs = 0;
     Vrr13::PresentationPrediction m_PresentationPrediction;
     Vrr13::PresentTiming m_PresentTiming;
+    Vrr13::CadenceDetection m_SubmissionCadence, m_DisplayCadence;
     Vrr13::SmoothnessFeedback m_SubmissionSmoothness, m_NativeSmoothness;
     // Lifetime counters for decoder-owned reporting windows. These do not
     // expire with the controller's rolling adaptation histogram.

@@ -126,19 +126,277 @@ of a session working on streaming, decoding, rendering, VRR, latency, or replay.
 It explains the implementation and the reasoning needed to investigate it;
 it does not establish that a particular deployed executable matches the source.
 
-Current source review baseline: this fork's `1d938e71` (downscaling
-preference, libplacebo selection, D3D11 filtering, dithering and debanding)
-merged with upstream `vrr17` at `b6de6364` (2026-10-05). Upstream's own
-baseline note follows: `8101fd29` plus automatic Windows composition
-presentation, explicit native synchronization and continuous D3D11 overlay
-publication (2026-10-04).
+Current source review baseline: this fork's `dae1bb7d` (downscaling
+preference, libplacebo selection, D3D11 filtering, dithering, debanding and
+its own pacing and overlay changes) merged with upstream `master` at
+`6613bfe1` (2026-10-13). Upstream's own baseline notes follow.
+
+Current integration (2026-10-11): approved Deck history through 3c32553e
+retains native Wayland/nightly packaging through 2083d82a. The compact normal
+overlay keeps host smoothness and two plan-referenced VRR lines, with decoder
+skips and detailed tracing confined to logs. Historical task-4 notes below
+describe earlier candidates, not the final integrated overlay.
+
+### Historical task-4 readability candidate (2026-10-11 UTC) copied from the
+currently selected build-claude-app source, preserving its measured/estimated
+GPU decode completion, free VRR headroom credit and no-skip bounded trajectory.
+The earlier task-4 skip-based trajectory description below is historical.
+Only diagnostics, Settings input, calibration host selection and the Smooth
+preset allowance change here. Smooth now resolves to {4000,9995,300,500};
+revision 3 migrates complete old preset tuples, preserving edited Custom values.
+The settings/session snapshot still applies at stream creation. Tolerance is
+subtracted once in the existing buffer policy; a changed preset is not proof of
+physical smoothness or a remedy for runaway buffering.
+
+Normal performance stats use a compact eight-row presentation regardless of
+deep trace capture. Logs explicitly request detailed stats. Buffer coverage
+counts accepted measured frames in the selected input history; actual display
+errors use identity-matched source-relative OS display intervals in the existing
+2-second bucket window, strictly beyond tolerance after uncertainty. Uncertain
+intervals are reported separately, and missing/stale feedback is N/A. It is
+never replaced with input coverage. These OS timestamps are not optical timing.
+The adaptive graph plots the original requirement less the same free VRR room
+credited by the controller; integer red-X decisions subtract tolerance/room once.
+Actual buffer and B+T threshold stay separate; raw stages retain their own basis.
+
+The Settings tolerance content item consumes Left/Right press and release before
+cursor/focus handling. SDL GUI navigation suppresses duplicate downs, pairs each
+release with its original key/modifiers/window and clears presses on focus loss.
+One physical D-pad press makes one 250us step; keyboard repeats remain clamped.
+Streaming shortcuts are unchanged. Calibration host selection uses confirmed
+CS_ONLINE snapshots, preserves UUID selection, handles no online hosts and
+invalidates/cancels a test if its tested host becomes unavailable. Pairing and
+cached application lists do not determine the filtered host list. CPU/software
+unit tests and Deck/4K raster composition verify these paths; physical controller,
+real display feedback and calibration/network stress runs remain unperformed.
+See task-4/readability-analysis/ for source/build/test provenance and previews.
+
+### Current integrated source
+
+Current source review baseline: approved Deck history through `3c32553e`,
+reconciled with nightly/platform packaging through `2083d82a` (2026-10-11).
+The normal overlay retains incoming host smoothness, removes decoder skips,
+and adds two compact VRR summary lines; full diagnostics stay in logs even when
+deep tracing is enabled. The 1280x800 and 4K overlay-fit fixtures include host
+smoothness. Native Wayland and unsigned all-platform nightly packaging remain.
+The 2026-10-09 source-relative cadence detector adds separate submission and
+identity-matched OS display evidence without changing revision-12 control.
+The 2026-10-10 replay qualification additionally caps native scheduled
+smoothing and its reserve at 2 ms, retaining 6/3 ms on worker-paced presenters.
+Schema-5 rows now append `lost_packets` so packet-loss buffer eligibility is
+replayable; older rows without it retain their historical zero-loss input.
+Qualified Windows D3D11 VRR playback defaults to waitable DXGI queue admission.
+Only `MOONLIGHT_VRR_COMPOSITION=1` requests native composition; unset, zero and
+other values retain DXGI. Unsupported waitable setup falls back to ordinary DXGI.
+D3D11 verifies rendering completion during preparation, before the cadence hold, and
+the final presentation checks a cached proof for the exact prepared marker.
+DXGI flip protection queries predecessor statistics and a fresh physical raster
+immediately before an adaptive native call. Unknown, pending, active or stale
+observations synchronize; it neither spins for blank nor extrapolates refresh age.
+Production now selects the adaptive input-percentile buffer, bounded catch-up
+and completion-based producer clock. Source-rate layers retain their own evidence
+and protection; phase breaks preserve lateness evidence, while rebases invalidate
+it. Bounded catch-up owns recovery without the historical recovery floor.
+Low Latency / Balanced / Smooth target 99% / 99.50% / 99.95%, with 0.50 ms
+preset tolerance and effective preset/custom history. Only complete historical
+preset tuples migrate; edited custom values survive. Explicit environment
+comparison modes and recorded revisions retain the historical policies.
 The upstream two-step PyroWave calibration targets, planned-present timing
 judgements and below-VRR-floor pause are included. The shared customizable VRR
 settings, Reduce judder readiness bound, above-target shrinkage correction,
-and per-interval excess scoring remain active. Deployment and live smoothness
+and continuous D3D11 overlay publication remain active. Deployment and live smoothness
 must be verified separately from this source description. Dated investigation
 sections below retain their historical policy and validation context; sections
-3, 8, 11, and 13 describe current selection and execution.
+3, 8, 9, 10, 11, and 13 describe current selection and execution.
+
+The 2026-10-08 source-timing review reads Claude Code session
+`ca9fb224-9b65-47bb-a9e0-da3c9fe23973` and Astra's frame-timing investigation
+`01a11ed1-1dc4-7e63-b95c-969c5a7976c5`. Claude's final recommendation rejects
+fitting away real game cadence. Vibeshine's former WGC send path refined
+composition timestamps using foreground DXGI Present-start events, learned
+latency, composition-grid clamping and fallback stamps without a captured-image
+identity join. The host source correction removes that rewrite and tracker,
+preserving WGC's compositor-render timestamp already paired with the image under
+the IPC keyed mutex. Slow capture delivery does not change that source timestamp.
+Linux's custom DRM export likewise associates the framebuffer, sequence and
+presentation timestamp coherently. Actual source-output intervals are preserved;
+constant clock offset and capture/read latency are not the cadence objective.
+The host maps source QPC with a fixed per-session clock correlation so capture
+read scheduling cannot perturb source intervals. Eight focused host regressions pass; the full host application remains
+unbuilt and undeployed because its cached MinGW environment is incomplete.
+Astra independently reproduced a misleading readiness-offset hitch counter and
+observed GPU-wait and post-submission disturbances. These are separate issues,
+not proof that every hitch is host timestamp noise. Composition preference is
+restored without retuning the controller, erasing real source cadence, or
+claiming a deployed host or verified gameplay fix.
+
+The latest completed Windows capture selected for the history/graph correction is
+`20261009-003723-616-724c9575-362c-4eb7-aeeb-f39c84fd86b3/Moonlight.vrrtrace`
+(634,954 bytes; last write 2026-10-09 00:37:43.874 UTC; SHA-256
+`060fb82bcc082f6da3e711383d2ad12f88357d79cd00846ca5a9fe9dc189ae98`).
+Its matching `capture-info.json` confirms clean session close. It covers only
+19.19 seconds, so it cannot validate a filled two-minute history. Fresh exact
+baselines with the untouched deployed replay and corrected replay both exit 3;
+their recorded-policy fidelity objects match, including existing diagnostic
+drift. Sequence integrity is valid, but the exact flag is false. The 23-scenario
+candidate/stress batch passes its interval-safety and latency assertions on
+this exploratory capture; this is not strict A/B proof or live smoothness proof.
+Deterministic tests reproduce the history undercoverage and premature release,
+and all eight new/historical D3D11 readiness fixtures pass exact replay.
+Physical display cadence and live gameplay fluidity remain to be validated.
+
+The 2026-10-08 blue-line investigation selected the completed capture
+`C:/Users/Chase/Desktop/vrr-diagnostics/20261009-031900-785-8971e6ac-c16b-48c5-97ae-1e7828e76003/Moonlight.vrrtrace`
+(4,526,890 bytes; last write 2026-10-09 03:20:55.1728289 UTC; SHA-256
+`ace9bcc5629ea8f1fe0080b08c0053b8088f980831f73a53bc42542c0666f728`).
+Its sidecar confirms clean close and the previously deployed executable,
+120 FPS, Smooth mode, and 1,500,000 kbps. The later 032107 capture was open and
+zero bytes at selection. After excluding the first five seconds, 7,575 of
+12,745 matched native display events precede their target by more than 1 ms.
+Frame 12305 was prepared before native enqueue, but its reported display follows
+enqueue by 11.453 ms and its target by 9.343 ms; successor 12306 has essentially
+the same reported display time (within 1 us). These are OS presentation reports,
+not optical residency measurements. Distinct accepted future targets do not
+establish distinct visible intervals on this driver.
+Fresh exact replay with both the untouched deployed and rebuilt replay exits 3
+at frame 757 following a buffer diagnostic disagreement; their logs are byte
+identical. Sequence/fidelity JSON is not produced. This capture is exploratory
+and cannot provide strict A/B proof. The matching Moonlight log records packet
+loss on frame 756; lost-packet eligibility is not serialized into the current
+trace input, so replay cannot reconstruct that controller observation exactly.
+An experimental 2 ms enqueue gate was withdrawn: it bounds early exposure
+without correcting native late-event coalescence and is not active policy.
+The investigation initially restored the DXGI default. That backend verifies
+readiness, waits for the target and spacing floor, and selects protected versus
+tearing-permitted Present per frame. The subsequent source-timing review restores
+composition preference; these observations did not isolate it as the cause.
+Both paths preserve the recent GPU completion corrections.
+The blue line remains actual CPU submissions. The magenta DXGI lane restores
+the older identity join, separately labeled `Display refresh (DXGI)`: submitted
+image ID -> reported PresentRefreshCount -> an observed SyncRefreshCount/QPC
+anchor with the same refresh number. It never assigns the latest QPC sample
+directly to the latest image, extrapolates from nominal refresh periods, or fills
+missing intervals. Matched timestamps must follow image submission and readiness,
+be fresh within 100 ms, and have clock-conversion uncertainty at most 500 us.
+Each anchor retains its own uncertainty. Disjoint statistics, display epochs,
+backend changes and counter rollback invalidate matching history. Physical-refresh
+telemetry requires successful startup `DXGIDisableVBlankVirtualization()`.
+This is an image-associated refresh observation, not the precise instant of an
+interval-zero flip during active scanout. Its separate graph provenance never
+becomes `DisplayEvent` controller feedback or changes buffer adaptation. Existing
+composition/Metal/Vulkan display-event rendering retains its existing source.
+This no-UAC path uses the swapchain's existing queries, without PresentMon or
+new privileges. Coverage depends on driver-provided matches and must be checked
+in a new live DXGI session along with gameplay improvement; replay and backend
+selection do not prove physical cadence.
+The final incremental Windows application and diagnostic builds pass. All ten
+timing/controller, rate, worker, replay-config, rendering, D3D11 binding,
+composition-policy, clock, DXGI presentation and overlay suites pass, together
+with `vrrreplay --help`. The new fixtures cover delayed identity joins,
+contradictory/future/stale anchors, original-report causal bounds, missing samples,
+disjoint epochs, counter rollback and virtualization gating. These deterministic
+checks validate matching and pacing contracts, not live DXGI feedback coverage.
+
+The subsequent tearing-protection investigation selected
+`C:/Users/Chase/Desktop/vrr-diagnostics/20261009-035444-464-dd413aea-edb6-446a-82d2-778ff1cecdc3/Moonlight.vrrtrace`
+(8,234,038 bytes; last write 2026-10-09 03:58:13.645 UTC; SHA-256
+`7c00ef3c3743f3006b0adac6abc87cb6d83d7d19362a414f35b89961f8621bb8`).
+Its exact sidecar confirms clean close, the published DXGI executable, 120 FPS,
+Balanced mode and 113,000 kbps. Of 24,794 presents, 533 permitted tearing and
+none of those had a raster observation; 532 checked predecessor statistics
+successfully and one skipped startup protection. Successful predecessor accounting
+does not prove that its scanout ended. The pending-only guard retained during
+the backend rollback therefore left a concrete protection gap. The fresh untouched
+exact replay exits 3 because its audit wrongly requires alignment mode for an
+opened raster source and its simulated raster mode omits native protection overrides.
+Corrected replay passes the exact baseline: every target, submission, controller
+diagnostic and all 24,794 raster classifications match, with valid sequence,
+semantic and timestamp integrity. This preserves recorded execution evidence;
+replay does not predict a prospective guard's physical flip phase.
+The correction applies protection from the first adaptive request and makes a
+single final raster check after metadata/optional diagnostics. Unknown predecessor,
+failed/disjoint or unexpected statistics, active/missing raster, ambiguous/moved
+output, virtualized clocks and stale/reversed observation brackets synchronize.
+Fresh blank evidence is bounded to min(250 us, display period / 16), including
+age after the query; this is a conservative freshness budget, not remaining blank
+duration. There is no polling loop or failure count that disables safety.
+Protection samples are captured before Present even without alignment mode, with
+native Present brackets for correlation; they never become measured flip times.
+A later asynchronous flip can still outlive a sampled blank, so hardware gameplay
+validation remains necessary. The graph's existing sub-millisecond drawing
+deadband was unrelated to this protection defect and is unchanged.
+The final incremental application/diagnostic builds and all ten deterministic
+suites pass, together with replay help. The guard-only worker fixture passes
+exact replay with alignment and deep tracing disabled; optional raster omission
+and fourteen repaired-footer corruptions verify the evidence audit, including
+rejection of invalid protection brackets by the exact gate. The completed
+portable installation and ZIP are published to ChaseShare. Build, staging and
+live hashes agree; the live executable SHA-256 is
+`4891512ad3de7f0fc810d6ebc0e5b7de2ca49e5a359b7a71106d7d095df09d64`.
+The replay utility runs successfully from its canonical UNC directory. These
+checks establish publication and software contracts; a new live session is
+still needed to assess physical tearing and latency under the corrected guard.
+
+The 2026-10-08 fluidity investigation selected the newest completed capture
+`20261009-015916-375-a0f03198-c6d5-4499-b488-4e21792e1073/Moonlight.vrrtrace`
+(1,592,443 bytes; last write 2026-10-09 02:00:01.205 UTC; SHA-256
+`d6c39be0e40a2d8f45080d3cadc9dd2bdc2e9dc8d0a1c2a901207d7c5c99145f`).
+It passes fresh exact replay after the captured queue-capacity audit correction.
+The subsequent 020015 capture was still open at this selection and was excluded.
+The earlier policy held until its CPU submission target, then called native
+`SetTargetTime` with current QPC-derived time. It also disabled the physical
+interval floor because native synchronization was assumed to space each frame.
+The selected capture contains 891 of 4,007 steady CPU submission intervals below
+8,333 us and eleven groups of distinct native IDs with equal display timestamps.
+For example, frames 2063/2064 (native IDs 2024/2025) both have native display
+time 222,897,479 us. An earlier interpretation of frame 2063's 16.662 ms display
+interval was incomplete: it may have been immediately superseded at that same
+display opportunity. Native acceptance and even a display-event record do not
+prove that a frame remained visible for a source period. Native queue ownership
+was usually one frame, so a large sustained native backlog is not established.
+Production
+sets `playoutPredictionOnly=1` and `playoutNativeHitchAdaptation=0`; native
+presentation observations are diagnostic and do not supply compositor lead or
+buffer demand. Submission regularity therefore does not establish display
+regularity. Native events must be matched by presentation ID rather than the
+trace row on which they were polled. Some long display intervals also have
+upstream readiness/capture stalls; the native scheduling defect does not explain
+every hitch.
+An exact-baseline-backed nine-scenario replay reproduced useful CPU pacing
+improvement with fixed 2 ms versus 10 ms allowances, but does not simulate a
+new native future-target queue. Enabling the historical metronome reduced
+submission jerk while raising median decoder-output-to-submission latency from
+9.942 ms to 18.111 ms at a 2 ms allowance; it is not a demonstrated latency-
+bounded correction. Current composition scheduling instead admits logical
+display deadlines at least one physical period apart, submits prepared frames
+before those deadlines, and holds the serial worker until the reserved deadline
+before its next dequeue. Accepted targets anchor spacing; CPU hold overshoot
+does not accumulate into the next target. Late actual enqueue remains an anchor
+when it exceeds the requested deadline. Five existing buffers bound ownership;
+native availability, retirement, and skipped/canceled status release accounting.
+The replay models CPU enqueue and logical scheduling separately; it does not
+simulate Windows' physical display queue. Dedicated controller/worker/ownership
+tests and exact replay are required, followed by a new live capture before
+claiming improved gameplay fluidity.
+
+Final native-scheduling validation on 2026-10-08 local: the incremental Windows
+application build, diagnostic build, all six required VRR suites, native
+composition ownership/clock policy, presentation-clock, and DXGI call-boundary
+suites pass. Nine freshly exported worker traces pass strict exact replay,
+including native accepted/late/failed cases, legacy composition, and five short
+or unavailable GPU-readiness cases. A five-scenario native-worker fault batch
+passes all 20 interval, residual, and latency assertions; its 20 ms latency bound
+is synthetic worker-model validation, not a measurement of gameplay latency.
+The newest completed capture at handoff is
+`20261009-022434-049-bb998eaf-49be-4f36-97f0-0cbd30c4da35/Moonlight.vrrtrace`
+(18,347,503 bytes; last write 2026-10-09 02:33:48.861 UTC; SHA-256
+`7f1aa20d447a6399423f030aea457a45e4ec63dea97985a36d13dad1fec8723e`).
+Its matching sidecar confirms clean close, HEVC session settings at 113 Mbps,
+120 FPS, Reduce judder enabled, and buffer per-mille 250. Fresh strict replay
+passes sequence, semantic, and exact-policy gates. It was captured before native
+deadline scheduling was installed, so it does not validate the new physical
+presentation behavior. Native-clock coverage and actual display/skip observations
+must come from a subsequent live session.
 
 macOS now has a native Metal presenter for the shared VRR worker. Session
 eligibility uses the actual window's `NSScreen` refresh range, including
@@ -382,6 +640,21 @@ Regression tests cover spaced 46-packet batches, late/near/unknown deadlines,
 sequence wrap, misleading EOF flags, successor recovery and interior reordering.
 These tests establish receive-path correctness; a new live capture is still
 needed to measure visual improvement and actual loss after this change.
+
+PyroWave loss costs detail, not timing (2026-10-06). A USB 2.5GbE dock drops
+whole 12-16 packet USB transfers, frequently including a frame's final packets;
+waiting for the successor delivered those frames 5+ ms late and the pacer then
+grew its buffer for them. With the final packet absent, the queue now arms
+`PYROWAVE_TAIL_SILENCE_US` (3 ms) or the VRR slot, never sooner than
+`PYROWAVE_LATE_TAIL_SILENCE_US` (1.2 ms) after the last unique packet; both
+exceed the 800 us and 2.5 ms host gaps above, whose regression still passes.
+Critical-prefix and parity rules are unchanged. `FFmpegVideoDecoder` carries
+each frame's `BUFFER_TYPE_LOST` count to `PacedFrame::lostPackets()`, and
+`VrrTimingController::schedule()` clears that frame's smoothness and prediction
+eligibility: it is presented as scheduled, but its lateness never grows the
+readiness, interval, mean-miss or smoothness buffers. A 237 s 740 Mbps capture
+before this change had 267 partial frames and 11.8% of presented intervals
+jerking over 2 ms.
 
 On Windows, `initializePyroWave()` creates `D3D11VARenderer` and a PyroWave
 Vulkan device matched by adapter LUID. Decode submits into one of ten D3D11-owned
@@ -627,14 +900,54 @@ Calibration (2026-10-02, reviewed against client `92119295` and host
 `6d8fc5ac` plus these changes) requires an online paired PyroWave host advertising
 UDP probe v1 and wire budget v1. Calibrate PyroWave opens a two-step modal card.
 Step one selects the host and bitrate target and runs only the bandwidth test.
+The calibration host dropdown uses `ComputerModel.onlineHosts`, a snapshot of
+hosts whose current discovery state is `CS_ONLINE`; unknown/offline hosts are
+hidden without modifying saved computers, pairings, or cached app lists. Online
+hosts remain listed even with no apps. `CalibrationHostSelection.qml` preserves
+selection by UUID across discovery refreshes and renames; a disappeared selection
+falls back to the first online host, or clears when none remain. Loss of the tested
+host invalidates its results and requests cancellation of an active calibration;
+returning online requires a fresh test before continuing or applying results.
+The UDP handshake receives the sender port from progressive HTTPS headers and
+sends its token from the receiving socket. Some handshake-v1 hosts send the
+complete probe XML with `Connection: close` but retain the HTTP socket. For this
+endpoint only, the client accepts a bounded, well-formed success document with
+expected/sent/elapsed fields before EOF when no explicit body framing is present.
+Normal status/count/timing validation and the reordered UDP-tail drain still run;
+partial or malformed XML and content-length/chunked responses require normal HTTP
+completion. This compatibility path does not certify the link or replace fresh
+capacity and pace measurements.
+The Mac transport follow-up adds localhost native TLS fixtures for both EOF
+and retained-connection results. Timeouts report whether a valid sender port
+was announced, how many receiver-socket tokens were sent, and whether
+authenticated measured packets arrived; HTTP diagnostics record status, body
+bytes and framing. These distinguish handshake/transport failures from result
+completion failures without declaring bandwidth or attributing a firewall cause.
+Complete terminal status-500 XML with a host error message also ends the wait;
+normal response-status validation throws that reason before any result scoring.
+Partial errors still require completion and never become successful measurements.
 The 2026-10-04 UI follow-up gives the four target cards equal widths and short
 budget descriptions, highlights the next useful action, and groups connection
 progress and the confirmed budget in a status panel. The first screen is 480
 logical pixels tall where space permits, with controller hints below the panel.
+The 2026-10-05 correction reserves the spinner width and status text space so
+starting a transfer does not reflow the panel. Step one scrolls when its content
+exceeds the available height. Its result grades the resolution, FPS, chroma and
+HDR settings selected when the test starts, using the confirmed image capacity
+after FEC, packet overhead and the chosen target's wire allowance. Green means
+the selected Minimum or Recommended guide is met (Moderate and Maximum compare
+against Recommended); yellow means below Recommended but at least Minimum;
+red means below Minimum. The target's
+required wire rate is shown beside the measured budget. A usable lower-quality
+connection can still continue to the per-format decoder tests, where an Any
+display result is yellow/red when its image rate misses these quality bounds.
 Four target cards default to Recommended: Minimum requests half the author's
 recommended image bitrate (rounded down to the 5 Mbps step, with a 5 Mbps
-minimum), Recommended requests the author's full image guide, Moderate uses at
-most 60% of freshly confirmed usable wire bandwidth, and Maximum uses the full
+minimum), Recommended requests the author's full image guide, Moderate aims for
+60% of the slower known link speed, never below the format's Recommended wire
+rate and stepped down to the freshly confirmed budget when the path cannot carry
+it (`PyroWaveCalibration::wireTarget`; 60% of a confirmed 1135 Mbps on a
+2.5 Gbps link had fallen below Recommended), and Maximum uses the full
 confirmed budget. All four respect network, packet/FEC overhead, frame capacity
 and device limits.
 
@@ -663,20 +976,26 @@ staged calibration fixture; that does not establish physical controller or
 live-host calibration behavior.
 
 The network search starts with a 2-second paced UDP probe at its bounded
-ceiling. For Moderate and Maximum that ceiling is the smaller known endpoint
-link speed, capped at 3 Gbps; for Minimum and Recommended it is also limited to
+ceiling. For Maximum that ceiling is the smaller known endpoint link speed,
+capped at 3 Gbps; Moderate stops at 60% of it or the matrix's largest
+Recommended rate, whichever is higher, plus the confirmation margin; for Minimum and Recommended it is also limited to
 the largest target in the format matrix, with room for applied bitrate rounding
 and the final 5% margin. A failed ceiling is bisected to 5 Mbps precision. A
-capacity candidate must have <=0.1% overall loss, <=1% loss in every 100 ms window,
-<=2 ms growth, finite timing measurements, and complete/on-time host
-sending. The chosen rate leaves 5% margin where possible and passes two fresh
+capacity candidate must have under 2% overall loss and under 5% in every 100 ms
+window (PyroWave loss is blur; unsent packets count as lost), at least 98% of
+packets sent on time by the host, <=2 ms growth and finite timing measurements.
+A 0.1%/all-sent rule collapsed a 2026-10-06 run to 480 Mbps after the host
+transiently failed to send 384 of 204,783 packets. Vibeshine now retries a full
+send buffer for 1 ms and reports `sendRetries`/`lastSendError` per probe. The chosen rate leaves 5% margin where possible and passes two fresh
 confirmations; failed confirmation backs off another 20%. Sequence accounting
 includes lost tails without counting duplicates. The <=4 ms p99 relative transit
 variation gate remains the separate strict stability grade, but no longer
 prevents local GPU/format calibration on a loss-qualified, non-growing link.
-Such results display a network timing/stutter warning and call the rate a
-measured throughput budget, rather than claiming stable delivery. Missing
-support, blocked UDP, persistent loss or growing queues give no recommendation. The legacy bulk
+The 2026-10-05 follow-up removes the 4 ms warning and its effect on result
+colors from both calibration steps. Transit variation remains in diagnostic
+logs and the measured-throughput summary. Result colors grade image quality.
+Missing support, blocked UDP, persistent loss or growing queues give no
+recommendation. The legacy bulk
 HTTPS probe remains available but is not used to grade stability.
 
 The UDP receiver resolves DNS/mDNS hostnames such as `ambidexl.local` before
@@ -686,6 +1005,21 @@ names retain IPv6. The pinned-certificate HTTPS probe uses the same resolved
 address as the UDP source filter, avoiding address-family mismatches. Resolution
 and socket-open errors identify the actual failure. The original numeric-only
 parser rejected hostname connections before sending any probe packets.
+Windows calibration now requires `PyroWaveUdpHandshakeVersion=1` in addition to
+the existing probe and wire-budget capabilities. Linux and macOS use it when
+advertised and retain their legacy probe against older hosts. The client requests `handshake=1`
+and handles the paired HTTPS response's `X-PyroWave-Udp-Port` header while its
+XML body remains pending. It sends the 32-byte token from the actual receiving
+socket to that announced host port, retrying every 100 ms until an authenticated
+measured packet arrives or cancellation occurs. Measured packets must match the
+announced IP and port as well as the token and sequence. The matching host opens
+outbound state with ungraded token warmups, allows at most 1500 ms for the token
+from the HTTPS peer's IP, and starts its two-second measurement afterward. This
+establishes the UDP return path on both peers without changing firewall rules;
+HTTPS alone cannot establish that UDP exchange. Warmups do not enter the packet
+counts or timing scores. On Windows, legacy hosts produce an explicit update requirement.
+The host implementation must be deployed separately before live calibration
+can be verified; a passing client loopback test does not establish live success.
 Authenticated UDP-test HTTP errors preserve the host's plain-text rejection
 reason in the UI and log. In particular, a host with an active stream refuses
 calibration with HTTP 400 and asks the user to stop streaming first; this is
@@ -729,9 +1063,44 @@ image Mbps. Reduced/low quality stays visible even on slow-format rows.
 At stream launch the client's known routed wired speed is sent in
 `x-ss-video[0].pyrowaveLinkMbps`; the host uses the smaller known endpoint speed
 for packet pacing. Its physical wire cap no longer applies a second 20%
-reduction after calibration. The UDP probe uses 1 ms groups, not a live encoded
-frame stream: host encoding, actual frame bursts, sustained gameplay and
-physical scanout remain unverified. No calibration cache is introduced. See
+reduction after calibration. The capacity probe uses evenly spread 1 ms groups.
+Against hosts with `PyroWaveUdpProbeBurstVersion=1`, calibration then sends the
+selected settings' bitrate (capped by the budget) as frames on the stream pacer's schedule and keeps the fastest
+pace passing aggregate and per-frame loss checks (`PyroWaveLink::searchPace`).
+The 2026-10-07 correction reconstructs each burst-v1 frame's sequence range
+and its final 1 ms send group using the host's exact packet/wire accounting.
+All missing packets, including absent frames and tails, enter the frame's
+loss percentage. A speed fails if any frame loses **more than 10%** of its
+packets, or at least 2% of frames have holes in the final send group. A
+surviving final packet does not excuse holes elsewhere in that group. Smaller
+interior holes are allowed within the aggregate under-2% loss and under-5%
+per-100-ms limits; the share of frames with any hole is diagnostic only.
+Both fresh confirmations must pass all checks. The search first tries the
+link, then bisects a passing boundary with a measured 5% margin. If this path
+fails, it checks remaining 50 Mbps steps across the usable range: a failed
+floor does not prove that all intermediate speeds fail. If none qualifies,
+it selects the best usable measurement, ranked by fewer violated limits,
+fewer tail-damaged frames, fewer frames over 10%, worst frame loss, then
+aggregate/window loss (faster on ties), and measures it twice afresh. Invalid
+or incomplete probes cannot become a fallback. Failed confirmations remain
+in fallback ranking rather than inheriting a lucky initial result. The result
+and status explicitly warn when no tested speed meets all limits; this does
+not automatically reduce the bitrate budget. Every format remains capped at
+the actual frame-tested budget, even when aggregate capacity was higher.
+Logs and the result summary distinguish aggregate loss, the share of frames
+over 10%, missing tails and worst frame loss. Missing burst support/link speed
+still prevents a recommendation. Passing does not promise zero artifacts.
+Applying a format stores the selected pace as
+`StreamingPreferences::pyroWavePaceMbps`, announced at launch in
+`x-ss-video[0].pyrowavePaceMbps`. Uncalibrated, the host paces at 80% of the
+link, because a USB 2.5GbE dock dropped whole frame tails above ~2.2 Gbps.
+Settings exposes Packet speed (Mbps) beside video bitrate for PyroWave. Manual
+values are editable in 50 Mbps steps (or directly typed), and zero/Automatic
+restores the host's default. Applying calibration updates this same persisted
+value; manual changes take effect on the next stream. The host still caps the
+requested pace at the link and raises it to the frame's required rate, so the
+saved value is a request rather than a measurement of actual wire speed.
+Host encoding, sustained gameplay and physical scanout remain unverified. See
 [protocol details](docs/pyrowave-protocol.md#fec-inclusive-recommendations-and-udp-calibration).
 
 The color is smoothness risk, with margin for a live stream costing about a
@@ -1104,8 +1473,8 @@ settings expose four independent values. Presets only fill in those values:
 | Preset | Source-frame allowance | Quality target | History | Interval tolerance |
 | --- | --- | --- | --- | --- |
 | Low Latency | 0.5 | 99% | 60 seconds | 0.5 ms |
-| Balanced | 1 | 99.5% | 120 seconds | 0.5 ms |
-| Smooth | 4 | 99.99% | 300 seconds | 0.25 ms |
+| Balanced | 1 | 99.50% | 120 seconds | 0.5 ms |
+| Smooth | 4 | 99.95% | 300 seconds | 0.25 ms |
 
 Custom bounds are 0.25–4 source frames, 90–99.99%, 10–300 seconds, and
 0.25–2 ms tolerance in 0.25 ms steps. Higher tolerance accepts more interval
@@ -1117,9 +1486,17 @@ and the implicit 0.2 ms Smooth tolerance remain only in historical parameter
 snapshots. The queue still has four waiting slots; its capacity independently
 limits delay, so an allowance is a ceiling rather than a fixed delay.
 
-`VrrTimingOptions` defines defaults and bounds. Missing saved values migrate
-from the saved preset; invalid persisted values are bounded before use. The
-session snapshots all four values and carries them through decoder recreation
+`VrrTimingOptions` defines defaults and bounds. Missing saved values resolve
+from the saved preset; invalid persisted values are bounded before use. A
+one-time `vrrtimingpresetrevision=2` migration restores the higher targets only
+for the complete former preset tuple matching an explicitly valid saved latency
+mode and its saved revision. It recognizes revision 1's 95% / 97.50% / 99%
+targets and the unversioned original 99% / 99.50% / 99.99% targets. Any customized
+field, mismatched mode, or missing mode preserves the saved tuple. Saving the
+revision also preserves a deliberate return to an old target afterward. Before
+this marker, an intentional custom tuple identical to an old full preset cannot
+be distinguished from that preset. The session snapshots all four values and
+carries them through decoder recreation
 to the pacer. Calibration identity uses actual values rather than the last
 preset name. The first three map to existing trace parameters; the new
 `playout_interval_tolerance_us` records tolerance explicitly. Its zero default
@@ -1128,7 +1505,13 @@ restores all four recorded values for customizable captures. Exact replay always
 uses the full captured parameter snapshot.
 
 The timing controls support gamepad Tab/Shift-Tab focus navigation and left/right
-adjustment, including when a numeric text field has focus. Preset and PyroWave
+adjustment, including when a numeric text field has focus. The editable VRR
+fields route the editor's left/right key signals directly to the adjustment
+handlers before text editing (input correction reviewed against `ff6f071c`,
+2026-10-08). Forwarding key events to the parent SpinBox alone lets its editor
+consume presses as cursor movement. `tests/gui/tst_vrrtiminginput.qml` covers
+single presses, repeated adjustments and bounds on all four fields.
+Preset and PyroWave
 calibration-host popups use `AutoResizingComboBox`, switching the gamepad to
 arrow/Return navigation while open and restoring UI navigation on close.
 The calibration host resolves its target-card focus on each closed-menu Tab
@@ -1571,6 +1954,27 @@ clear the others. Client pacing counters do not feed the network frame-gap
 counter or the transport connection callback. Those existing delivery-loss
 signals do not diagnose a specific network component or internal GPU cause.
 
+PyroWave packet-loss warning (2026-10-05, `3cb67d3e` plus this worktree):
+the decoder observes `BUFFER_TYPE_LOST` payload holes before decoding or
+stale-frame shedding, independently of the stats overlay and VRR selection.
+PyroWave depacketization preserves one entry per video data packet, including
+lost placeholders. The observer sums missing and total packet counts across all
+delivered frames, rather than counting frames with any missing detail or averaging
+per-frame percentages. Following the transport warning's numerical thresholds,
+a three-second window with at least 30% missing packets, or two consecutive
+windows with at least 15%, shows red text:
+"Severe packet loss detected / Reduce bitrate to prevent shimmering".
+A window at or below 5% clears this source; a reporting gap over 2.5 seconds,
+decoder reset, or disabled connection warnings restarts qualification. This is
+the percentage of video data packets missing from delivered frames after FEC,
+not a raw network packet-loss percentage or a diagnosis of where packets
+disappeared. Fully recovered FEC packets do not qualify, and parity packets and
+wholly dropped frames are outside this observer's denominator. The transport's
+whole-frame-loss callback retains the ordinary slow/poor connection text;
+it cannot trigger the shimmering message. Both sources retain their own state,
+alongside client pacing warnings;
+mouse-mode priority is unchanged. No bitrate changes automatically.
+
 ### Cross-platform ownership and buffer-attribution correction (2026-09-19)
 
 Production source-clock mapping now uses immutable `decoderOutputUs`. A worker or
@@ -1878,12 +2282,17 @@ the shared-device/copy path against the separate-device/bind path.
 
 ### Production interval-quality queue (promoted from V2)
 
-Every normal VRR session now selects revision 9 without an A/B setting. The queue
-uses 0.5 ms tolerance for Low Latency and Balanced Target and 0.2 ms for Smooth;
-explicit revision 8 retains its 250 us tolerance for historical replay. Preset
+Every normal VRR session now selects revision 12 without an A/B setting. The queue
+uses 0.5 ms tolerance for Low Latency and Balanced Target and 0.25 ms for Smooth;
+explicit historical revisions retain their recorded tolerances. Preset
 targets and severity weighting remain active.
-Revision 7 retains revision 6's interval measurement and replaces its
-binary score with severity-weighted quality tied to each latency preset.
+Revision 11 retains revision 9's per-interval severity-weighted reporting and
+control, and honors the actual configured history for presets and custom settings.
+Revision 12 also records valid adjacent intervals during control qualification,
+and makes below-target history retain existing buffer protection. Earlier
+revisions discarded those measurements and could release on recent recovery
+despite a below-target long score.
+Revision 7 introduced severity weighting over revision 6's binary score.
 Revision 6 superseded the revision-5 conditional-lateness measurement
 described below. For consecutive submitted frames, intended spacing is the
 difference in mapped source time plus deliberate Reduce judder adjustment.
@@ -1893,28 +2302,42 @@ are removed before scoring. Submission boundaries are a display-timing proxy,
 not optical scanout confirmation. Discontinuous/missing frames break the pair;
 their drops remain separately visible.
 
-The controller and overlay share a diagnostic one-second average (10 ms buckets). After
-initial qualification (500 ms and 32 intervals), or one-second requalification
-following a later sequence break, interval error through the selected profile tolerance
-is accepted (0.5 ms for Low Latency/Balanced Target, 0.2 ms for Smooth). For each
-evaluated interval, revision 9 computes
+The controller and overlay retain a one-second diagnostic average (10 ms buckets).
+Initial qualification (500 ms and 32 intervals), or one-second requalification
+following a later sequence break, gates control changes. Revision 12 records
+valid interval measurements before that gate; earlier revisions do not.
+Interval error through the selected profile tolerance
+is accepted (0.5 ms for Low Latency/Balanced Target, 0.25 ms for Smooth). For each
+evaluated interval, production revision 12 and historical revisions 9/10 report
 `loss = clamp(max(intervalErrorUs - toleranceUs, 0) / intendedIntervalUs, 0, 1)`.
-Revisions 7/8 instead use `meanErrorUs`, retaining their captured scoring and
-growth behavior for historical replay.
-The shared score is `100 * (1 - sum(actualIntervalUs * loss) / sum(actualIntervalUs))`
-over the selected preset's one/two/five-minute history, using 100 ms buckets.
+Production uses that same per-interval loss for every buffer-control decision.
+Historical revisions 7/8 use `meanErrorUs` for reporting and control; revision 8
+retains its historical tolerance.
+The reported score is `100 * (1 - sum(actualIntervalUs * loss) / sum(actualIntervalUs))`
+over the configured history, using 100 ms buckets. Presets select one/two/five
+minutes; custom settings select 10–300 seconds.
 Loss retains fractional microseconds rather than rounding every frame. Missing
 coverage is unknown; before the selected history duration, the score uses the
 available evaluated time. This is timing quality, not a percentage of perfect
 frames or a perceptually calibrated score.
-The same calculation serves all presets and both controller and overlay.
+Historical revision 10 separately accumulates buffer-control loss using the qualified
+one-second `meanErrorUs` in place of `intervalErrorUs` in the loss formula.
+It weights that loss over the same preset history and evaluated intervals.
+Growth qualification, current pressure, attack amount, hold renewal, clean
+recovery and release all use this relaxed signal. The accurate reported score
+can stay below target while the buffer releases; it is not the control score.
+Revision 9 retains its coupled per-interval reporting/control for exact replay.
+Only explicit revision 10 uses the separate mean-based control history; later
+revisions do not inherit it. Revisions through 10 retain their recorded
+target/history-tuple selection with a 30-second fallback. Revision 11 uses
+`playout_readiness_window_us` directly, including custom histories.
 
-Low Latency / Balanced Target / Smooth seek 99% / 99.5% / 99.99%, respectively,
+Low Latency / Balanced Target / Smooth seek 95% / 97.50% / 99%, respectively,
 over one / two / five minutes.
-An attack requires the preset-duration score below its target, current interval loss
+An attack requires the configured-history buffer-control score below its target, current per-interval loss
 above the preset's allowed loss, and a fresh interval error over the selected
 tolerance with
-readiness-attributable lateness. It acquires only the current interval excess above
+readiness-attributable lateness. It acquires only the per-interval excess above
 the preset allowance (`(1 - target) * intendedIntervalUs`), bounded by fresh
 error above tolerance, the affected frame's lateness, 250 us per 250 ms, and
 125 us applied per frame. The attributed frame must also be absorbable: its
@@ -1928,7 +2351,7 @@ buffer growth, and work that cannot fit a slot cannot be repaired by adding
 standing delay.
 
 Current attributable pressure renews the protection hold and clears fractional
-release credit only while the preset-duration quality score is below its target.
+release credit only while the configured-history buffer-control score is below its target.
 Production records `playout_hold_renew_below_target=3`: score changes in either
 direction at or above the target neither restart the hold nor pause qualified
 recovery or gradual release. An above-target capacity dip pauses earning
@@ -1936,23 +2359,32 @@ recovery and release while service cannot fit, but preserves earned recovery
 instead of restarting the timer. Revision 2 retained that capacity-reset
 behavior; revision 3 removes it above target. Revision 1 avoided hold renewal above target but
 still paused recovery; revision 0 retains its earlier pressure-based hold.
-Captured values preserve historical behaviors for exact replay. The long score still qualifies a future attack and remains the
-reported preset-quality history, but an old below-target score does not renew the
-live release hold after recent pressure clears. Smooth requires ten clean
-seconds before release (increased from six after the latest gameplay report),
-retaining its slower 50 us/second release speed. Low Latency and Balanced Target
-hold for six/eight clean seconds. Low Latency retains 125 us per second; the
-current policy raises Balanced from the `6bea92dd` baseline's 100 us per second
-to the replay-selected 250 us per second knee. The longer holds still retain
-protection between disturbances. The Balanced rate is a controller tradeoff, not
+Captured values preserve historical behaviors for exact replay. In revision 12,
+the long control score qualifies a future attack and below-target history also
+holds existing protection. The short recovery path cannot release while that
+history remains below target. Revisions through 11 permit release after recent
+pressure clears despite below-target history. All current presets share an
+eight-second clean hold and 250 us/second release. Older mode-specific holds
+and rates remain only in historical captures. These holds retain protection
+between disturbances. The release rate is a controller tradeoff, not
 live visual proof. This adjustment
 cannot improve a session already pinned at its buffer cap. The hold and release values
-are serialized independently, so revision 7 captures retain their own settings.
-The one-second detection window remains unchanged; quality uses the selected
-one/two/five-minute history window. The overlay shows quality versus the selected target plus the current
+are serialized independently, so historical captures retain their own settings.
+The one-second qualification and service-capacity window remains unchanged;
+quality uses the configured history window. The overlay shows quality versus the selected target plus the current
 one-second mean and selected tolerance. Historical revision 6 retains its binary proportion of evaluated
 time within 500 us and its threshold-only buffer adaptation when selected through
-explicit controller parameters. Explicit revision 8 retains its 250 us severity tolerance for historical compatibility; production sessions capture revision 7 and display the selected 0.50 ms or 0.20 ms tolerance. The regression report supports restoring the last user-confirmed smooth setting; the initial capture was a 417-row connection fragment. After normal application exit, the finalized latest capture contained 1,981 rows over 17.91 seconds, in Lowest latency mode, with applied buffer fixed at its 4,310 us cap and 26 playback drops. It does not demonstrate buffer oscillation or isolate tolerance as the cause of the reported motion regression.
+explicit controller parameters. Explicit revision 8 retains its 250 us severity
+tolerance for historical compatibility; current production captures revision 12
+and displays the configured tolerance (0.50/0.50/0.25 ms preset defaults). The
+history label comes from the actual interval-score window, rather than inferring
+it from the target percentage. The earlier revision-7 regression report supported
+restoring the last user-confirmed smooth setting; its initial capture was a
+417-row connection fragment. After normal application exit, that finalized
+capture contained 1,981 rows over 17.91 seconds, in Lowest latency mode, with
+applied buffer fixed at its 4,310 us cap and 26 playback drops. It did not
+demonstrate buffer oscillation or isolate tolerance as the cause of the reported
+motion regression.
 
 The preference, Session presentation snapshot, decoder parameters, Pacer signature,
 and VrrSessionConfig no longer carry a queue-arm flag. The existing
@@ -1960,8 +2392,8 @@ and VrrSessionConfig no longer carry a queue-arm flag. The existing
 previous V2 users' cache identity; its spelling is historical, not a selector.
 The overlay reports smoothness and the preset target without V1/V2 arm labels.
 
-During gameplay iteration, diagnostic validation was deferred at the user's
-request. VRR16 release finalization now accepts revisions 6/7/8 in replay,
+Historical VRR16 validation record: during gameplay iteration, diagnostic
+validation was deferred at the user's request. VRR16 release finalization accepted revisions 6/7/8 in replay,
 round-trips their captured parameters, and updates production capture assertions
 to revision 7. Release CI runs the deterministic suites plus fresh single-frame
 and warm-history exact-replay fixtures before packaging Windows diagnostics.
@@ -2137,19 +2569,28 @@ include the active presenter so their readiness histories cannot cross-seed.
 The capture lost one row and failed exact replay. Exploratory replay favored
 retaining the current per-frame controller over rate protection or adaptive-only
 spacing, but cannot model a change of native backend or prove a visual remedy.
-A fresh gameplay capture is required for that comparison. The automatic policy
-below supersedes this diagnostic-only selection.
+A fresh gameplay capture is required for that comparison. The 2026-10-04
+automatic composition policy superseded this selection. A 2026-10-08 DXGI
+rollback was subsequently withdrawn after review of the host timing path.
 
-Current Windows presenter policy (2026-10-04): eligible VRR sessions prefer the
-composition swapchain API on supported Windows 11/WDDM devices. Its native path
+Current Windows presenter policy (2026-10-09 local): qualified D3D11 VRR
+sessions default to waitable DXGI with two-frame queue admission before rendering.
+Only `MOONLIGHT_VRR_COMPOSITION=1` requests composition on supported Windows
+11/WDDM devices; unset, zero and other values retain DXGI. The old experimental
+checkbox and saved opt-in are retired, so a saved false cannot suppress the default.
+Ordinary DXGI is the fallback when waitable setup is unavailable. Both DXGI paths
+retain the worker's pre-Present target/spacing waits and per-frame
+synchronized or tearing-permitted native calls. Composition's native path
 synchronizes every frame; the renderer exposes that capability to the worker,
 which records `native_synchronized_presentation=1` in the controller parameters.
 The controller then reports latched presentation at every source rate, including
 startup and recovery, and omits the extra software display-period floor. This
 corrects the historical mismatch between logical latch transitions and constant
-native synchronization. Unsupported systems and setup failures retain DXGI;
-`MOONLIGHT_VRR_COMPOSITION=0` explicitly selects DXGI for comparison. Neither
-the source buffer nor the GPU readiness dependency is removed by this change.
+native synchronization when that backend is selected. Unsupported systems and
+setup failures retain DXGI. Preparation verifies its rendering fence before
+the target hold on both Windows native paths; final presentation retains only
+the exact completion proof. The source buffer and GPU readiness dependency
+remain part of the preparation contract.
 
 Current VRR timing choices (introduced after `20fa2bc4`, allowances updated
 2026-10-01): the `VRR timing`
@@ -2569,7 +3010,7 @@ successful IDR completion establishes valid reference state.
 | `enqueueTimeUs` / reassembled time | Client monotonic microseconds | Complete compressed frame assembled/queued. |
 | `decodeSubmitUs` | Client monotonic microseconds | Sampled immediately before FFmpeg packet submission. |
 | `decoderOutputUs` | Client monotonic microseconds | Immutable timestamp captured immediately when FFmpeg returns the decoded frame; client-processing reporting origin. |
-| `decodeCompleteUs` | Client monotonic microseconds | Post-output readiness observation; anchors production RTP-to-client mapping so hardware decode duration is absorbed in the sender offset. Linux samples it after `vaSyncSurface()`, Windows after the monitored decode-to-render fence wait. Without a wait over 200 us it equals `decoderOutputUs`, as on Windows before 2026-09-22 and on shared-device or non-monitored-fence sessions. |
+| `decodeCompleteUs` | Client monotonic microseconds | Post-output readiness observation; anchors production RTP-to-client mapping so hardware decode duration is absorbed in the sender offset. Linux samples it after `vaSyncSurface()`, Windows after the monitored decode-to-render fence wait. Every proven D3D11 completion, including a short wait or an already-ready fence, retains a post-observation upper bound. Historical captures and backends without completion evidence retain their output-time mapping fallback. |
 | `decodeSyncWaitUs` | Elapsed client microseconds | Explicit CPU time spent by the worker on a decoder/backend completion primitive. It is serial service and latency accounting, not a source-clock timestamp. A zero value does not exclude a GPU-queued dependency. |
 | Worker queue, decision, preparation, wait, submission times | Client monotonic microseconds | Distinct CPU-side lifecycle boundaries. |
 | Shared fence values | GPU ordering identities | Establish dependencies/completion; not elapsed time by themselves. |
@@ -2611,8 +3052,9 @@ delay” ends when the presentation call returns. It does not include unmeasured
 time from that return until the image becomes visible on the display.
 On Windows with monitored fences, the worker waits for the decode fence before
 scheduling, and that wait is the GPU decode synchronization line, as on Linux. The
-GPU-side decode-to-render wait remains queued. The residual present-ready fence
-wait occurs inside the presentation call and is not a decode-wait row.
+GPU-side decode-to-render wait remains queued. The verified present-ready fence
+wait occurs inside preparation, before the cadence hold, and is not a
+decode-wait row. Its duration remains part of rendering time.
 Linux VAAPI/Vulkan Mailbox output is asynchronous and
 does not report a CPU output-completion sample; other Linux imports still poll
 before the target hold. These accounting identities therefore partition the
@@ -2895,9 +3337,10 @@ timing parameters. Exact replay uses captured parameters, independent of whether
 the recording was enabled through Settings or an external launcher.
 
 The resolver enables timestamp playout, shared readiness history and adaptive
-delay. Windows, Linux, and macOS use the revision-9 interval policy: client-added
+delay. Windows, Linux, and macOS use the revision-12 interval policy: client-added
 submission-interval error triggers growth only with attributable late work that
-can fit its intended interval. The older thresholded-event policy is disabled
+can fit its intended interval. Tolerance applies to each interval before its
+severity-weighted loss enters both report and control history. The older thresholded-event policy is disabled
 with `playout_readiness_hitch_threshold_us=0`. Native-hitch adaptation is disabled.
 Production restores VRR14 timeline mapping anchored to decode completion (`playout_source_mapping_decoder_output=0`),
 absorbing hardware decode duration into the sender offset instead of inflating client buffer delay.
@@ -2909,7 +3352,7 @@ zero initializer values preserve historical replay when captures omit them.
 The latency presets set independent caps; per-frame native slot protection
 remains enabled.
 Display smoothness feedback remains diagnostic. Historical Linux thresholded
-submission-error attribution is retained for replay; live revision 9 uses the
+submission-error attribution is retained for replay; live revision 12 uses the
 shared interval policy described above.
 Historical feedback policies remain selectable for exact replay.
 It disables the retired metronome and enables preparation on arrival.
@@ -2927,15 +3370,15 @@ It also sets `latchedFloorDisabled=1` and disables the extra queue-mode budget.
 | Production source mapping | Decode completion (`playout_source_mapping_decoder_output=0`); absorbs hardware decode duration into the timeline offset |
 | Live interval-buffer attack | Request at most 250 us per 250 ms; apply at most 125 us per frame, with current quality pressure, fresh readiness-attributed error, and serial service plus decoder queue each no longer than the actual intended interval |
 | Live interval-buffer release | Shared 250 us per second after eight seconds of qualified clean observations; short sequence breaks preserve earned recovery, while long score debt remains reporting/attack evidence |
-| Historical readiness attack/release inputs | 500 us attack and 10 us release; not the live revision-7 growth/release rule |
+| Historical readiness attack/release inputs | 500 us attack and 10 us release; not the live interval-buffer growth/release rule |
 | Live preset-cap basis | Fitted source period (`playout_delay_cap_uses_observed_period=1`); captured policies retain their recorded basis |
 | GPU readiness lead | Recent completed backend wait p99 plus 500 us, attacked by at most 1,000 us per sample and released at 250 us/s; unavailable asynchronous VAAPI completion does not train this term |
 | GPU readiness ceiling | `min(12,000 us, fitted source period)`; target/deadline unchanged |
 | Capacity telemetry | `playout_capacity_telemetry=1` exposes unclamped demand and cap pressure in live decisions |
 | Smoothing gain | 150 when Reduce judder is checked; 0 when unchecked |
 | Smoothing period EMA | 25 per mille with fractional carry, plus 20,000 per million phase-error feedback; active only with smoothing enabled |
-| Positive smoothing lag cap | 6,000 us, shared with the readiness reserve; active only with smoothing enabled |
-| Smoothing readiness reserve | p98 of the last 128 smoother-caused shortfalls minus 500 us, at most 3,000 us, +250 us per frame, released at 500 us/s; zero when unchecked |
+| Positive smoothing lag cap | 2,000 us for native scheduled presentation; 6,000 us for worker-paced presentation, shared with the readiness reserve; active only with smoothing enabled |
+| Smoothing readiness reserve | p98 of the last 128 smoother-caused shortfalls minus 500 us, at most 2,000 us for native scheduled or 3,000 us for worker-paced presentation, +250 us per frame, released at 500 us/s; zero when unchecked |
 | Smoothing readiness bound | Enabled with Reduce judder; early retiming preserves known decode readiness and the raw target's typical render allowance; smoothing-only misses cannot grow or renew the interval buffer |
 | Render lead floor | 3,000 us |
 | Preparation start | Use the existing playout interval (`playout_prepare_on_arrival=1`), with no additional post-submission delay |
@@ -3015,9 +3458,13 @@ predicted      = previousSmoothedBasis + trackedPeriod
 error          = predicted - (raw + R)
 trackedPeriod -= 0.02 * error                 # phase feedback, next frame
 adjustment     = 0.85 * error
-adjustment     = clamp(adjustment, -(delayBeforeThisFrame + R), 6000 us - R)
+adjustment     = clamp(adjustment, -(delayBeforeThisFrame + R), lagCap - R)
 smoothedBasis  = raw + R + adjustment         # cadence_smoothing_us = R + adjustment
 ```
+
+`lagCap` is 2,000 us for native scheduled presentation and 6,000 us for
+worker-paced presentation. The readiness reserve is capped by that retiming
+allowance, so its native maximum is 2,000 us rather than 3,000 us.
 
 With the production readiness bound, `adjustment` above is the requested
 smoother adjustment. Its clock basis retains that request, while the applied
@@ -3030,7 +3477,8 @@ including frames the smoother cannot currently place, so a cadence reset does
 not step the schedule by `R`. It is learned only from frames the smoother
 placed: `min(readyOffset - playoutDelay, 0) - adjustment` is the lateness caused
 by moving that frame before its raw slot, and `R` tracks its p98 over the last
-128 placed frames minus 500 us, capped at 3 ms. See the 2026-09-22 Reduce judder
+128 placed frames minus 500 us, capped at 2 ms for native scheduled presentation
+and 3 ms for worker-paced presentation. See the 2026-09-22 Reduce judder
 section above for why and for its evidence.
 
 The actual integer implementation also reseeds from the authoritative fitted
@@ -3093,9 +3541,12 @@ This restores vrr14's planned-slot protection rule, without vrr17's extra
 and its software floor is disabled. Otherwise the adaptive floor applies.
 DXGI uses `Present(1, 0)` for protected slots and
 `Present(0, DXGI_PRESENT_ALLOW_TEARING)` for slots that clear that threshold;
-`MOONLIGHT_VRR_SYNC_FLIPS=1` synchronizes those too (see 2026-09-28 above). Diagnostic composition already
-provides native ordering; its protection capability likewise permits a slot
-without the extra CPU floor. It does not expose DXGI tearing flags.
+`MOONLIGHT_VRR_SYNC_FLIPS=1` synchronizes those too (see 2026-09-28 above).
+Composition's separate `native_scheduled_presentation` capability reserves
+display deadlines at least one physical display period apart, without the
+DXGI guard or a CPU enqueue floor. Merely accepting a synchronized native
+present does not establish separate visible frames. Composition does not
+expose DXGI tearing flags.
 
 `lastSubmission` in that rule is the spacing anchor, not always the previous
 Present call (`latched_flip_anchor=1` in production since 2026-09-22). A
@@ -3314,20 +3765,30 @@ legacy/replay behavior. In that branch 1000 per mille means p100, 999 means
 p99.9, and 995 means p99.5. Those values must not be confused with the active
 Reserve p99.95 implementation.
 
-Production sets `playout_prediction_only=1` and `playout_responsive_buffer=9`
+Production sets `playout_prediction_only=1` and `playout_responsive_buffer=12`
 for every normal VRR session. The interval-quality observer described above owns
-requested delay, with 125 us per-frame attack application and preset-timed
-release. Revision 9 scores each interval as
+requested delay, with 125 us per-frame attack application and shared gradual
+release. Revision 12 and historical revisions 9/10/11 report each interval as
 `min(1, max(abs(actualInterval - intendedInterval) - tolerance, 0) / intendedInterval)`
-and averages that fractional loss over evaluated time in the preset's history
-window. The one-second mean remains diagnostic. Fresh per-interval excess and
-below-target history authorize growth only with eligible, absorbable late
-readiness; the 250 us request step and 250 ms cooldown remain unchanged.
-Revisions 7/8 retain their mean-before-tolerance scoring for exact replay.
+and average that fractional loss over evaluated time in the selected history
+window. Revision 12 retains valid measurements during control qualification and
+holds protection while the retained score is below target. Revisions 11/12 use
+the same loss for reporting and control, and take the score window from the
+actual configured history. Revisions through
+10 preserve their target/history-tuple recognition and historical 30-second
+fallback for exact replay. Historical revisions 7/8 use
+`min(1, max(meanErrorOverOneSecond - tolerance, 0) / intendedInterval)` for
+both reporting and buffer control, accumulating time-weighted loss in their
+historical window. Only explicit historical revision 10 uses this mean-based loss for control,
+including hold/release qualification, while reporting per-interval loss. Fresh per-interval
+excess and eligible, absorbable late readiness are still required for growth;
+the 250 us request step and 250 ms cooldown remain unchanged. Revision 9
+retains coupled per-interval control; revisions 7/8 retain their old reports.
 With `playout_smoothing_readiness_bound=1`, its readiness attribution
 uses the later of the raw and smoothed targets, excluding misses caused solely
 by advancing an otherwise on-time frame. The same attribution governs hold
-renewal, allowing clean recovery instead of retaining smoothing-induced delay.
+renewal from current pressure, allowing clean recovery when the long history
+also meets its target instead of retaining smoothing-induced delay.
 It bypasses the following historical percentile growth/release law.
 The retired revision-4 estimator keeps 100 ms buckets over the selected preset's learning
 window, including successes. Lowest latency uses 99% over 30 seconds, Balanced
@@ -3484,11 +3945,13 @@ ordering protects texture reuse. The purpose is both correctness and avoiding
 accidental waits for work belonging to subsequent frames.
 `renderVideo()` queues `ID3D11DeviceContext4::Wait` for the captured boundary
 before any copy or shader read; that GPU dependency is the correctness mechanism.
-With monitored fences, the worker's `waitForDecode()` also blocks until the
-exact captured value completes, taking no context lock and using its own event
-with the 50 ms / fence-value-verified wait described below. That post-wait clock
-is `decodeCompleteUs`, which production source mapping requires to absorb
-hardware decode time (the Linux `vaSyncSurface()` equivalent). Between
+With monitored fences, `observeDecodeReadiness()` independently reports CPU
+wait duration and completion evidence, taking no context lock and using its own
+event with the 50 ms / fence-value-verified wait described below. The worker
+records its post-observation upper bound as `decodeCompleteUs` even for short
+waits and already-ready fences; the former 200 us threshold cannot determine
+timestamp correctness. Unknown asynchronous readiness stays unknown in the
+input graph. Production source mapping uses the observed completion boundary. Between
 `78b99f1c` and 2026-09-22 this check was nonblocking, which left Windows mapped
 from decoder output while Linux mapped from completion. Non-monitored fences and
 shared devices remain nonblocking; there, a zero CPU decode-wait measurement
@@ -3511,18 +3974,22 @@ keep the compatibility copy below 4K; 4K streams bind when the GPU has Feature
 Level 11.1+ or D3D11 fences. It holds the presentation lock while manipulating
 render state. Immediately after recording the frame, preparation signals and
 flushes a present-ready fence, arms its event, and performs one nonblocking value
-poll. It publishes the prepared frame without waiting for completion, reports
-`sourceFrameReusable=false`, and releases the presentation lock before the
-worker's cadence hold. The source `AVFrame` remains owned through presentation;
-on the separate-device path, the render-to-decode fence also protects decoder-
-surface reuse.
+poll. It publishes the in-flight marker under the presentation lock, then
+verifies completion of that exact value during preparation. The lock is released
+while waiting and reacquired before checking the prepared frame, display state
+and device. Successful preparation caches that exact completion proof, reports
+`sourceFrameReusable=true`, and releases the presentation lock before the worker's
+cadence hold. The worker may then release the source `AVFrame`: the completed
+rendering marker proves that every GPU read from it has retired. The separate-
+device render-to-decode fence remains an additional ordering dependency.
 
 At the target boundary `presentAdaptive()` reacquires the presentation lock and
-verifies that exact present-ready value before calling `Present`. It releases
-that lock while waiting (on a shared device this also lets decode continue), then
-reacquires and revalidates the prepared frame, display state and device. Usually the cadence hold
-has already covered the GPU work and this is a completed-value poll. A late frame
-pays only the residual wait at the target. The complete fence wait has a 50 ms
+checks the cached proof for the exact prepared marker before calling `Present`.
+It does not poll or wait for GPU completion at that boundary. Cancellation or
+replacement clears the proof, and completion returning from an interrupted wait
+cannot revive a discarded frame. Final presentation still revalidates the display
+and device; mutex acquisition and the native Present call may themselves block.
+The preparation fence wait has a 50 ms
 bound, blocks on the event in 1 ms slices, and checks the fence value between
 waits; the value, rather than notification delivery alone, proves readiness. A
 stale notification cannot release incomplete work, and a delayed notification
@@ -3536,26 +4003,25 @@ preparation and request device recovery; an unsynchronized frame is never
 submitted as a fallback.
 `gpu_ready_wait_result` records the aggregate fence-wait status in Win32 wait
 codes; individual slice timeouts are not whole-fence failures. The trace's poll
-fields describe the first poll at the final Present-boundary check, replacing
-the nonblocking preparation poll when that check runs. A cancelled frame before
-the final check can still carry the preparation poll. Poll and final readiness
+fields describe the first poll during the completion verification in preparation,
+replacing the earlier nonblocking poll after Signal. Poll and final readiness
 timestamps retain conservative completion bounds. Historical captures retain
-their original single-event-wait observations unchanged.
+their original preparation or Present-boundary observations unchanged.
 
-When the target-boundary check completes successfully, the VRR worker records its
-residual verified wait as `gpu_readiness_applied_us` and the next controller
+When preparation verifies completion successfully, the VRR worker records its
+verified wait as `gpu_readiness_applied_us` and the next controller
 decision exposes the bounded `gpu_readiness_lead_us`. The estimator uses only completed waits in
 the current ten-second window, takes the configured percentile (99% in live
 sessions), adds a 500 us margin, and slews toward that demand. It is a render
 start opportunity, not a promise of completion: a late fence still follows the
-existing failure/recovery and presentation path, and the current source target
+bounded failure/recovery path, and the current source target
 is never moved to hide the stall.
 
 Fence completion proves the prepared backbuffer work has finished before Present.
 If the recorded poll found the value complete, its end is the completion upper
-bound; otherwise the successful final wait is the upper bound. A final-boundary
-poll may overstate service because the fence could have completed earlier during
-the cadence hold. Replay accepts either a preparation poll or a final poll and
+bound; otherwise the successful preparation wait is the upper bound. A historical
+final-boundary poll may overstate service because the fence could have completed
+earlier during the cadence hold. Replay accepts either a preparation poll or a final poll and
 anchors counterfactual upper-bound mapping according to that poll's placement.
 The controller uses the resulting uncertainty conservatively for the serial-
 service gate. CPU poll/event brackets are not an exact hardware timestamp or a
@@ -3564,7 +4030,8 @@ measurement of total GPU execution time.
 ### 10.2 Native Present parameters and telemetry
 
 On the DXGI path, `D3D11VARenderer::presentAdaptive()` creates one
-`DxgiPresentParameters` value from the controller's latch request. The same value supplies native
+`DxgiPresentParameters` value from the controller's latch request and native
+predecessor protection. The same value supplies native
 telemetry and `presentPreparedFrame()`, which forwards it to DXGI:
 
 - Latched: `Present(1, 0)`.
@@ -3576,6 +4043,23 @@ passing interval one to DXGI is therefore part of the renderer contract.
 `tst_dxgipresent` exercises the actual shared call boundary using a fake
 swapchain, including transitions, parameter reporting, and native result
 propagation. Actual display behavior still requires Windows validation.
+
+For a controller-planned adaptive slot, native flip protection performs at most
+one `GetFrameStatistics()` query, immediately before the native call. An accepted
+predecessor ID must be known and `PresentCount` must equal it; missing identity,
+failed/disjoint statistics, pending work and unexpected counters synchronize.
+Only a fresh successful blank observation on the same uniquely identified physical
+output can admit the adaptive candidate. Active, unavailable, stale, reversed or
+uncertain raster evidence also synchronizes. Protection starts with the first
+adaptive request, independently of diagnostic/alignment flags. The final query
+follows metadata population and optional diagnostic probes, and its full age is
+limited to min(250 us, display period / 16). There is no scanline spin or
+refresh-age extrapolation, and repeated observation failures never disable safety.
+The native override is reported as `flip_protection_latched`; its reference stays
+zero because the raster-query time is not a measured predecessor flip timestamp.
+This closes the pending-only guard's unknown/active-scanout admission holes; a
+fresh blank cannot reserve the phase of a later asynchronous flip.
+`MOONLIGHT_VRR_SYNC_FLIPS=1` retains the explicit all-synchronized diagnostic mode.
 
 Historical builds computed and recorded interval one but hardcoded zero in
 the native helper. Their `latched_present` and native interval fields describe
@@ -3611,10 +4095,14 @@ historical replay parameters; missing `playout_require_display_events` defaults
 to zero to preserve old exact baselines. New schema-5 traces additionally record
 `latch_time_kind` (0 unavailable, 1 refresh reference, 2 display event).
 
-The DXGI fallback statistics provider supplies no verified display events.
-Production uses submission estimates for its client cadence report; independent-
-flip events from the preferred composition presenter populate the separate
-display graph and present-timing diagnostics.
+The fallback DXGI statistics provider supplies no verified display events.
+The graph separately joins its image IDs and measured refresh-count/QPC anchors
+to show `Display refresh (DXGI)`. That observation does not enter verified
+display-event cadence, latency learning, or adaptation.
+Production uses submission estimates for its client cadence report. Matched
+DXGI refresh observations populate the separately labeled graph lane;
+independent-flip events from composition populate display-event timing
+and present-timing diagnostics.
 Readiness prediction independently adapts padding in both directions. Composition-frame statistics also lack a verified frame
 display instant, so the same estimator covers periods without independent-flip
 events. This lower-confidence timing remains internal telemetry; it does not
@@ -3622,7 +4110,10 @@ claim native display coverage or learn display-service latency from it.
 Linux Wayland presentation feedback and Gamescope actual-present timestamps
 are explicitly marked as display events and remain eligible for measurement.
 
-`MOONLIGHT_VRR_ALIGN=1` enables observation-only raster probes around Present.
+`MOONLIGHT_VRR_ALIGN=1` adds observation-only raster probes around Present.
+The independent protection guard can record a before-only sample with alignment
+off. Such samples require matching protection-query and native Present brackets;
+replay accepts that provenance without relaxing the paired alignment contract.
 DisplayConfig signal geometry and QPC correlation support phase modeling.
 `D3DKMTGetScanLine()` reports raster position around a CPU observation; it does
 not establish when a queued flip became visible. Cloned/ambiguous display paths
@@ -3634,9 +4125,9 @@ for that claim.
 
 ### 10.4 Composition presentation and display timing
 
-Eligible Windows VRR sessions attempt the composition presenter by default.
-`MOONLIGHT_VRR_COMPOSITION=0` disables the attempt; `1` retains its previous
-explicit opt-in behavior. The value is captured during renderer initialization,
+Windows VRR sessions use waitable DXGI by default. The composition presenter
+is requested only with `MOONLIGHT_VRR_COMPOSITION=1` on supported devices.
+The value is captured during renderer initialization,
 so a stream reconnect is required. Startup logs identify the actual presenter,
 including setup fallback. Hardware support permits independent flip but does
 not prove that every live present uses it.
@@ -3656,11 +4147,24 @@ manager/surface, and a DirectComposition visual bound to the streaming window.
 Initial allocation and each resize explicitly set the surface source rectangle
 to the full buffer; omitting this leaves successful submissions with no image.
 The same shaders, overlays, colorspace, GPU-ready fence, and pacing deadline
-are used. Buffer acquisition checks availability without waiting. Submission
-cancels older pending presents and targets the current QPC-derived presentation time, with
-no added source period or wait for a presentation event. `ForceVSyncInterrupt`
+are used. Buffer acquisition checks availability without waiting and returns
+`S_FALSE` when all five buffers remain unavailable. Scheduled submission preserves
+accepted predecessors and translates the worker's future display deadline into
+QPC-derived 100 ns presentation time using a fresh clock bracket. Elapsed
+deadlines request immediate presentation, without adding a period to hide
+lateness. The legacy immediate overload remains available for probes.
+Clock correlation is retried a bounded number of times when preemption makes
+the bracket unreliable; persistent uncertainty drops that frame with `S_FALSE`
+instead of treating a scheduling interruption as device loss.
+`ForceVSyncInterrupt`
 requests prompt statistics even with hardware flip queues. Buffer storage
 is not a queue-depth target; OS/driver scheduling still needs measurement.
+`CancelPresentsFrom(1)` is restricted to resize/reset, window/display epoch,
+suspension, and worker shutdown rather than discarding accepted predecessors
+before each new present. Retiring-fence, availability, and skipped/canceled
+status evidence release the ownership accounting. Queued status alone does
+not release ownership or establish display. Trace rows expose cumulative skip,
+cancel, and status-overflow counts plus the latest drained status ID and value.
 
 Only independent-flip statistics with the matching surface tag, output adapter,
 source ID, and increasing present ID become display events. Their 100 ns system-relative
@@ -3668,9 +4172,23 @@ timestamps are correlated with scaled QPC through a fresh bracket on the worker
 clock, with bounded age and uncertainty. Composition statistics do not become
 display events. The backend is trace value 3; DXGI flags, query results, and raw
 QPC fields remain unset. The explicit `native_synchronized_presentation` flag
-keeps every controller decision latched and omits the software floor without
-claiming DXGI flag switching. Missing flags default to zero for historical exact
-replay; session-policy replay resolves the current composition capability.
+keeps every controller decision latched without claiming DXGI flag switching.
+The independent `native_scheduled_presentation` flag enforces a display-period
+deadline floor and permits early CPU enqueue. `submission_us` records actual
+native enqueue; `native_target_us` records an accepted deadline, and
+`scheduling_boundary_us` is their maximum for accepted work. CPU holding occurs
+after enqueue, outside the renderer lock. Failed enqueue does not reserve a
+future anchor. Raw target/clock-bracket fields audit native deadline translation;
+skipped/canceled counts distinguish acceptance from display. The raw
+`native_displayed_duration_100ns` field is Windows' `GetPresentDuration()` value:
+the driver-approved custom refresh duration, not measured image residency or
+proof that the image remained visible for that long. A native display event
+earlier than the requested target is diagnostic rather than capture corruption;
+Windows documents the target as an attempt to display as close as possible.
+Missing flags retain historical exact replay. Session-policy replay resolves
+the current composition capabilities, but cannot predict native service timing
+under a changed queue model. D3D11 calibration identity includes
+`native-scheduled=1` so old scheduling history is not silently reused.
 Resize replaces
 buffers; display changes recreate the renderer and its output identity.
 
@@ -3834,6 +4352,21 @@ worker run, and rejects focus loss during frame delivery.
 
 ### Linux Vulkan presentation
 
+Linux package capabilities must be qualified independently of launch/version.
+The daily.183 AppImage disabled Moonlight Wayland, lacked matching Qt Wayland
+plugins, and built SDL without its Wayland backend; its X11 launch test did not
+qualify native feedback or HDR. The corrected packaging candidate enables all
+three layers, keeps DRM/EGLFS renderer policy separate, and uses host libwayland
+with host Mesa/EGL to avoid an older bundled client library hiding host symbols.
+AMDGPU stable-pstate capability detection accepts distribution header layouts
+while retaining required ioctl operations and the existing stream-scoped hold.
+Package gates inspect actual SDL drivers, Qt plugins, feedback/HDR code and GPU
+capability; isolated feedback tests and private headless Wayland startup complement
+the existing X11 smoke test. They do not establish hardware HDR surface negotiation,
+physical VRR, GPU state changes or calibration quality. Matched Deck runtime
+validation remains required; backend/present-mode calibration caches are preserved
+and must not be cross-seeded from Immediate into Mailbox.
+
 On Linux the VRR request prefers the Vulkan frontend. The adaptive mode is
 selected for the surface at startup: Mailbox on ordinary Wayland, Immediate on
 X11/KMSDRM, and Immediate on Gamescope. Gamescope additionally tries Mailbox
@@ -3977,7 +4510,7 @@ queued audio latency. Muting can suppress audio processing without retiming VRR.
 
 Input goes from SDL handlers to common-library input APIs and a separate sender.
 
-Windows/Linux DualSense waveform feedback (updated 2026-10-02) runs separately
+Windows/Linux DualSense waveform feedback (updated 2026-10-05) runs separately
 from video and ordinary stream audio. A Bluetooth Sony DualSense/Edge with an
 exact SDL HID device path can advertise controller capability
 `LI_CCAP_HAPTICS_PCM` (`0x8000`) after its output backend opens successfully.
@@ -3986,6 +4519,13 @@ The client also advertises `ML_FF_HAPTICS_PCM` (`0x04`) in SDP. Vibeshine captur
 5 ms stereo blocks using encrypted control type `0x5601`, unreliable ENet
 channel `0x08`. Both flags and the versioned payload are a coordinated extension
 in these forks; they are not an upstream Moonlight protocol guarantee.
+
+The session registers the waveform receive callback on both Windows and Linux
+with SDL 2.24 or newer. The common library advertises the SDP flag only when
+that callback is present; enabling the controller backend alone cannot enable
+waveform delivery. A Linux-only session callback guard previously left Windows
+controllers advertising `LI_CCAP_HAPTICS_PCM` while the connection omitted
+`ML_FF_HAPTICS_PCM`, so the host discarded their PCM feedback.
 
 The receive callback validates exact length, version, format, controller range,
 reserved fields and sample count before copying into a bounded per-controller
@@ -4009,16 +4549,27 @@ Shared-mode conversion uses the endpoint's channel mask. Startup buffers 10 ms
 the requested 20 ms engine buffer. The actual engine buffer size is queried.
 Idle output drains to silence, and disconnect joins the worker before SDL closes
 the controller. Linux USB and other platforms keep ordinary rumble. Native game
-haptics
-must originate from the Linux Vibeshine host's controller
-audio endpoint; game soundtrack audio is not a substitute.
+haptics must originate from the host's controller audio endpoint. Linux uses
+its composite DS5; Windows uses the optional local usbip-win2 composite DS5,
+selected per application with `dualsense-haptics` or globally with `usbip_ds5`.
+The wired host identity is independent of the physical client's USB/Bluetooth
+connection. USB/IP stays on the Windows host; no USB/IP transport is required
+on the Moonlight client. Game soundtrack audio is not a substitute.
 
 Bluetooth playback drops old/duplicate packets, resets conversion history on
 packet loss,
 bounds its input and converted queues, sends silence on underflow/idle/removal,
 and joins its worker before SDL closes the controller. It cancels SDL emulated
 rumble when waveform playback starts and suppresses legacy rumble while active;
-LED, motion and adaptive-trigger callbacks retain their own paths. Write failure
+LED, motion and adaptive-trigger callbacks retain their own paths. Shared
+receive admission rejects late/duplicate sequences, including wrap, before
+changing rumble priority; the sequence remains tracked across idle silence.
+A silent PCM stream cannot start playback. Both workers idle 60 ms after the
+last nonzero actuator sample, send/drain final silence, and stay inactive while
+an open host audio endpoint continues to submit zeros. This prevents silent
+audio from indefinitely suppressing rumble or overwriting it with silent
+Bluetooth reports. Windows HID transport includes the SDK before SDL so
+`CancelIoEx` remains declared when compiled separately. Write failure
 stops that waveform worker and logs the need to reconnect; ordinary controller
 input continues. Hardware coexistence with other applications writing the same
 controller still requires physical testing. The USB backend has not been validated
@@ -4179,7 +4730,14 @@ not establish native panel refresh or satisfy the DXGI raster gate.
 
 Current-policy replay and queue simulation select the shared prediction policy
 regardless of native backend. Exact replay continues to use recorded parameters,
-including historical Linux thresholded-event demand. Replay audits Vulkan's
+including `playout_queue_frames` for admission and completion queue-depth audits.
+The audit uses the same bounded capacity as the worker: an omitted/zero override
+retains the historical three waiting slots, while current four-slot captures
+permit depth four. A hard-coded three-slot audit falsely rejected clean current
+captures at startup without indicating a production queue overflow. The
+20261009-015916 capture exposed this discrepancy; its recorded timings remain
+observations, and counterfactual results require the corrected exact gate.
+Exact replay also retains historical Linux thresholded-event demand. Replay audits Vulkan's
 historical texture-poll readiness rows with their recorded result and completion-
 bound rules. Asynchronous Linux VAAPI captures can leave output readiness
 unavailable; replay must not invent completion evidence for those rows. The separate strict Windows/raster diagnostic gate remains backend-specific
@@ -4270,18 +4828,122 @@ available outcomes before 30 seconds have elapsed. This remains a readiness
 measurement, not a visible-smoothness score. With no eligible frames, the line
 shows the starting state. Revision 4 applies the same thresholded-miss policy to
 this score: through 1 ms is on time, 1-2 ms counts only above 50% prevalence,
-and over 2 ms or a drop always counts. Production revision 9 instead reports
+and over 2 ms or a drop always counts. Production revision 12 instead reports
 the interval buffer's one-second mean error and severity-weighted quality over
-the preset's history window; these are not that older readiness percentage.
-Tolerance is applied to each interval before time-weighted averaging, so
-isolated excess cannot disappear beneath a clean one-second mean. The score
-still measures severity, rather than the share of frames inside tolerance;
-unobserved sequence gaps remain excluded and drops are reported separately.
+the configured history window; these are not that older readiness percentage.
+Tolerance is applied to each interval before time-weighted loss is averaged.
+Both the report and buffer control use this same score and the displayed target.
+Isolated late/catch-up pairs retain their excess instead of disappearing beneath
+the one-second mean's tolerance. This remains a buffer-control quality
+measure, not the share of perfect frames or a guarantee of visible smoothness.
+Unobserved sequence gaps remain excluded and drops are reported separately.
+The history label uses the actual score window for preset and custom histories.
+That duration is a rolling retention limit, not an exponential smoothing time
+or a promise of that much scored coverage. The denominator is `evaluatedUs`:
+all observed adjacent submission intervals, including control qualification.
+Revision 11 and earlier discarded the first 0.5 s and then 1 s after every
+sequence break, allowing repeated gaps to hollow out a 120 s history. Revision
+12 keeps those measurements; qualification still gates changes to the buffer.
+Unknown cross-gap intervals are excluded. The overlay shows actual scored
+seconds beside the selected history so startup and missing data are visible.
+Phase rebases retain old score buckets; only a full controller/session reset
+clears them. Buffer growth requires both a below-target history and fresh attributable
+readiness; a below-target history holds protection against release. Once the
+history meets the target, qualified recovery and the gradual release rate
+still apply. Historical score debt alone never authorizes growth.
+Historical revisions retain their recorded averaging/control behavior for exact replay.
 
-With deep tracing off, the overview retains the VRR17 frame queue delay,
-rendering time, incoming host smoothness, VRR pacing/smoothness target, and
-interval-error rows. The historical Smoothness label still denotes the client
-interval-quality score, not measured physical display smoothness.
+The normal overlay retains Moonlight's original performance rows and incoming
+host smoothness, then appends two compact VRR lines for buffer/coverage and
+plan-referenced display timing. Decoder skips and detailed controller breakdowns
+remain in logs. Deep tracing does not expand the on-screen overview. Display
+feedback is OS telemetry, not optical proof of smoothness or HDR output.
+
+Native scheduled retiming qualification (2026-10-10): selected the completed
+`C:/Users/Chase/Desktop/vrr-diagnostics/20261010-011901-001-1b37e5ed-11a9-4df3-8e1d-28f7721924ee/Moonlight.vrrtrace`
+(21,358,668 bytes; last write 2026-10-10 01:30:11.9569692 UTC; SHA-256
+`b05a58575aeabbee6e38edd51ca1694c4b822a4a86d3021fdc9cbc692888b0e9`).
+The untouched trace fails exact replay after loss on frame 1929 because the old
+writer omitted `PacedFrame::lostPackets()`. Its matching session log explicitly
+identifies all seven affected frame IDs and confirms seven loss-affected decoded
+frames. A separately named derived trace adds only their logged packet counts,
+the optional `lost_packets` column, and a recomputed content hash. Every original
+timing, policy and identity field is preserved. Provenance is retained in
+`build/cadence-loss-reconstruction.json`; this is a reconstruction using external
+evidence, not an unchanged original capture.
+
+On that derived input the unchanged policy reproduces all 63,945 reference
+targets, 63,944 submitted timestamps, 63,947 tear classifications, and required
+controller diagnostics exactly. The 15-policy sweep retains gain 150 and selects
+a 2 ms native scheduled lag/reserve cap: presented-interval jerk over 2 ms changes
+from 30.2% to 29.6%, source-spacing p99 from 1,949 to 1,931 us, and the replay's
+decode-to-submission p99 from 8,968 to 6,839 us. Average latency changes by only
+36 us. Shorter history, faster release and disabled smoothing worsen cadence in
+this capture. These are controller/submission simulations, including legitimate
+source variation; they do not predict a changed Windows display queue or prove
+optical smoothness. Wider worker-paced retiming remains active for the existing
+host-quantized cadence fixtures. New capture serialization preserves packet loss
+on every terminal row and the replay loader restores it before scheduling.
+This is a latency/cadence tradeoff: raw presented-interval jerk p99 increases
+slightly from 5,649 to 5,751 us, despite the lower over-2-ms share and source-error
+p99. It is not an improvement in every tail statistic.
+The final build passes all ten relevant deterministic suites and five exported
+exact fixtures, including cold/warm loss-bearing inputs and accepted/late/failed
+native submissions. Paired original/candidate nominal, periodic decision,
+preparation, submission and three-frame scheduler-burst runs remain unsaturated
+with zero modeled interval violations. Nominal p99 is bounded at 9 ms; the
+synthetic fault runs use a separate 25 ms p99 bound, not a normal-latency claim.
+The final scheduler run includes a 2.5 ms decision-stage burst because the
+recorded coarse-wake paths absorbed or suppressed the requested wake injection.
+
+Source-relative cadence detection (2026-10-09): `CadenceDetection` maintains
+independent two-second windows for CPU submissions and identity-matched native
+`DisplayEvent` observations. The reference is unwrapped RTP time carried with
+the frame through the existing presentation identity join, before mapping-offset
+slew, smoothing, buffering, and deadline recovery. A fixed latency cancels.
+Actual source intervals, including lower-rate output and rate transitions, remain
+the reference; this detector does not infer a defect from their duration.
+
+For native scheduled presentation, the worker supplies both the scheduling
+boundary and actual CPU enqueue to `noteSubmission()`. Only the actual enqueue
+feeds the CPU detector; accepted future deadlines continue to drive the existing
+controller policy. Replay supplies the corresponding recorded or simulated
+enqueue separately. The first diagnostic build accidentally used the scheduling
+boundary for this row; captures from it require raw `submission_boundary_us`
+analysis rather than treating the displayed CPU percentage as enqueue evidence.
+
+The existing configured tolerance is a diagnostic deadband, not a visibility
+threshold. Timestamp uncertainty is subtracted conservatively from interval-error
+magnitude; crossings whose uncertainty spans the deadband are reported separately
+as uncertain, never counted as definite deviations or clean evidence. The detector
+does not learn away scheduler delays as measurement noise. It reports definite
+deviations/observed intervals, positive stretches recurring within 250 ms, and
+sign reversals between adjacent definite deviations. A delayed frame and its
+catch-up create one stretch, not two recurring events. The 250 ms association
+window is an engineering grouping convention, not a perceptual threshold.
+
+Advanced statistics report the uncertainty-adjusted absolute error divided by
+observed source duration, worst interval error, and worst residual jerk with the
+number of observed interval pairs. These magnitudes are lower bounds; jerk uses
+`u[i] + 2*u[i-1] + u[i-2]` because the shared middle timestamp participates twice.
+Equal OS display timestamps for adjacent identities are counted as coalesced
+reports, not silently discarded or claimed as optical residency measurements.
+Source discontinuities, invalid samples and missing identities break adjacency;
+out-of-order identities do not replace the current frame. Clock restart or a
+tolerance change clears the window. Windows use 100 ms buckets and expire by
+observation time; no high-percentile estimate is inferred from two seconds.
+
+Source fidelity, deliberate smoothing, OS display behavior and perceived motion
+remain different quantities. The new display row includes the whole observed
+source-to-display residual, including intended retiming and panel-floor behavior;
+the existing `Present timing issues` row separately compares display outcomes to
+planned deadlines and submission error. Sparse display coverage is shown through
+the observed denominator or as unavailable, not filled from CPU submissions. DXGI
+refresh-reference observations are not promoted to native display instants.
+Neither detector changes targets, buffer requests, growth/release, presets, or
+trace schema. The derived source reference is recomputed during replay. Tests
+cover isolated/recurring errors, source cadence, uncertainty, identity gaps,
+coalesced reports, expiry, and native-feedback independence from control.
 
 Live statistics timing graph (2026-10-03, over `92119295` plus this worktree):
 the frametime graph is a separate overlay toggle from the stats text
@@ -4290,8 +4952,10 @@ streaming). `OverlayManager` keeps separate stats and graph flags; the debug
 overlay is enabled while either shows, so renderers need no new overlay type, and
 the graph can show without the text. It draws three aligned lanes, each with
 the raw interval of the newest 240 frames: Planned cadence (gray, target to
-target), Client submissions (cyan) and Display events (magenta, OS-reported
-`DisplayEvent` times). All lanes share one millisecond axis centred on the
+target), Client submissions (cyan), and magenta display timing. Native
+`DisplayEvent` sources retain `Display events`; matched DXGI refresh anchors
+use `Display refresh (DXGI)` with distinct provenance and accuracy. All lanes
+share one millisecond axis centred on the
 median planned interval with a +/-2 ms range, so a disturbance appears only in
 the lane where it enters the pipeline. Intervals within 1 ms of the reference
 (`TimingGraphLayout::FlatUs`) are drawn on the reference line, because that
@@ -4305,6 +4969,64 @@ interval needs feedback for both frames of the same epoch and backend, so a
 missing presentation is a gap, never one long interval. Planned intervals
 include buffer steps, which therefore appear as matching planned and submission
 spikes.
+
+GPU completion-observation correction (2026-10-08): the HEVC capture
+`20261009-013057-293-10dddb85-100d-45f0-bac6-e3639ec023c5/Moonlight.vrrtrace`
+closed cleanly and passed a fresh exact baseline with the pre-change replay.
+Frame 132 returned output at 61,649,565 us, dequeued at 61,655,368 us, and
+waited another 83 us, but retained output time as completion. 104 positive
+waits of at most 200 us have this error; 363 already-ready checks likewise
+retained output without evidence that it was complete at output. These points
+frequently established the minimum used for RTP mapping. The worker now uses
+explicit completion evidence independently of wait duration. Schema 5 adds the
+optional boolean `decode_readiness_observed`; replay audits post-observation
+ordering for declared observations and preserves the historical rules when it
+is absent. D3D11 calibration identity includes `decode-readiness=2`, preventing
+restoration of buffer seeds learned from the inconsistent timestamps. The new
+worker regression covers 0/83/200/201 us observations after 5.803 ms of prior
+delay and unknown asynchronous readiness. Completion is a conservative bound
+at observation, not exact GPU execution time. Backends without completion
+evidence retain the established output-time mapping fallback. Stored old
+traces cannot establish live GPU or display behavior after this correction.
+Final Windows validation: incremental app and diagnostic builds pass, all six
+required VRR suites plus profile and overlay tests pass, and all five exported
+readiness fixtures pass exact replay. The final replay also reproduces the
+selected HEVC capture exactly with zero changes across 21 compared metrics.
+This establishes the corrected observation contract and historical replay
+compatibility, not a measured improvement in live latency or display hitches.
+
+Incoming jitter / buffer panel (2026-10-08): a fourth panel shares frame
+positions with the cadence lanes and uses its own signed millisecond axis.
+Orange shows complete-frame network reassembly, purple shows proven decoder
+readiness, and green shows the buffer actually applied to that frame. All
+input offsets use the mapped source slot plus cadence retiming and readiness
+budget, before late-work clamps can move the final target. A purple point
+above green gets a red X: that decoder readiness exceeded the original buffer
+allowance. Coverage has no 1 ms visual flattening. When decoder completion is
+unknown, gray shows decoder output only, with no invented coverage verdict.
+RTP mapping/phase breaks leave gaps. These are frame-specific local readiness
+observations, not pure network transit or isolated decoder execution times;
+queueing and readiness waits can contribute. Only normal submitted frames are
+represented; dropped frames remain counted separately. The existing graph
+toggle enables all four panels. Collection uses existing frame metadata and
+timestamps without additional driver calls, waits or frame-path allocations.
+
+The panel also reports input hitch frames absorbed versus missed over a rolling
+two-minute window, independent of the 240-frame plot. A hitch is a frame whose
+decoder-readiness offset exceeds the active profile's interval tolerance,
+including custom values; exactly the tolerance is accepted. Absorption compares
+readiness with that frame's applied buffer, using the same original cadence
+slot as the lines. These are input frames, not consecutive-burst counts or
+OS display hitches. Late network/output observations without known decoder
+completion count as unknown, never as successful absorption. The row shows the
+largest uncovered excess and the percentage of submitted observations with
+usable source mapping, profile tolerance and proven completion. Counters collect
+while the graph is hidden. A bounded 100 ms bucket history expires counts and
+the worst excess after two minutes, including read-time expiry when delivery
+stops. Phase breaks retain history; a local clock restart or tolerance change
+starts a fresh definition. Dropped frames remain reported separately. Snapshot
+copying publishes the small aggregate alongside the bounded plot under the
+existing telemetry lock; recording adds no allocations, waits or driver calls.
 
 Present timing issues (2026-10-04): `Vrr13::PresentTiming` counts, over a rolling
 30 s window ending at the newest scored interval, display intervals that the
@@ -4344,7 +5066,7 @@ with the current definition:
 The result rides in `IntervalBuffer::Stats::present` for the overlay. It shows a
 percentage when there are fresh scored intervals, `paused below VRR range` when
 only paused intervals are fresh, and otherwise unavailable. It is diagnostic only:
-production revision 9 scores Smoothness from submission intervals and keeps
+production revision 12 scores Smoothness from submission intervals and keeps
 native-hitch adaptation off. Display misses therefore neither lower Smoothness
 nor grow, hold or release the buffer. Targets, buffer policy, trace schema and
 exact replay are unchanged.
@@ -4352,12 +5074,12 @@ exact replay are unchanged.
 This is available during ordinary VRR streams without tracing.
 `TimingGraphHistory` keeps 256 observations, allocated once when the pacer is
 created. Normal worker outcomes populate it under the existing telemetry lock;
-there are no new graphics-driver calls or per-frame allocations. While stats are
-enabled the decoder copies the newest 241 points (one predecessor for the first
-display interval) at 10 Hz and with each roughly one-second text refresh. The
+there are no new graphics-driver calls or per-frame allocations. While the graph
+is enabled the decoder copies the newest 241 points (one predecessor for the first
+display interval) at 10 Hz and with each enabled roughly one-second stats refresh. The
 overlay worker draws the lanes into the existing debug-overlay surface shared by
 the surface-based renderer APIs, so renderer overlay uploads occur at up to
-10 Hz while stats are shown. Controller targets, buffer policy and trace schema
+10 Hz while the graph is shown. Controller targets, buffer policy and trace schema
 are unchanged by this chart.
 
 Windows D3D11 overlay publication (2026-10-04): the renderer retains the last
@@ -4385,14 +5107,22 @@ and revision validation discards stale work during output changes. Status-messag
 font sizes remain independent.
 
 Display events are associated by backend, submission ID and presentation epoch;
-delayed feedback updates the earlier frame's observation. Only `DisplayEvent`
-timestamps are accepted. DXGI `RefreshReference` samples, Present return times
-and modeled scanout are excluded. Missing or nonmonotonic display samples leave
+delayed feedback updates the earlier frame's observation. Native `DisplayEvent`
+timestamps retain their existing semantics. DXGI references must pass a separate
+image-ID/refresh-identity join before becoming `ConfirmedRefresh` graph points;
+they do not enter strict display-event diagnostics or adaptation. Present return
+times and modeled scanout are excluded. Missing or nonmonotonic samples leave
 gaps, and a backend without feedback shows `Display events: unavailable`. These remain OS
 presentation observations, not physical-panel timing. Source rebases/phase
 discontinuities break the curves and ID matching, while ordinary client drops
 remain visible in the next measured submission interval. A fresh live stream is
 required to verify readability and GPU/upload cost on a particular device.
+
+GPU performance hold build compatibility (2026-10-11): the optional Linux
+request is compiled only when the installed AMDGPU header provides every
+context and stable-pstate symbol it uses. Older headers (including Ubuntu 22.04)
+compile a no-op hold and log its unavailability when the setting is enabled.
+Complete modern headers retain the context-owned request and restoration below.
 
 GPU performance hold (2026-10-03, over `92119295`): with Settings > **High-performance
 GPU power while streaming** (`highPerformanceGpuPower`, default off), `Session::exec()`
@@ -4442,8 +5172,8 @@ The average delay block separates GPU decode synchronization, frame queue time
 (queue residence plus pacing/other), and rendering (preparation plus submission
 call). These retain the existing accounting and successful-frame denominator.
 An explicit GPU-ready wait is reported with measurement coverage and averages
-only frames with a valid sample. On Windows the residual present-ready wait is
-inside the submission call and therefore also inside rendering; the GPU-queued
+only frames with a valid sample. On Windows the verified present-ready wait is
+inside preparation and therefore also inside rendering; the GPU-queued
 decode dependency is not a separate CPU wait. Linux VAAPI Mailbox output uses GPU
 presentation synchronization and has no CPU output-ready sample. Other Linux
 imports and software frames report their completion poll inside preparation.
@@ -4489,7 +5219,7 @@ and does not exclude long local arrival gaps when RTP is steady. The older
 including their sender/arrival exclusions, for comparison.
 
 These replay spacing fields use submission timing as a presentation proxy.
-Current revision 9 uses submission-interval error with readiness attribution to
+Current revision 12 uses per-interval submission-error loss with readiness attribution to
 control padding; native confirmation remains diagnostic. Historical prediction-
 only policies instead derive padding from readiness prediction.
 Report `smoothness_feedback.native_window_samples` and `native_window_misses`
@@ -5705,3 +6435,197 @@ The final native build and offscreen help pass. All nine VRR/backend suites pass
 and exact replay passes for the selected live trace plus contention, early-queue-
 discard, and Windows cancellation-fence worker fixtures. Windows source changes
 remain uncompiled here; fresh native integration tests are still required.
+
+
+### Default DXGI waitable queue admission (Windows)
+
+Qualified D3D11 VRR playback uses waitable DXGI automatically, with V-sync enabled
+and outside test-only probing. `MOONLIGHT_VRR_COMPOSITION=1` explicitly selects
+composition instead; unset, zero and other values keep waitable DXGI. The value
+is read at renderer initialization and is recorded as `composition_override`
+in diagnostic capture metadata. Reconnect after changing it. Renderer preferences
+are unchanged. The retired `experimentaldxgiwaitable` setting is removed on reload
+and its checkbox has been removed, so previous opt-in values cannot change policy.
+The swapchain retains its five buffers and uses FRAME_LATENCY_WAITABLE_OBJECT
+with per-swapchain maximum latency two. Unsupported creation/latency/handle setup
+retries ordinary DXGI once before swapchain resources exist. Probes, non-VRR
+playback, and other renderers do not activate waitable admission. Explicit
+composition setup failures retain ordinary DXGI.
+
+The pacing worker waits before touching the back buffer, outside presentation and
+decode locks. Admission waits have a 50 ms budget with 1 ms native wait slices;
+timeout skips rendering and native wait failure requests a device reset. UI
+transitions and worker destruction interrupt admission before the worker join.
+Cancellation without Present retains a consumed queue permit. ResizeBuffers
+preserves the creation flags and the handle; renderer recreation owns handle
+replacement. Fixed-pacing startup fallback disables CPU admission and restores
+the normal three-frame limit, leaving Present to throttle the valid swapchain.
+
+The wait signal is only queue admission. It is never used as scanout, vertical
+blank, or presentation-time evidence. Existing conservative DXGI tearing policy
+and honest estimated/confirmed timing labels remain unchanged. Changing the
+composition override requires a reconnect and live validation; deterministic
+tests do not establish physical smoothness or complete display-event coverage.
+
+Default-policy validation on 2026-10-09 local: the incremental Windows release
+and diagnostic builds pass. All eleven timing/controller, rate, worker,
+replay-config, render-policy, D3D11 binding, DXGI presentation, preferences,
+composition-policy, presentation-clock and overlay suites pass, together with
+replay help. Selection tests cover unset, empty, zero, one and non-enabling
+override values; preference migration covers both old saved boolean values.
+The complete portable tree and ZIP are published to ChaseShare, with matching
+application, replay, decoder and ZIP hashes and a successful UNC replay help
+check. The live executable SHA-256 is
+`d128c1b0cb0365b3cb767cc32e706a2444e9848efd3438c51093fc403a34f65c`.
+Both share-root tracing launchers document the new default and explicit override.
+Live gameplay under the new default remains to be assessed.
+
+
+### Linux PyroWave source-retention deployment (2026-10-10)
+
+Pool-backed PyroWave Vulkan planes now use the bounded asynchronous source-retention
+path despite their planar software pixel-format descriptors. A cloned AVFrame holds
+the pool slot until every source plane retires its GPU reads; pool entries release
+the AVFrame rather than invoking libplacebo AVFrame unmapping. Decode timeline waits,
+render-complete presentation semaphores, synchronized Mailbox, the four-entry
+retention bound and eight-slot decoder pool remain active. Clone allocation failure
+keeps the synchronous output wait. Teardown finishes GPU work before dropping
+references. The renderer logs source/output formats once for live verification.
+
+The native application build and offscreen help passed. Current-source overlay and
+Vulkan presentation/swapchain tests passed. The pacing suite has six failures in
+unchanged Windows DXGI guard fixtures. The completed Linux 4:4:4 baseline passes
+exact replay. GPU surface lifetime and display improvement require fresh live
+validation. The installed executable SHA-256 is 5c3e9a3bcedd372d04a687a5e6d22825f3671cd935abcd1d9aba0266eb7ce587.
+Deployment atomically replaced the executable; an already running process retains
+its old image until the next normal launch.
+
+
+### Adaptive input buffer, bounded catch-up and completion clock (production default, 2026-10-10)
+
+The adaptive input buffer, bounded catch-up (`PhaseTrajectory`) and normalized
+producer clock are the default for every VRR session. For diagnosis only,
+`MOONLIGHT_VRR_EXPERIMENTAL_ADAPTIVE_BUFFER=0` restores the revision-12 buffer and
+`MOONLIGHT_VRR_BOUNDED_CATCHUP=0` disables catch-up and the normalized clock while
+keeping the adaptive buffer. Traces serialize the active parameters, so captures
+replay with their own policy; a strict replay of a 2026-10-10 VRR17 capture (its
+start-delay seed restored) still reproduces every decision.
+
+**Buffer.** The profile smoothness target and history (for example 99.50% over
+200 s) select a frame-coverage percentile of producer lateness relative to the
+unbuffered source slot. Each requirement subtracts the profile tolerance once and
+the VRR recovery headroom (`recoveryHeadroomUs()`: source period minus the larger
+of display period and typical render), so a lower frame rate never needs more
+buffer than a higher one for the same jitter. Once learned, eligible evidence
+rises at 1000 us/s and falls at 250 us/s; packet loss, overload and invalid
+mappings are ineligible. The overlay shows the buffer with its target and
+coverage with its target on one line.
+
+**Rate layers and learning.** Lateness itself depends on the rate (22:55
+capture: median 2.9 ms at 110 FPS, -0.35 ms at 30 FPS), so the controller keeps
+one buffer layer per source-rate range: a rate within 15% of a layer's anchor
+period shares it. Each layer keeps its own evidence, protection and coverage. A
+rate seen before resumes its layer at once; a new rate starts from the previous
+layer's evidence (seeding its target, not its coverage), rescaled by the VRR
+headroom floor in both directions: gained headroom is credited, lost headroom is
+restored up to the evidence-backed target. Any step coincides with the cadence
+change. A layer that saw fewer than 30 eligible frames was a rate the detector
+passed through and is discarded; at most eight layers are kept, and a layer whose
+evidence aged out of its history is forgotten. A phase discontinuity only breaks
+adjacency (lateness keeps its level across it); a rebase still clears evidence in
+every layer and keeps protection. Until a layer's profile tail is first
+supported (and again after a rebase), protection follows the largest eligible
+requirement at once instead of rising at 1000 us/s. Previously every rate change
+and phase discontinuity cleared the evidence: back at 110 FPS after 30 FPS the
+buffer relearned from 1 ms, 198 of the first 200 frames missed and coverage
+restarted near 1%. On the recorded 22:55 lateness (open-loop replay of the buffer;
+lateness against the unbuffered slot does not depend on it) the return misses 26
+instead of 215 frames in its first 5 s with coverage at 97.7%, the first 10 s of
+the session miss 8 instead of 165, and the session 169 instead of 625; the steady
+22:48 session misses 56 instead of 198.
+
+**Producer clock.** Source time maps to reassembly + (decode completion − decode
+submission): our own decoder queue and deliberate decode hold are excluded, the
+decoder's full service time is not. PyroWave's decoder output is GPU submission,
+so anchoring at output (the first candidate) planned frames ~1.1 ms before decode
+completion at the median, up to 5 ms, and every frame was clamped late. The
+worker's completion timestamp is exact only when it blocked on the decode for at
+least 200 us; a frame that finished while queued is observed late, so its
+completion is decoder output plus the median of the last 64 exact GPU decode
+durations, never later than the observation
+(`VrrTimingController::estimateDecodeCompleteUs()`). The input requirement uses
+the same estimate, so GPU decode jitter can grow the buffer.
+
+**Catch-up.** A frame shown later than planned is held on screen; successors
+then run slightly fast until phase returns. Each repays 1/32 of the remaining
+carry, at least 0.5% of its interval, never beyond the interval tolerance or the
+VRR room above the panel's fastest refresh. Lateness is measured against the
+trajectory's own planned target, because immediate (Wayland mailbox) paths
+report the actual submission as the accepted time; only lateness beyond the
+31-frame median submission lateness and the tolerance creates carry. Carry is
+capped at one source period, beyond which the successor accepts compression to
+the physical floor. Catch-up never skips a frame, and stale checks treat carry
+up to one source period as intentional delay like the playout delay; overload
+beyond that is still shed by the existing stale and capacity policy.
+
+Bounded catch-up owns recovery: the VRR17 late-recovery floor (`VrrCatchUp`) is
+skipped while it is enabled. That floor spaced each frame from the previous
+actual submission and re-armed on any submission later than the original plan,
+so once the trajectory carried any delay it stayed armed. At 116 FPS on a
+120 Hz panel it could recover 0.19 ms per frame, less than the usual 0.28 ms
+wake-up overshoot, and re-imposed each frame's lateness on the next: in the
+2026-10-10 sessions 81% of frames were pushed past plan, carry sat at a median
+of 4.0-7.7 ms on top of the buffer (buffer plus carry 14-16 ms at 99.50%, versus
+3.1 ms under VRR17), and 528 of 545 frames the buffer model counted as late
+were in fact presented on time on the carried schedule. The trajectory's own
+physical floor (one display period after the previous submission) now starts
+from that submission minus the smallest of the last 31 wake-up overshoots, which
+the next submission also incurs; counting the overshoot twice left 8 us of
+catch-up room per frame. In a 116 FPS controller test with 0.28 ms overshoot
+and a 6 ms late frame every 200 frames, carry falls from 4.0 ms at every frame
+to a median of 0 (p90 78 us).
+
+**Evidence and limits.** 2026-10-10 Linux 4K 4:4:4 10-bit PyroWave captures
+(`task-4/trajectory-launch/captures/trajectory`): the first candidate dropped
+about one frame per second from a carry that ratcheted with ordinary wake-up
+overshoot, grew the buffer to its 25 ms cap at 30 FPS, and pinned carry at one
+source period on mailbox. A closed-loop replay sweep chose the drain: 4.0–4.2%
+of intervals more than 0.75 ms off versus 7.7–8.1% for a tolerance-sized drain,
+at similar latency. The completion clock and default-on switch have controller
+and worker tests but no live capture yet; Windows and native scheduled
+presentation share the code but were not live-tested. Tests: all 26 VRR suites
+pass, and the pacing worker passes with default, `MOONLIGHT_VRR_BOUNDED_CATCHUP=0`
+and `=1`.
+
+### Windows PyroWave NT-handle qualification (2026-10-11)
+
+The integrated primary includes the exact two-line compatibility correction from
+PR #11 (source c4a679fb): unused D3D11_TEXTURE_KMT and OPAQUE_WIN32_KMT memory
+handles no longer gate capability detection. Used D3D11_TEXTURE, D3D12_RESOURCE
+and OPAQUE_WIN32 NT imports still require importable image formats. Opaque NT
+binary/timeline semaphore and D3D12-fence importability checks remain mandatory.
+Linux opaque-FD/DMA-BUF checks are unchanged. A nightly preparation regression
+rejects the original NT-only-driver failure without weakening required imports.
+This source/contract verification does not establish Arc hardware decoding;
+actual GPU interoperability remains a separate runtime qualification.
+
+The Windows decoder and calibration now use a separate D3D11-specific predicate.
+It queries the active R8/R16 optimal storage/sampled D3D11 NT texture format and
+legacy D3D12-fence importability, requiring enabled external Win32 extensions and
+available query functions. Generic consumers retain the broader NT memory and
+semaphore checks. Calibration adapter selection accepts either plane family;
+each SDR/HDR format is checked again in the actual decoder initialization.
+Existing DXGI/Vulkan LUID selection, texture/shared-handle/import/bind/fence errors
+remain fail-closed. Mock queries reject missing features/formats/importability and
+accept NT-only drivers despite unsupported unrelated D3D12_RESOURCE/KMT images.
+Hardware evidence on UHD770 establishes the actual R8/R16 texture and timeline
+fence imports; full decoding/streaming and Arc B390 remain separate qualifications.
+
+Integrated overlay-fit recovery (2026-10-11): retaining host smoothness adds a
+normal-overlay row. The combined graph/text surface exceeded the 1280x800 Deck
+viewport in the cross-platform fit fixture. Output bounds now accompany each
+coalesced worker revision, including same-font viewport changes. The CPU worker
+uniformly scales the complete surface only if it exceeds either bound, preserving
+all text/lanes and alpha without cropping; graph-only/already-fitting overlays
+keep their native size. The meaningful Deck/4K fit assertions remain mandatory.
+No GPU work or rasterization was moved into the streaming frame path.

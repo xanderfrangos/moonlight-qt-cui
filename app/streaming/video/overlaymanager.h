@@ -36,7 +36,7 @@ enum OverlayAnchor {
     // uploaded as a tiny texture instead of a screen-sized one.
     OverlayAnchorFill,
 };
-enum class StatusSource { Network, ClientPacing, Mouse, Count };
+enum class StatusSource { Network, PacketLoss, ClientPacing, Mouse, Count };
 
 class IOverlayRenderer
 {
@@ -155,6 +155,7 @@ private:
         uint64_t revision = 0;
         std::chrono::steady_clock::time_point queued;
         int fontSize = 0;
+        int outputWidth = 0, outputHeight = 0;
         SDL_Color color = {};
         SDL_Color background = {};
         char text[1024] = {};

@@ -11,11 +11,43 @@ IPv6 and a DNS hostname, checking ephemeral ports and real loopback datagram
 delivery. It also checks cancellation and invalid input. An optional hostname
 argument checks resolution and receiver binding against a local discovered
 host, without sending it a bandwidth probe.
+Handshake cases verify that the token originates from the actual receiving
+socket for IPv4 and IPv6, a lost first token is retried, measured reception
+stops retries, cancellation sends no token, and invalid or unannounced source
+ports are rejected. A progressive HTTP fixture verifies that Qt delivers the
+port header while the body is still pending and completes that body only after
+the UDP token arrives. Close-delimited response fixtures deliberately retain the HTTP connection after
+complete XML and verify early completion without consuming the body. Partial XML,
+trailing junk, HTTP errors, Content-Length and chunked framing reject the fallback.
+These loopback checks do not replace a live-host test through Windows Firewall.
+Native Qt HTTPS fixtures additionally exercise progressive headers, receiver-socket
+tokens and both normal EOF and complete XML on a retained connection. The latter
+reproduces daily183's wait-for-EOF failure and checks the daily184 compatibility
+path. Generated fixture certificates are exclusively for localhost tests; only
+that fixture disables peer verification. Timeout phase checks cover missing
+headers, handshake sends without measured packets, and a pending HTTPS result.
 The Mac delayed-reader cases hold packets for 160 ms before reading, check
 that kernel timestamps retain the original spacing, and verify Qt's next
 datagram notification still works for IPv4 and IPv6. The link-policy suite
 checks that failed searches retain their measured floor probe and identify
 lossless timing failures without classifying UDP as blocked.
+Frame-shaped policy regressions cover repeated 12-packet tail loss below 2%
+overall, holes in the final send group whose last packet arrived, a single
+frame over 10% loss hidden by intact frames, the exact 10% boundary, absent
+final frames, uneven sequence partitions, the 2% tail-frequency boundary,
+and two fresh confirmations. Small interior holes may qualify under the
+aggregate limits, including the measured 21/240 damaged frames at 0.142%
+aggregate loss with no frame over 10% and no missing tail groups. Search cases
+cover a passing intermediate speed despite failed endpoints, exhaustive
+50 Mbps alternatives before fallback, fallback ranking by tail/severe damage,
+failed confirmations, invalid measurements and cancellation.
+
+`tst_PacketSpeed.qml` exercises the production packet-speed settings control:
+numeric editing, controller arrow steps, Automatic reset, updates from an
+applied calibration value, and a compact layout. Run it with Qt's
+`qmltestrunner -input tests/pyrowave/tst_PacketSpeed.qml`. For an offscreen
+Windows run, set `QT_QUICK_CONTROLS_STYLE=Material`, `QT_QUICK_BACKEND=software`
+and `QT_QPA_FONTDIR=C:\Windows\Fonts`, then add `-platform offscreen`.
 
 ## macOS native GPU checks
 

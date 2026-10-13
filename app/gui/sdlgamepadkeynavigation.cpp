@@ -117,7 +117,7 @@ void SdlGamepadKeyNavigation::disable()
     }
 
     m_Enabled = false;
-    m_PressedControllerKeys.clear();
+    releaseControllerKeys();
     updateTimerState();
     Q_ASSERT(!m_PollingTimer->isActive());
 
@@ -131,6 +131,7 @@ void SdlGamepadKeyNavigation::disable()
 
 void SdlGamepadKeyNavigation::notifyWindowFocus(bool hasFocus)
 {
+    if (!hasFocus) releaseControllerKeys();
     m_HasFocus = hasFocus;
     updateTimerState();
 }
@@ -145,7 +146,7 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
     // Discard any pending button events on the first poll to avoid picking up
     // stale input data from the stream session (like the quit combo).
     if (m_FirstPoll) {
-        m_PressedControllerKeys.clear();
+        releaseControllerKeys();
         SDL_FlushEvent(SDL_CONTROLLERBUTTONDOWN);
         SDL_FlushEvent(SDL_CONTROLLERBUTTONUP);
         m_FirstPoll = false;
@@ -179,17 +180,26 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
             }
             const quint64 buttonId = (quint64(quint32(event.cbutton.which)) << 8) |
                                       event.cbutton.button;
-            if (type == QEvent::KeyRelease && m_PressedControllerKeys.contains(buttonId)) {
-                const auto key = m_PressedControllerKeys.take(buttonId);
-                sendKey(type, key.first, key.second);
+            if (type == QEvent::KeyRelease) {
+                // A release after focus reset or an unmatched release must
+                // never become a fresh navigation event in the new context.
+                if (m_PressedControllerKeys.contains(buttonId)) {
+                    const auto key = m_PressedControllerKeys.take(buttonId);
+                    if (key.window) sendKey(type, key.key, key.modifiers, false, key.window);
+                }
+                break;
+            }
+            // SDL buttons do not repeat. Duplicate downs must not apply a
+            // second adjustment or overwrite the original release route.
+            if (m_PressedControllerKeys.contains(buttonId)) {
                 break;
             }
             const auto sendControllerKey = [&](Qt::Key key,
                                                Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
-                if (type == QEvent::KeyPress) {
-                    m_PressedControllerKeys.insert(buttonId, qMakePair(key, modifiers));
-                }
-                sendKey(type, key, modifiers);
+                auto* target = QGuiApplication::focusWindow();
+                if (!target) return;
+                m_PressedControllerKeys.insert(buttonId, {key, modifiers, target});
+                sendKey(type, key, modifiers, false, target);
             };
 
             // Swap face buttons if needed
@@ -460,7 +470,18 @@ void SdlGamepadKeyNavigation::sendDirection(NavDirection direction, bool autoRep
     sendKey(QEvent::Type::KeyRelease, key, modifiers, autoRepeat);
 }
 
-void SdlGamepadKeyNavigation::sendKey(QEvent::Type type, Qt::Key key, Qt::KeyboardModifiers modifiers, bool autoRepeat)
+void SdlGamepadKeyNavigation::releaseControllerKeys()
+{
+    // Clear before dispatch: a receiver may synchronously change focus/mode.
+    const auto pressed = m_PressedControllerKeys;
+    m_PressedControllerKeys.clear();
+    for (const auto& key : pressed) {
+        if (key.window) sendKey(QEvent::KeyRelease, key.key, key.modifiers, false, key.window);
+    }
+}
+
+void SdlGamepadKeyNavigation::sendKey(QEvent::Type type, Qt::Key key, Qt::KeyboardModifiers modifiers,
+                                     bool autoRepeat, QWindow* target)
 {
     QGuiApplication* app = static_cast<QGuiApplication*>(QGuiApplication::instance());
 
@@ -469,7 +490,7 @@ void SdlGamepadKeyNavigation::sendKey(QEvent::Type type, Qt::Key key, Qt::Keyboa
         InputModeTracker::get()->notifyGamepadInput();
     }
 
-    QWindow* focusWindow = app->focusWindow();
+    QWindow* focusWindow = target ? target : app->focusWindow();
     if (focusWindow != nullptr) {
         QKeyEvent keyPressEvent(type, key, modifiers, QString(), autoRepeat);
         app->sendEvent(focusWindow, &keyPressEvent);

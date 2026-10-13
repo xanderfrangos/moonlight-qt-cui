@@ -287,6 +287,7 @@ HEADERS += \
     streaming/audio/audiostats.h     streaming/audio/renderers/renderer.h \
     streaming/audio/renderers/sdl.h \
     gui/computermodel.h \
+    gui/onlinecomputerentries.h \
     gui/appmodel.h \
     streaming/video/debandpresets.h \
     streaming/video/dithergrain.h \
@@ -310,6 +311,7 @@ HEADERS += \
     streaming/video/ffmpeg-renderers/pacer/gamescopedisplaystate.h \
     streaming/video/videopacketsize.h \
     streaming/video/clientpacingwarning.h \
+    streaming/video/pyrowave/pyrowavepacketlosswarning.h \
     backend/systemproperties.h \
     backend/networkbuffers.h \
     windowsvblankvirtualization.h
@@ -349,6 +351,9 @@ ffmpeg {
         streaming/video/ffmpeg-renderers/pacer/tracefile.h \
         streaming/video/ffmpeg-renderers/ivrrframepresenter.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/vrrtypes.h \
+        streaming/video/ffmpeg-renderers/pacer/vrr/absorbedjitter.h \
+        streaming/video/ffmpeg-renderers/pacer/vrr/inputpercentilebuffer.h \
+        streaming/video/ffmpeg-renderers/pacer/vrr/phasetrajectory.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/presentationtiming.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/prediction.h \
         streaming/video/ffmpeg-renderers/pacer/vrr/recentreadiness.h \
@@ -526,11 +531,14 @@ win32:!winrt {
         streaming/video/ffmpeg-renderers/d3d11ls1.h \
         streaming/video/ffmpeg-renderers/d3d11upscaler.h \
         streaming/video/ffmpeg-renderers/d3d11downscaler.h \
+        streaming/video/ffmpeg-renderers/compositionpresentpolicy.h \
         streaming/video/ffmpeg-renderers/d3d11pyrowave.h \
         streaming/video/pyrowave/pyrowavesurfaces.h \
         streaming/video/ffmpeg-renderers/presentationclock.h \
         streaming/video/ffmpeg-renderers/dxgipresent.h \
+        streaming/video/ffmpeg-renderers/dxgiwaitable.h \
         streaming/video/ffmpeg-renderers/d3d11fencewait.h \
+        streaming/video/ffmpeg-renderers/d3d11presentpolicy.h \
         streaming/video/ffmpeg-renderers/pacer/dxvsyncsource.h
 }
 macx {
@@ -776,6 +784,7 @@ macx {
 # builds). Windows PE/MSI version fields stop at 65535, so build-arch.bat
 # passes a mapped MOONLIGHT_PE_VERSION (6.2.26278.1530); see
 # scripts/vrr-pe-version.ps1.
+# Upstream's daily lane (6.x.0-daily.B) maps to 6.2.B the same way.
 VERSION = "$$BASE_VERSION"
 PE_VERSION = $$(MOONLIGHT_PE_VERSION)
 !isEmpty(PE_VERSION) {
@@ -784,3 +793,6 @@ PE_VERSION = $$(MOONLIGHT_PE_VERSION)
 DEFINES += VERSION_STR=\\\"$$MOONLIGHT_VERSION\\\"
 
 SOURCES += $$PWD/streaming/video/ffmpeg-renderers/pacer/vrr/profile.cpp
+
+# Compact presentation-only stats formatter.
+HEADERS += streaming/video/performancestats.h

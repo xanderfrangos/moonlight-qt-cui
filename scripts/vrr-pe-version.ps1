@@ -15,6 +15,10 @@
 #   6.1.0-vrrN     (N <= 17)  ->  6.2.N
 #   6.1.0-vrrN.P              ->  6.2.(N * 10 + P)   # vrr17.1 -> 6.2.171
 #   6.1.0-vrrN     (N >= 18)  ->  6.2.(N * 10)       # vrr18   -> 6.2.180
+#
+# Upstream's daily prerelease lane (inactive outside Nonary/moonlight-qt):
+#
+#   6.x.0-daily.B             ->  6.2.B
 param(
     [Parameter(Mandatory = $true)]
     [string]$CiVersion
@@ -33,6 +37,18 @@ if ($CiVersion -match '^(\d+)\.(\d+)\.(\d{12})$') {
     $build = ($time.Year % 100) * 1000 + $time.DayOfYear
     $revision = $time.Hour * 100 + $time.Minute
     Write-Output "$major.$minor.$build.$revision"
+    exit 0
+}
+
+# Daily versions share the existing 6.2 MSI sequence. The allocator chooses
+# a build higher than every previously tagged VRR and daily version.
+if ($CiVersion -match '^6\.[12]\.0-daily\.([1-9][0-9]*)$') {
+    $build = [long]$Matches[1]
+    if ($build -lt 1 -or $build -gt 65535) {
+        Write-Error "Daily Windows build must be between 1 and 65535"
+        exit 1
+    }
+    Write-Output "6.2.$build"
     exit 0
 }
 

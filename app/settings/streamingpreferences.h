@@ -336,6 +336,8 @@ public:
     // calls it "VRR" and it always uses the VRR rate.
     Q_PROPERTY(bool recommendedFps MEMBER recommendedFps NOTIFY displayModeChanged)
     Q_PROPERTY(int bitrateKbps MEMBER bitrateKbps NOTIFY bitrateChanged)
+    // Calibrated PyroWave frame pace (0 = let the host choose); see PyroWaveLink::searchPace.
+    Q_PROPERTY(int pyroWavePaceMbps MEMBER pyroWavePaceMbps NOTIFY bitrateChanged)
     Q_PROPERTY(bool unlockBitrate MEMBER unlockBitrate NOTIFY unlockBitrateChanged)
     Q_PROPERTY(bool autoAdjustBitrate MEMBER autoAdjustBitrate NOTIFY autoAdjustBitrateChanged)
     Q_PROPERTY(bool enableVsync MEMBER enableVsync NOTIFY enableVsyncChanged)
@@ -495,6 +497,7 @@ public:
     GamepadMenuTrigger gamepadMenuTrigger;
     bool keepAwake;
     int packetSize;
+    int pyroWavePaceMbps;
     AudioConfig audioConfig;
     // Audio jitter buffer size in milliseconds, or 0 to size it automatically
     int audioBufferMs;
