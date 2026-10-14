@@ -32,6 +32,12 @@
     X(uint64_t, playout_absorbed_jitter_release, playoutAbsorbedJitterRelease, 0) \
     X(uint64_t, bounded_catchup_enabled, boundedCatchupEnabled, 0) \
     X(uint64_t, normalized_source_mapping, normalizedSourceMapping, 0) \
+    /* Zero preserves historical capture accounting. */ \
+    /* 1 = raw applied offset; 2 = minus median per-second drift; */ \
+    /* 3 = minus least-squares drift over the trailing 120 s. */ \
+    X(uint64_t, playout_input_clock_relative_history, playoutInputClockRelativeHistory, 0) \
+    X(uint64_t, playout_input_bounded_recovery_credit, playoutInputBoundedRecoveryCredit, 0) \
+    X(uint64_t, playout_input_rate_drop_snap, playoutInputRateDropSnap, 0) \
     X(uint64_t, playout_input_percentile_enabled, playoutInputPercentileEnabled, 0) \
     X(uint64_t, playout_input_percentile_target_per_million, playoutInputPercentileTargetPerMillion, 990000) \
     X(uint64_t, playout_input_percentile_window_us, playoutInputPercentileWindowUs, 60000000) \
@@ -463,6 +469,7 @@ public:
 
     uint64_t timingBudgetUs() const;
     int64_t readinessBudgetUs() const;
+    uint64_t inputRecoveryCreditUs() const;
     uint64_t headroomUs() const;
     uint64_t sourcePeriodUs() const;
     uint64_t displayPeriodUs() const;
@@ -548,6 +555,7 @@ private:
         uint64_t inputObservationUs = 0;
         int64_t inputReadinessBudgetUs = 0;
         int64_t inputRequiredUs = 0;
+        int64_t inputClockOffsetUs = 0;
         bool inputValid = false;
         bool intervalValid = false;
         bool trajectoryValid = false;
@@ -594,6 +602,8 @@ private:
 
     bool timestampPlayoutEnabled() const;
     void resetPlayoutOffsets();
+    int64_t inputClockOffsetUs(uint64_t nowUs);
+    void updateInputDriftFit(uint64_t nowUs);
     int64_t observePlayoutOffset(uint64_t observationUs, int64_t offsetUs,
                                  bool cadenceEligible = true,
                                  bool phaseDiscontinuity = false);
@@ -752,6 +762,31 @@ private:
     uint64_t m_LastPlayoutOffsetObservationUs = 0;
     uint64_t m_PlayoutOffsetSlewRemainder = 0;
     bool m_TimestampPlayoutActive = false;
+    // The applied offset is still slewing toward its window minimum.
+    bool m_PlayoutOffsetConverging = false;
+    // Decision time of the last abrupt source-rate drop, zero when none is open,
+    // and the anchor period of the last layer that settled before it.
+    uint64_t m_InputRateDropAtUs = 0;
+    uint64_t m_InputSettledLayerPeriodUs = 0;
+    // Input history coordinate: applied offset movement minus the drift rate
+    // (trailing least-squares slope in mode 3), continuous across reseeds.
+    uint64_t m_PlayoutOffsetEpoch = 0;
+    bool m_InputClockValid = false;
+    uint64_t m_InputClockEpoch = 0;
+    int64_t m_InputClockLastOffsetUs = 0;
+    uint64_t m_InputClockLastUs = 0;
+    int64_t m_InputClockCoordinateUs = 0;
+    int64_t m_InputClockRawUs = 0;
+    int64_t m_InputClockDriftRemainder = 0;
+    uint64_t m_InputDriftAnchorUs = 0;
+    int64_t m_InputDriftAnchorRawUs = 0;
+    std::array<int64_t, 61> m_InputDriftSlopesPpb{};
+    size_t m_InputDriftSlopeCount = 0;
+    size_t m_InputDriftSlopeIndex = 0;
+    struct InputDriftPoint { uint64_t atUs; int64_t rawUs; };
+    std::deque<InputDriftPoint> m_InputDriftPoints;
+    uint64_t m_InputDriftLastFitUs = 0;
+    int64_t m_InputDriftFitPpb = 0;
     std::map<unsigned int, PlayoutBand> m_PlayoutBands;
     Vrr13::Reserve m_PlayoutHistory;
     Vrr13::WorkloadEpisode m_WorkloadEpisode;

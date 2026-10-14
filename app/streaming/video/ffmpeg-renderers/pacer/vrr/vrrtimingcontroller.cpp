@@ -207,6 +207,9 @@ VrrTimingParameters vrrTimingParametersForSession(
     parameters.boundedCatchupEnabled = config.experimentalBoundedCatchup;
     parameters.normalizedSourceMapping = config.experimentalBoundedCatchup;
     if (parameters.playoutInputPercentileEnabled) {
+        parameters.playoutInputClockRelativeHistory = config.correctInputAccounting && config.experimentalBoundedCatchup ? 3 : 0;
+        parameters.playoutInputBoundedRecoveryCredit = config.correctInputAccounting && config.experimentalBoundedCatchup;
+        parameters.playoutInputRateDropSnap = config.correctInputAccounting && config.experimentalBoundedCatchup;
         parameters.playoutInputPercentileTargetPerMillion = uint64_t(options.targetHundredths) * 100;
         // Explicit zero default preserves strict input coverage in old traces.
         parameters.playoutInputPercentileToleranceUs = options.toleranceUs;
@@ -522,6 +525,8 @@ void VrrTimingController::clearTimeline(bool retainLearnedBudgets)
         m_InputLayers.clear();
         m_InputLayerPeriodUs = 0;
         m_InputLayerEligibleAtStart = 0;
+        m_InputSettledLayerPeriodUs = 0;
+        m_InputRateDropAtUs = 0;
         m_PresentTiming.reset();
         m_SubmissionCadence.reset();
         m_DisplayCadence.reset();
@@ -1305,6 +1310,7 @@ VrrTimingDecision VrrTimingController::schedule(const PacedFrame& frame,
     m_Pending.inputObservationUs = nowUs;
     m_Pending.inputSlotUs = addSigned(m_Pending.intervalIntendedUs, decision.readinessBudgetUs);
     m_Pending.inputReadinessBudgetUs = decision.readinessBudgetUs;
+    m_Pending.inputClockOffsetUs = inputClockOffsetUs(nowUs);
     // Readiness is the (estimated) decode completion: PyroWave's decoder
     // output is only GPU submission, and GPU decode variation is jitter the
     // buffer must cover. Completions observed after a queue wait are bounded
@@ -2405,7 +2411,7 @@ void VrrTimingController::noteSubmission(bool submitted, bool cancelled,
                     m_Parameters.playoutInputPercentileRiseUsPerSecond,
                     m_Parameters.playoutInputPercentileFallUsPerSecond,
                     m_Pending.inputReadinessBudgetUs, m_Parameters.playoutInputPercentileToleranceUs,
-                    recoveryHeadroomUs());
+                    inputRecoveryCreditUs(), m_Pending.inputClockOffsetUs);
             }
         }
         else m_MeanMissBuffer.observe(submissionUs, ready > deadline ? ready - deadline : 0,
@@ -2833,6 +2839,16 @@ uint64_t VrrTimingController::recoveryHeadroomUs() const
     return m_SourcePeriodUs > occupied ? m_SourcePeriodUs - occupied : 0;
 }
 
+uint64_t VrrTimingController::inputRecoveryCreditUs() const
+{
+    const uint64_t physicalRoomUs = recoveryHeadroomUs();
+    if (!m_Parameters.playoutInputBoundedRecoveryCredit) return physicalRoomUs;
+    // A physical refresh gap is not permission to spend the entire gap in
+    // one interval. Preserve free recovery credit only within the configured
+    // cadence allowance; the trajectory still owns and gradually spends it.
+    return std::min(physicalRoomUs, intervalQualityToleranceUs(m_Parameters));
+}
+
 uint64_t VrrTimingController::scaledDisplayPeriodUs(
     uint64_t numerator, uint64_t denominator) const
 {
@@ -2999,6 +3015,136 @@ void VrrTimingController::resetPlayoutOffsets()
     m_LastPlayoutOffsetObservationUs = 0;
     m_PlayoutOffsetSlewRemainder = 0;
     m_TimestampPlayoutActive = false;
+    m_PlayoutOffsetConverging = false;
+    ++m_PlayoutOffsetEpoch;
+}
+
+int64_t VrrTimingController::inputClockOffsetUs(uint64_t nowUs)
+{
+    if (!m_Parameters.playoutInputClockRelativeHistory ||
+        !m_Parameters.normalizedSourceMapping) return 0;
+    if (m_Parameters.playoutInputClockRelativeHistory == 1)
+        return m_PlayoutOffsetValid ? m_AppliedPlayoutOffsetUs : 0;
+    if (!m_PlayoutOffsetValid) return m_InputClockCoordinateUs;
+    if (!m_InputClockValid) {
+        m_InputClockValid = true;
+        m_InputClockEpoch = m_PlayoutOffsetEpoch;
+        m_InputClockLastOffsetUs = m_AppliedPlayoutOffsetUs;
+        m_InputClockLastUs = m_InputDriftAnchorUs = nowUs;
+        m_InputDriftAnchorRawUs = m_InputClockRawUs;
+        return m_InputClockCoordinateUs;
+    }
+    // A reseed is a sender clock jump, not movement of retained readiness:
+    // the coordinate stays continuous and the slope bucket restarts.
+    int64_t deltaUs = 0;
+    if (m_InputClockEpoch != m_PlayoutOffsetEpoch) {
+        m_InputClockEpoch = m_PlayoutOffsetEpoch;
+        m_InputDriftAnchorUs = nowUs;
+        m_InputDriftAnchorRawUs = m_InputClockRawUs;
+    }
+    else deltaUs = m_AppliedPlayoutOffsetUs - m_InputClockLastOffsetUs;
+    m_InputClockLastOffsetUs = m_AppliedPlayoutOffsetUs;
+    m_InputClockRawUs += deltaUs;
+    m_InputClockCoordinateUs += deltaUs;
+    if (nowUs <= m_InputClockLastUs) return m_InputClockCoordinateUs;
+
+    // Offset tracking follows host/client clock drift as well as mapping
+    // movement. Drift moves future readiness by the same amount, so only the
+    // movement it does not explain shifts retained requirements.
+    if (m_Parameters.playoutInputClockRelativeHistory >= 3) {
+        const uint64_t elapsedUs = std::min<uint64_t>(nowUs - m_InputClockLastUs, 60000000);
+        m_InputClockLastUs = nowUs;
+        m_InputClockDriftRemainder += m_InputDriftFitPpb * static_cast<int64_t>(elapsedUs);
+        const int64_t driftUs = m_InputClockDriftRemainder / 1000000000;
+        m_InputClockDriftRemainder -= driftUs * 1000000000;
+        m_InputClockCoordinateUs -= driftUs;
+        updateInputDriftFit(nowUs);
+        return m_InputClockCoordinateUs;
+    }
+    // Mode 2 (2026-10-12 captures): median of per-second slopes. The applied
+    // offset slews in bursts and is still on most seconds, so this median
+    // reads zero drift on live sessions.
+    constexpr int64_t kMaximumDriftPpb = 500000;
+    constexpr int64_t kDriftBandPpb = 50000;
+    constexpr size_t kMinimumDriftBuckets = 5;
+    int64_t driftPpb = 0;
+    if (m_InputDriftSlopeCount >= kMinimumDriftBuckets) {
+        std::array<int64_t, 61> slopes{};
+        std::copy_n(m_InputDriftSlopesPpb.begin(), m_InputDriftSlopeCount, slopes.begin());
+        const auto end = slopes.begin() + m_InputDriftSlopeCount;
+        const auto middle = slopes.begin() + m_InputDriftSlopeCount / 2;
+        std::nth_element(slopes.begin(), middle, end);
+        const int64_t median = *middle;
+        int64_t sum = 0, count = 0;
+        for (auto it = slopes.begin(); it != end; ++it) {
+            if (*it >= median - kDriftBandPpb && *it <= median + kDriftBandPpb) {
+                sum += *it;
+                ++count;
+            }
+        }
+        driftPpb = std::clamp(sum / count, -kMaximumDriftPpb, kMaximumDriftPpb);
+    }
+    const uint64_t elapsedUs = std::min<uint64_t>(nowUs - m_InputClockLastUs, 60000000);
+    m_InputClockLastUs = nowUs;
+    m_InputClockDriftRemainder += driftPpb * static_cast<int64_t>(elapsedUs);
+    const int64_t driftUs = m_InputClockDriftRemainder / 1000000000;
+    m_InputClockDriftRemainder -= driftUs * 1000000000;
+    m_InputClockCoordinateUs -= driftUs;
+
+    const uint64_t bucketUs = nowUs - m_InputDriftAnchorUs;
+    if (bucketUs >= 1000000) {
+        // A bucket spanning a stall measures the catch-up, not the rate.
+        if (bucketUs <= 5000000) {
+            m_InputDriftSlopesPpb[m_InputDriftSlopeIndex] =
+                std::clamp<int64_t>(m_InputClockRawUs - m_InputDriftAnchorRawUs,
+                    -5000000, 5000000) * 1000000000 / static_cast<int64_t>(bucketUs);
+            m_InputDriftSlopeIndex = (m_InputDriftSlopeIndex + 1) % m_InputDriftSlopesPpb.size();
+            m_InputDriftSlopeCount = std::min(m_InputDriftSlopeCount + 1, m_InputDriftSlopesPpb.size());
+        }
+        m_InputDriftAnchorUs = nowUs;
+        m_InputDriftAnchorRawUs = m_InputClockRawUs;
+    }
+    return m_InputClockCoordinateUs;
+}
+
+void VrrTimingController::updateInputDriftFit(uint64_t nowUs)
+{
+    // The applied offset is a windowed minimum: it holds, then slews in
+    // bursts either way as early arrivals enter and leave the window. Only
+    // its trend over a long baseline is clock drift. A least-squares line
+    // over 120 s of 100 ms samples is refit once per second; the raw offset
+    // stays continuous across reseeds, so a sender clock jump is no slope.
+    constexpr uint64_t kPointIntervalUs = 100000;
+    constexpr uint64_t kFitWindowUs = 120000000;
+    constexpr uint64_t kMinimumFitSpanUs = 15000000;
+    constexpr size_t kMinimumFitPoints = 50;
+    constexpr double kMaximumDriftPpb = 500000.0;
+    if (m_InputDriftPoints.empty() || nowUs - m_InputDriftPoints.back().atUs >= kPointIntervalUs)
+        m_InputDriftPoints.push_back({nowUs, m_InputClockRawUs});
+    while (nowUs - m_InputDriftPoints.front().atUs > kFitWindowUs)
+        m_InputDriftPoints.pop_front();
+    if (m_InputDriftLastFitUs && nowUs - m_InputDriftLastFitUs < 1000000) return;
+    m_InputDriftLastFitUs = nowUs;
+    const auto& first = m_InputDriftPoints.front();
+    if (m_InputDriftPoints.size() < kMinimumFitPoints ||
+        m_InputDriftPoints.back().atUs - first.atUs < kMinimumFitSpanUs) return;
+    double meanX = 0, meanY = 0;
+    for (const auto& point : m_InputDriftPoints) {
+        meanX += double(point.atUs - first.atUs) / 1e6;
+        meanY += double(point.rawUs - first.rawUs);
+    }
+    meanX /= double(m_InputDriftPoints.size());
+    meanY /= double(m_InputDriftPoints.size());
+    double sxx = 0, sxy = 0;
+    for (const auto& point : m_InputDriftPoints) {
+        const double x = double(point.atUs - first.atUs) / 1e6 - meanX;
+        sxx += x * x;
+        sxy += x * (double(point.rawUs - first.rawUs) - meanY);
+    }
+    // Microseconds per second is ppm; store ppb for sub-ppm integration.
+    if (sxx > 0)
+        m_InputDriftFitPpb = static_cast<int64_t>(std::llround(
+            std::clamp(sxy / sxx * 1000.0, -kMaximumDriftPpb, kMaximumDriftPpb)));
 }
 
 int64_t VrrTimingController::observePlayoutOffset(uint64_t observationUs,
@@ -3110,6 +3256,7 @@ int64_t VrrTimingController::observePlayoutOffset(uint64_t observationUs,
                       m_AppliedPlayoutOffsetUs == windowMinimumUs)) {
         m_PlayoutOffsetSlewRemainder = 0;
     }
+    m_PlayoutOffsetConverging = m_AppliedPlayoutOffsetUs != windowMinimumUs;
     return m_AppliedPlayoutOffsetUs;
 }
 
@@ -3174,6 +3321,7 @@ VrrTimingController::InputLayerChange VrrTimingController::updateInputLayer(uint
     const bool settled = m_InputPercentileBuffer.stats().eligible >=
         m_InputLayerEligibleAtStart + kInputLayerMinimumFrames;
     if (settled) {
+        m_InputSettledLayerPeriodUs = m_InputLayerPeriodUs;
         if (m_InputLayers.size() >= kInputLayersStored) {
             m_InputLayers.erase(std::min_element(m_InputLayers.begin(), m_InputLayers.end(),
                 [](const InputLayer& a, const InputLayer& b) {
@@ -3639,7 +3787,7 @@ void VrrTimingController::updatePlayoutHistory(
     if (m_Parameters.playoutPredictionOnly) {
         if (m_Parameters.playoutResponsiveBuffer >= 5) {
             if (m_Parameters.playoutInputPercentileEnabled) {
-                const uint64_t vrrHeadroomUs = recoveryHeadroomUs();
+                const uint64_t vrrHeadroomUs = inputRecoveryCreditUs();
                 if (!m_InputPercentileBuffer.stats().initialized) {
                     m_InputPercentileBuffer.reset(m_AppliedPlayoutDelayUs);
                     m_InputLayerPeriodUs = m_SourcePeriodUs;
@@ -3664,6 +3812,15 @@ void VrrTimingController::updatePlayoutHistory(
                 // headroom is restored up to the evidence-backed target.
                 uint64_t lostHeadroomUs = 0;
                 const auto layerChange = updateInputLayer(nowUs);
+                if (m_Parameters.playoutInputRateDropSnap && layerChange != InputLayerChange::None) {
+                    // A period at least a quarter longer than the last settled
+                    // layer: 116 to 60 or 30 FPS, or 60 to 30 FPS. The fitted
+                    // period ramps through short-lived layers on the way, so
+                    // each of them re-arms; any other change ends the window.
+                    const bool drop = m_InputSettledLayerPeriodUs &&
+                        m_SourcePeriodUs * 4 >= m_InputSettledLayerPeriodUs * 5;
+                    m_InputRateDropAtUs = drop ? nowUs : 0;
+                }
                 if (layerChange == InputLayerChange::Created ||
                         (layerChange == InputLayerChange::None && cadence.sourceRateChanged)) {
                     if (vrrHeadroomUs > m_InputHeadroomUs)
@@ -3679,8 +3836,23 @@ void VrrTimingController::updatePlayoutHistory(
                     m_Parameters.playoutInputPercentileRiseUsPerSecond,
                     m_Parameters.playoutInputPercentileFallUsPerSecond,
                     m_ReadinessBudgetUs, m_Parameters.playoutInputPercentileToleranceUs,
-                    vrrHeadroomUs);
+                    vrrHeadroomUs, inputClockOffsetUs(nowUs));
                 m_InputPercentileBuffer.raiseForHeadroomLoss(lostHeadroomUs);
+                if (m_InputRateDropAtUs) {
+                    // After a drop the mapping often moves several ms over
+                    // seconds at the offset slew rate, and the source-relative
+                    // target moves the opposite way. Follow the target exactly
+                    // while that settles (at least 1 s, at most 10 s), so the
+                    // mapping plus buffer stays where the evidence needs it
+                    // instead of carrying the excess for tens of seconds.
+                    constexpr uint64_t kRateDropSnapMinimumUs = 1000000;
+                    constexpr uint64_t kRateDropSnapMaximumUs = 10000000;
+                    const uint64_t sinceUs = nowUs > m_InputRateDropAtUs ? nowUs - m_InputRateDropAtUs : 0;
+                    if (sinceUs < kRateDropSnapMaximumUs &&
+                            (sinceUs < kRateDropSnapMinimumUs || m_PlayoutOffsetConverging))
+                        m_InputPercentileBuffer.followTarget();
+                    else m_InputRateDropAtUs = 0;
+                }
                 const uint64_t demand = m_InputPercentileBuffer.demand(m_AppliedPlayoutDelayUs);
                 m_UnclampedRequestedPlayoutDelayUs = m_InputPercentileBuffer.stats().clipped ?
                     m_InputPercentileBuffer.stats().headroomTargetUnclippedUs : demand;

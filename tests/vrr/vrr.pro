@@ -94,6 +94,8 @@ SUBDIRS += profile
 linux:packagesExist(wayland-client wayland-server) {
     gamescoperepaint.file = $$PWD/gamescoperepaint.pro
     SUBDIRS += gamescoperepaint
+    kwinscanoutguard.file = $$PWD/kwinscanoutguard.pro
+    SUBDIRS += kwinscanoutguard
 }
 
 phasetrajectory.file = $$PWD/phasetrajectory.pro
@@ -103,3 +105,7 @@ SUBDIRS += inputpercentileintegration
 
 performancestats.file = $$PWD/performancestats.pro
 SUBDIRS += performancestats
+
+# Clock-relative history and bounded recovery credit regression.
+SUBDIRS += inputaccounting
+inputaccounting.file = $$PWD/inputaccounting.pro

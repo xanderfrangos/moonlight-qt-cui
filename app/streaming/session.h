@@ -11,9 +11,13 @@
 #include "audio/renderers/renderer.h"
 #include "audio/audiostats.h"
 #include "video/overlaymanager.h"
+#include "video/clientpacingwarning.h"
 #include "diagnostics/diagnosticcapture.h"
 #include "displayprobe.h"
 #include "video/overlaypainter.h"
+#ifdef HAVE_KWIN_SCANOUT_GUARD
+#include "streaming/kwinscanoutguard.h"
+#endif
 
 class SupportedVideoFormatList : public QList<int>
 {
@@ -143,7 +147,8 @@ public:
     Overlay::StatsGraphConfig getStatsGraphConfig() const;
     // Size of the stream window in the pixel units renderers draw in
     static void getWindowPixelSize(SDL_Window* window, int& width, int& height);
-    bool clientPacingWarningsEnabled() const { return m_Preferences->connectionWarnings; }
+    bool clientPacingWarningsEnabled() const { return m_Preferences->connectionWarnings && !m_Preferences->hideVrrBufferWarnings; }
+    ClientPacingWarning& clientPacingWarning() { return m_ClientPacingWarning; }
     bool hevcPacingAlternative() const { return m_HevcPacingAlternative; }
 
     int streamColorRange() const
@@ -355,9 +360,13 @@ private:
     };
 
     StreamingPreferences* m_Preferences;
+    ClientPacingWarning m_ClientPacingWarning;
     PresentationSettings m_PresentationSettings;
     std::unique_ptr<DiagnosticCapture> m_DiagnosticCapture;
     DisplayProbe::StreamSampler m_DisplayProbe;
+#ifdef HAVE_KWIN_SCANOUT_GUARD
+    std::unique_ptr<KWinScanoutGuard> m_ScanoutGuard;
+#endif
     bool m_IsFullScreen;
     bool m_HevcPacingAlternative = false;
     SupportedVideoFormatList m_SupportedVideoFormats; // Sorted in order of descending priority

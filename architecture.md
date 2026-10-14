@@ -1,3 +1,50 @@
+Main input-accounting correction (2026-10-12): current bounded-catch-up sessions serialize
+`playout_input_clock_relative_history=3` and
+`playout_input_bounded_recovery_credit=1`; absent fields keep historical captures
+exactly replayable, and values 1 and 2 replay earlier versions of the correction.
+Retained input requirements share a source-clock coordinate and are projected
+into the current mapping for demand. The coordinate is the applied playout
+offset minus host/client clock drift and stays continuous across a sender-clock
+reseed. Mode 3 estimates drift as the least-squares slope of the offset over the
+trailing 120 s (100 ms samples, refit each second, at least 15 s span). The
+applied offset is a windowed minimum: on the 2026-10-12 23:04 Deck session it
+held still on about 90% of frames and slewed in +/-20-27 us/frame bursts both
+ways, while its trend was +32 ppm. Mode 1 used the raw offset, so drift moved
+every retained requirement by drift x age. Mode 2 took the median of per-second
+slopes, which read zero on that session and behaved like mode 1. Replaying that
+capture with only this field changed (99.50% / 120 s profile): legacy 0.91%
+misses at 3.44 ms mean buffer, mode 1 2.63% at 2.54 ms, mode 2 2.60% at 2.54 ms
+(the live overlay showed about 97% coverage with a flat buffer), mode 3 0.56% at
+3.43 ms. `tst_inputaccounting` covers smooth drift (+/-50 ppm) and a bursty
+offset from sparse early arrivals (+/-30 ppm) against the legacy accounting.
+
+Rate-drop follow (2026-10-12, `playout_input_rate_drop_snap=1` in current
+sessions, absent in older captures): when the input layer switches to a period
+at least a quarter longer than the last settled layer (116 to 60 or 30 FPS, 60 to
+30 FPS), the input buffer takes its target directly, in both directions, for at
+least 1 s and while the applied playout offset is still slewing toward its
+window minimum, at most 10 s. The fitted period ramps through short-lived layers
+during a drop, so each re-arms against the settled one; any other layer change
+ends the window. The step coincides with the cadence change. On the 23:04
+session the offset rose 9.3 ms over 4 s after a 105-to-30 FPS drop while the
+source-relative target fell by the same amount; draining at 250 us/s carried
+offset plus buffer from 8.8 to 17.3 ms for about 25 s. Replay of that session
+(mode 3 accounting): offset plus buffer stays at the evidence level (about
+10.3 ms), decode-to-submission mean over the next 15 s falls from 9.66 to
+6.04 ms, and the whole session moves from 0.563% misses / 3.43 ms mean buffer
+to 0.583% / 3.34 ms with presented jerk p99 3.42 to 3.44 ms. In the first 5 s
+after the session's 110-to-30 FPS drop, jerk p95 rose from 16.2 to 17.7 ms.
+Historical
+coverage outcomes keep their original protection. Input recovery credit is
+bounded by the configured interval allowance as well as physical VRR room;
+PhaseTrajectory still uses physical room and its existing gradual repayment.
+Profile target/history/tolerance, producer clock estimator, conditional decode
+hold, rate layers and 250us/s release remain. Legacy unbounded catch-up retains
+its original accounting. Diagnostic
+`MOONLIGHT_VRR_INPUT_ACCOUNTING=0` selects the historical control in the same
+binary. Tests and frozen capture guards establish software behavior; live
+GPU/compositor behavior requires a coordinated comparison.
+
 # Streaming, VRR, and timing architecture
 
 Downscaling filters (2026-10-04, source `d8fa2d3d` plus this change): the saved
@@ -136,6 +183,15 @@ retains native Wayland/nightly packaging through 2083d82a. The compact normal
 overlay keeps host smoothness and two plan-referenced VRR lines, with decoder
 skips and detailed tracing confined to logs. Historical task-4 notes below
 describe earlier candidates, not the final integrated overlay.
+
+Client VRR buffer warnings now require 20 continuous seconds at the applied
+buffer cap. Display also requires qualified quality at or below 99% and recent
+late/drop evidence. The overlay appears for up to five seconds and can recur only after
+20 minutes in the same stream session. Decoder recreation clears the visible
+overlay and observation streak while retaining the session cooldown. The
+Settings checkbox "Hide VRR buffer limit warnings" defaults to unchecked and
+suppresses this client pacing alert when selected; the general connection
+warning setting still gates it as before.
 
 ### Historical task-4 readability candidate (2026-10-11 UTC) copied from the
 currently selected build-claude-app source, preserving its measured/estimated
@@ -4466,6 +4522,41 @@ when empty. It no longer retains and re-presents the last image to fill gaps.
 Display-side low-frame-rate compensation remains the display's responsibility.
 Historical `gap_fills_before` and `gap_fill_last_us` CSV columns remain reserved
 and zero-valued to preserve trace compatibility.
+
+#### KWin scanout guard (2026-10-11)
+
+On Plasma Wayland, a fullscreen stream's handoff-to-screen latency
+(`latch_time_us - presenter_submission_time_us`) has a floor of about 1.4 ms
+with direct scanout and about 6 ms when KWin composites. KWin 6.4.3 never sets
+the presentation ZERO_COPY flag, so that floor is the evidence. A TV hotplug
+left two KWin states that composite every frame until something resets them:
+
+- A short animation effect (`fadingpopups`) stayed active forever. Its
+  timeline only advances when its window is painted, and any active effect that
+  does not opt out blocks direct scanout on every output.
+- The atomic test that moves the HDR gamma 2.2 to PQ conversion into the CRTC
+  `GAMMA_LUT` failed, so KWin fell back to a shadow buffer: an extra 4K GPU pass
+  per frame that delayed PyroWave 4K 4:4:4 decode (decode wait p50 3.7 ms
+  -> 8 ms, about 20% client pacing drops).
+
+`streaming/kwinscanoutguard.cpp` runs on its own thread while a stream is
+active. Every 2 s while fullscreen it reads KWin's `activeEffects` over D-Bus
+and reloads a short animation effect active for 6 s, at most three times per
+effect. Every 10 s it reads KMS state with plain ioctls: an active connector
+with HDR metadata whose CRTC has no `GAMMA_LUT` is the shadow-buffer fallback.
+The guard then re-applies that output's current SDR brightness through
+`kde_output_management_v2`. Any applied configuration makes KWin rerun
+`tryKmsColorOffloading()`, with no visible change. Outputs set to prefer color
+accuracy use the shadow buffer on purpose and are left alone; retries stop
+after three. Every action is logged with the prefix `KWin scanout guard:`.
+
+The guard links neither libwayland-client nor libdrm (the AppImage disables
+both). It loads libwayland-client at runtime, and every compositor wait has a
+2 s deadline so the end of a stream never blocks on it. The Flatpak needs
+`--talk-name=org.kde.KWin` for the effect check. The KMS check and the HDR
+retry use only the Wayland socket and `/dev/dri`. `MOONLIGHT_KWIN_SCANOUT_GUARD=0`
+disables the guard, and `tests/vrr/tst_kwinscanoutguard` exercises it against a
+fake KWin.
 
 ## 12. Audio, input, and end-to-end latency
 

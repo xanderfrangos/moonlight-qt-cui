@@ -2690,6 +2690,11 @@ void Session::exec()
         SDL_DisableScreenSaver();
     }
 
+#ifdef HAVE_KWIN_SCANOUT_GUARD
+    // Repairs KWin states that silently disable direct scanout of the stream.
+    m_ScanoutGuard = KWinScanoutGuard::start(SDL_GetWindowFlags(m_Window) & SDL_WINDOW_FULLSCREEN);
+#endif
+
     // Hide Qt's fake mouse cursor on EGLFS systems
     if (QGuiApplication::platformName() == "eglfs") {
         QGuiApplication::setOverrideCursor(QCursor(Qt::BlankCursor));
@@ -2855,6 +2860,11 @@ void Session::exec()
             break;
 
         case SDL_WINDOWEVENT:
+#ifdef HAVE_KWIN_SCANOUT_GUARD
+            if (m_ScanoutGuard) {
+                m_ScanoutGuard->setFullscreen(SDL_GetWindowFlags(m_Window) & SDL_WINDOW_FULLSCREEN);
+            }
+#endif
             switch (event.window.event) {
             case SDL_WINDOWEVENT_MINIMIZED:
             case SDL_WINDOWEVENT_HIDDEN:
@@ -3188,6 +3198,9 @@ DispatchDeferredCleanup:
     // so we can return to the Qt GUI ASAP.
     m_InputHandler->setCaptureActive(false);
     SDL_EnableScreenSaver();
+#ifdef HAVE_KWIN_SCANOUT_GUARD
+    m_ScanoutGuard.reset();
+#endif
     SDL_SetHint(SDL_HINT_TIMER_RESOLUTION, "0");
     if (QGuiApplication::platformName() == "eglfs") {
         QGuiApplication::restoreOverrideCursor();

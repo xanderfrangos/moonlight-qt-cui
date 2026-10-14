@@ -9,7 +9,6 @@
 #include "../bandwidth.h"
 #include "decoder.h"
 #include "incomingframetiming.h"
-#include "clientpacingwarning.h"
 #include "ffmpeg-renderers/renderer.h"
 #include "ffmpeg-renderers/pacer/pacer.h"
 #include "statsgraphs.h"
@@ -167,7 +166,6 @@ private:
     // Fixed once the connection has negotiated it, so it's worked out when
     // sampling starts rather than on every sample.
     uint32_t m_StatsGraphPacketWireBytes;
-    ClientPacingWarning m_ClientPacingWarning;
     PyroWavePacketLossWarning m_PyroWavePacketLossWarning;
     uint64_t m_LastTimingGraphUs = 0;
     bool m_VrrUsesMaximumBuffer = false;
