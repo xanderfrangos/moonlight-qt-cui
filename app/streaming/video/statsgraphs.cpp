@@ -172,15 +172,17 @@ void StatsGraphs::run()
                 uploadCost.summarize(cost.uploadCount, cost.uploadMs, cost.uploadMaxMs);
 
                 // The summary stands in for the text overlay, so it only
-                // appears while that is hidden.
-                const bool textShown = m_OverlayManager->isOverlayEnabled(OverlayDebug);
+                // appears while that is hidden. The frametime graph shares the
+                // text overlay's surface, so the surface being up doesn't mean
+                // the text is.
+                const bool textShown = m_OverlayManager->isStatsEnabled();
 
                 // Fit beside the text overlay, which sits on the other side
                 // of the stream, rather than overlapping it. Its width is
                 // only known once it has been drawn, so the card may overlap
                 // it for a moment when the two appear together.
-                textWidth = textShown ? std::max(textWidth, m_OverlayManager->getOverlayWidth(OverlayDebug))
-                                      : 0;
+                textWidth = m_OverlayManager->isOverlayEnabled(OverlayDebug) ?
+                                std::max(textWidth, m_OverlayManager->getOverlayWidth(OverlayDebug)) : 0;
                 int maxWidth = m_ViewportWidth.load(std::memory_order_relaxed);
                 const int maxHeight = m_ViewportHeight.load(std::memory_order_relaxed);
                 if (maxWidth > 0) {
