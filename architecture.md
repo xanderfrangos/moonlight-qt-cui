@@ -6360,18 +6360,46 @@ Pure and header-only; tested by `tst_timestamppacing`.
   - Otherwise, after a re-anchor whose gap matches the long-run period (0.2%
     per frame EMA) to within 10%, the loop snaps back to that period. This
     stops brief game slowdowns from causing a run of re-anchors afterwards.
-- `PlayoutBuffer`: lateness is `(ready - smoothed source time)` minus its
-  3 s rolling minimum (twelve 250 ms buckets), which also follows clock drift.
-  - Targets use a baseline that follows that minimum at 2.4 ms/s, at most
-    0.1 ms per frame, as VRR Pacing Mode's playout offset does. The raw
-    minimum steps whenever an old minimum leaves the window, and every target
-    used to step with it. For the first 64 frames of a timeline, an earlier
-    minimum is adopted at once.
-  - The delay is the configured percentile of 3 s of lateness plus 0.5 ms,
-    clamped to the configured minimum and maximum.
-  - It grows at once and releases at 0.5 ms/s, toward the minimum when no
-    admitted frame is left in the window.
-  - A frame's target uses the delay in force before it arrived.
+- `PlayoutBuffer`: a frame's offset is `(ready + render lead - smoothed
+  source time)`. Lateness is that offset minus its 3 s rolling minimum
+  (twelve 250 ms buckets), which also follows clock drift.
+  - **Render lead (2026-10-18):** `TimestampPacer::submit()` passes the
+    learned render lead, read once per frame. That same value sets the late
+    flag and goes into the trace. Before this, the buffer covered readiness
+    only. On the 2026-10-08 Deck captures, 23–91% of frames then had their
+    target within the lead of readiness, the pacer's own late flag.
+  - **Baseline:** follows that minimum at 2.4 ms/s, at most 0.1 ms per frame,
+    as VRR Pacing Mode's playout offset does. For the first 64 frames of a
+    timeline, an earlier minimum is adopted at once.
+  - **Target (2026-10-18):** held in the offset coordinate, as VRR Pacing
+    Mode holds its input requirements (6920a2e6). It is the configured
+    percentile of 3 s of admitted offsets plus 0.5 ms. It grows at once and
+    releases at 0.5 ms/s.
+  - **Bounds:** the target is held between the baseline plus the configured
+    minimum and maximum buffer. With no admitted frame left in the window, it
+    releases toward the minimum. The reported buffer is the target's distance
+    past the baseline.
+  - **Why the coordinate changed:** the target used to be a delay above the
+    minimum. Each step of the minimum, when an unusually early arrival
+    entered or left the window, then moved the delay. The delay rose at once
+    and released slowly, so the target jumped later, then overshot. On a Deck
+    capture, frames sat 8–10 ms after readiness for about 10 s; it is now
+    3–4 ms.
+  - **Cost:** a lasting shift to earlier arrivals is followed only once the
+    later ones leave the window, then at the release rate: about 9 s for
+    3 ms. The old delay followed the baseline down within 1.5 s.
+  - **Replay (`tsreplay`), nine 2026-10-08 Gamescope captures,
+    frame-weighted, against the policy before both changes:**
+    - Presented jerk over 2 ms: 32.0 → 9.9 per mille.
+    - Missed planned V-blanks: 118 → 1.5 per mille.
+    - Skipped frames: 14.2 → 2.3 per mille.
+    - Mean delay: 11.3 → 14.1 ms (p95 18.0 → 21.6 ms).
+    - Each change alone: the render lead alone gave 10.0 per mille jerk at
+      14.3 ms. The coordinate change alone was slightly worse (33.3 per mille
+      at 11.3 ms): removing the overshoot exposed the uncovered lead.
+    - This is model output, not display timing, and its misses are judged by
+      the same recorded lead.
+  - A frame's target uses the target in force before it arrived.
 - Admission (2026-10-07): a paced frame's lateness sizes the delay only when
   its timeline didn't restart or re-anchor, it is no more than three times the
   maximum buffer late (a stall), and over the last second frames waited on

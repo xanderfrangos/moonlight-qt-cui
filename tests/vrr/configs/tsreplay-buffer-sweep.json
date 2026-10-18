@@ -9,6 +9,7 @@
         { "name": "max-buffer-8", "max_buffer_ms": 8 },
         { "name": "smoothing-off", "smoothing": "off" },
         { "name": "smoothing-standard", "smoothing": "standard" },
-        { "name": "render-1ms", "render_us": 1000 }
+        { "name": "render-1ms", "render_us": 1000 },
+        { "name": "buffer-lead-0", "buffer_lead_us": 0 }
     ]
 }

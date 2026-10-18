@@ -50,13 +50,15 @@ struct Stream {
 
     // Advances the source by periodUs and delivers the frame
     Policy::Decision next(double periodUs, double stampNoiseUs = 0, double arrivalDelayUs = 0,
-                          uint32_t hostLatencyUs = 3000, uint64_t decoderQueueUs = 0)
+                          uint32_t hostLatencyUs = 3000, uint64_t decoderQueueUs = 0,
+                          uint64_t renderLeadUs = 0)
     {
         sourceUs += periodUs;
         frame++;
         const uint32_t stamp = rtp + uint32_t(std::llround((sourceUs + stampNoiseUs) * 9 / 100));
         readyUs = epochUs + uint64_t(sourceUs) + 4000 + uint64_t(arrivalDelayUs);
-        const auto decision = policy.schedule(true, frame, stamp, readyUs, hostLatencyUs, decoderQueueUs);
+        const auto decision = policy.schedule(true, frame, stamp, readyUs, hostLatencyUs, decoderQueueUs,
+                                              renderLeadUs);
         decisions.push_back(decision);
         return decision;
     }
@@ -190,6 +192,98 @@ void baselineSlewsInsteadOfStepping()
     }
     check(start.policy.baselineUs() == start.policy.windowMinimumUs(),
           "a new timeline's baseline isn't slewed");
+}
+
+// How far past its source time a frame's target is, beyond the stream's fixed
+// 4 ms delivery
+double targetOffsetUs(const Stream& stream, const Policy::Decision& decision)
+{
+    return double(decision.targetUs) - (double(stream.epochUs) + stream.sourceUs + 4000);
+}
+
+// One frame arrives 3 ms before any other, then leaves the window. The
+// minimum steps down and back up with it, but the share of arrivals the
+// target covers doesn't change, so neither does the target. Measured as a
+// delay above the minimum, the step up overshot the target by most of the
+// step for several seconds.
+void earlyArrivalDoesntMoveTarget()
+{
+    const double periodUs = 1000000.0 / 60;
+    std::mt19937 random(3);
+    std::uniform_real_distribution<double> jitter(3000, 6000);
+    Stream stream(options(0), 60);
+    for (int i = 0; i < 600; i++) {
+        stream.next(periodUs, 0, jitter(random));
+    }
+    const double beforeUs = targetOffsetUs(stream, stream.decisions.back());
+    const double minimumBeforeUs = stream.policy.windowMinimumUs();
+    stream.next(periodUs, 0, 0);
+    double lowestMinimumUs = stream.policy.windowMinimumUs();
+    double worstUs = 0;
+    for (int i = 0; i < 600; i++) {
+        const auto decision = stream.next(periodUs, 0, jitter(random));
+        lowestMinimumUs = std::min(lowestMinimumUs, stream.policy.windowMinimumUs());
+        worstUs = std::max(worstUs, std::fabs(targetOffsetUs(stream, decision) - beforeUs));
+    }
+    check(minimumBeforeUs - lowestMinimumUs > 2500, "the early arrival moves the window minimum");
+    check(worstUs < 600, "but the target stays where it was, entering and leaving the window");
+    check(std::fabs(stream.policy.baselineUs() - minimumBeforeUs) < 300, "the baseline returns once it has left");
+}
+
+// Every arrival moves 3 ms earlier for good. The target covers the window's
+// arrivals, so it holds until the later ones leave it, then releases at the
+// buffer's release rate. (Measured from the minimum, it followed the
+// baseline down within about a second and a half instead.)
+void earlierArrivalsAreReleased()
+{
+    const double periodUs = 1000000.0 / 60;
+    std::mt19937 random(4);
+    std::uniform_real_distribution<double> jitter(0, 2000);
+    Stream stream(options(0), 60);
+    for (int i = 0; i < 600; i++) {
+        stream.next(periodUs, 0, 3000 + jitter(random));
+    }
+    const double beforeUs = targetOffsetUs(stream, stream.decisions.back());
+    std::vector<double> offsets;
+    for (int i = 0; i < 900; i++) {
+        offsets.push_back(targetOffsetUs(stream, stream.next(periodUs, 0, jitter(random))));
+    }
+    check(offsets[120] > beforeUs - 300, "the target holds while the later arrivals are in the window");
+    check(offsets[720] < beforeUs - 2700 && offsets[720] > beforeUs - 3300,
+          "and has followed them by 12 s");
+    for (size_t i = 1; i < offsets.size(); i++) {
+        check(offsets[i] - offsets[i - 1] < 300 && offsets[i - 1] - offsets[i] < 50,
+              "without stepping");
+    }
+}
+
+// A frame can be shown no sooner than its render lead after it is ready, so
+// the buffer covers readiness plus the lead. A steady lead moves every target
+// by itself and leaves the buffer as it was; a lead that varies is buffered
+// like arrival jitter.
+void bufferCoversRenderLead()
+{
+    const double periodUs = 1000000.0 / 60;
+    std::mt19937 random(5);
+    std::uniform_real_distribution<double> jitter(0, 3000);
+    Stream plain(options(0), 60), led(options(0), 60);
+    for (int i = 0; i < 600; i++) {
+        const double arrivalUs = jitter(random);
+        plain.next(periodUs, 0, arrivalUs);
+        led.next(periodUs, 0, arrivalUs, 3000, 0, 2500);
+    }
+    check(std::llabs(int64_t(led.decisions.back().targetUs) - int64_t(plain.decisions.back().targetUs) - 2500) <= 1,
+          "a steady render lead moves the target by itself");
+    check(std::fabs(led.policy.bufferUs() - plain.policy.bufferUs()) < 1, "and leaves the buffer as it was");
+
+    Stream varying(options(0), 60);
+    size_t onTime = 0;
+    for (int i = 0; i < 600; i++) {
+        const uint64_t leadUs = uint64_t(1000 + jitter(random));
+        const auto decision = varying.next(periodUs, 0, 0, 3000, 0, leadUs);
+        onTime += i >= 300 && decision.targetUs >= varying.readyUs + leadUs;
+    }
+    check(onTime >= 300 * 98 / 100, "a varying lead is covered like arrival jitter");
 }
 
 // A delivery stall: 150 ms without frames, then the ones held up arrive
@@ -651,6 +745,9 @@ int main()
     bufferCoversArrivalJitter();
     bufferReleasesSlowly();
     baselineSlewsInsteadOfStepping();
+    earlyArrivalDoesntMoveTarget();
+    earlierArrivalsAreReleased();
+    bufferCoversRenderLead();
     deliveryStallsDontGrowBuffer();
     overloadDoesntGrowBuffer();
     repeatsAreShownOnArrival();

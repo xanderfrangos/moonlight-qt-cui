@@ -392,6 +392,14 @@ SteamOS Desktop Mode:
    - On those captures, 23–91% of frames are late by the pacer's flag.
      Their target falls within the render lead of readiness, because the
      buffer is sized without the lead. Only 3–41% miss their planned V-blank.
+   - The same day, two changes followed (architecture.md, `PlayoutBuffer`):
+     the buffer now covers the render lead, and the target is held in the
+     offset coordinate, not as a delay above the window minimum. On those
+     captures, frame-weighted:
+     - Jerk over 2 ms: 32.0 → 9.9 per mille.
+     - Missed planned V-blanks: 118 → 1.5 per mille.
+     - Mean delay: 11.3 → 14.1 ms.
+     A live capture with this build should confirm it on the display.
 8. Later: render before waiting, and `Present(1,0)` for exclusive fullscreen.
 
 ## 10. Open questions

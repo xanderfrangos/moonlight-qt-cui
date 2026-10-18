@@ -199,9 +199,16 @@ void TimestampPacer::submit(PacedFrame&& paced)
                                                                  : paced.decoderOutputUs();
     const uint64_t readyUs = paced.decoderOutputUs() != 0
         ? std::max(outputReadyUs, paced.decoderOutputUs() + decodeDelayUs) : outputReadyUs;
+    // The render thread updates the lead. One value serves the policy, the
+    // late flag and the trace, so a replay sees what the policy saw.
+    uint64_t renderLeadUs;
+    {
+        std::lock_guard<std::mutex> lock(m_Lock);
+        renderLeadUs = m_RenderLeadUs;
+    }
     const TimestampPacing::Policy::Decision decision =
         m_Policy.schedule(paced.timestampValid(), paced.frameNumber(), paced.rtpTimestamp(),
-                          readyUs, paced.hostLatencyUs(), paced.decoderQueueUs());
+                          readyUs, paced.hostLatencyUs(), paced.decoderQueueUs(), renderLeadUs);
 
     if (PacingLog::active()) {
         PacingLog::Record record;
@@ -230,7 +237,6 @@ void TimestampPacer::submit(PacedFrame&& paced)
     Entry evicted;
     bool late = false;
     bool warnQueueFull = false;
-    uint64_t renderLeadUs = 0;
     uint32_t queueDepth = 0;
     {
         std::lock_guard<std::mutex> lock(m_Lock);
@@ -242,8 +248,7 @@ void TimestampPacer::submit(PacedFrame&& paced)
         m_SourcePeriodUs = m_Policy.sourcePeriodUs();
         m_Limit.noteArrival();
         // Ready too late to be handed over before its target
-        late = entry.paced && entry.targetUs < readyUs + m_RenderLeadUs;
-        renderLeadUs = m_RenderLeadUs;
+        late = entry.paced && entry.targetUs < readyUs + renderLeadUs;
 
         if (m_Queue.size() >= MaxQueuedFrames) {
             evicted = m_Queue.front();

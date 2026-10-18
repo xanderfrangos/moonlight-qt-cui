@@ -261,9 +261,21 @@ private slots:
         QCOMPARE(m.intervalsOver2ms, uint64_t(0));
         QVERIFY(m.jerkUs.max() <= 2);
         QVERIFY(m.residualUs.max() <= 2);
-        // The minimum buffer, then up to a refresh waiting for the V-blank
-        QVERIFY(m.delayUs.mean() >= 2000);
-        QVERIFY(m.delayUs.max() <= 2000 + 16667 + 600);
+        // The 1 ms render lead and the minimum buffer, then up to a refresh
+        // waiting for the V-blank
+        QVERIFY(m.delayUs.mean() >= 3000);
+        QVERIFY(m.delayUs.max() <= 3000 + 16667 + 600);
+
+        // Without the lead in the buffer, the target is only the minimum
+        // buffer past readiness
+        TsReplay::Settings unled = fixedSettings(trace);
+        unled.bufferLeadUs = 0;
+        unled.phases = 1;
+        const TsReplay::ScenarioResult withoutLead = TsReplay::runScenario(trace, repeats, unled);
+        unled.bufferLeadUs = -1;
+        const TsReplay::ScenarioResult withLead = TsReplay::runScenario(trace, repeats, unled);
+        QCOMPARE(withLead.replayed.decisions[100].targetUs - withoutLead.replayed.decisions[100].targetUs,
+                 uint64_t(1000));
     }
 
     // One frame ready far too late misses its V-blank: the policy's plan is
@@ -333,9 +345,12 @@ private slots:
         QString error;
         QVERIFY2(parse(R"({"version": 1, "scenarios": [
             {"name": "standard-95", "smoothing": "standard", "target_per_mille": 950},
-            {"name": "vrr-off", "pacing": "off", "display": "vrr", "display_hz": 144, "render_us": 0}]})",
+            {"name": "vrr-off", "pacing": "off", "display": "vrr", "display_hz": 144, "render_us": 0},
+            {"name": "unled", "buffer_lead_us": 0}]})",
                        scenarios, error), qPrintable(error));
-        QCOMPARE(int(scenarios.size()), 2);
+        QCOMPARE(int(scenarios.size()), 3);
+        QCOMPARE(scenarios[0].bufferLeadUs, int64_t(-1));
+        QCOMPARE(scenarios[2].bufferLeadUs, int64_t(0));
         QCOMPARE(scenarios[0].options.smoothing, int(TimestampPacingOptions::SmoothingStandard));
         QCOMPARE(scenarios[0].options.targetPerMille, 950);
         QCOMPARE(scenarios[0].options.maxBufferMs, 16);

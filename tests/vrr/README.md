@@ -140,6 +140,12 @@ Compressed and plain CSV traces both work, including those expanded by
   - display (session, fixed or vrr), display_hz
   - render_us (default "recorded": each frame's recorded render lead)
   - phases (grid phases averaged on fixed refresh, default 8)
+  - buffer_lead_us (default "recorded"): the render lead given to the
+    policy, which sizes its buffer from readiness plus the lead. The pacer
+    gives it each frame's recorded lead. 0 sizes the buffer from readiness
+    alone, as the policy did before 2026-10-18. The model judges misses by
+    the same recorded lead, so the gain from the lead is partly by
+    construction; confirm it on the display.
   Unknown keys and out-of-range values are errors.
 - **Presentation model.**
   - **Fixed refresh:** a paced frame takes the V-blank its target falls on,

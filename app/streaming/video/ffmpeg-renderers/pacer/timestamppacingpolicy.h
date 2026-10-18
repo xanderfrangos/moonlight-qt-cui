@@ -229,15 +229,23 @@ private:
 
 // The delay between a frame's smoothed source time and when it is shown.
 // The offset from source time to readiness also contains the unknown
-// host/client clock relationship and the pipeline's fixed latency, so it is
-// measured from the smallest offset of the last few seconds, which also
-// follows clock drift. The delay covers the chosen share of recent lateness
-// above that, grows at once when that share rises, and releases slowly.
+// host/client clock relationship and the pipeline's fixed latency. Frames
+// are shown at a target offset that covers the chosen share of recent
+// offsets, grows at once when that share rises, and releases slowly.
 //
-// The smallest offset steps whenever an old minimum leaves the window, and
-// every following target would step with it. Targets instead follow a
-// baseline that moves toward it at a bounded rate, as VRR Pacing Mode's
-// playout offset does: fast next to clock drift, too slow to see.
+// The target is kept in that offset coordinate, as VRR Pacing Mode keeps its
+// input requirements (6920a2e6), not as a delay above the smallest recent
+// offset. That minimum steps whenever an unusually early arrival enters or
+// leaves the window, while the share of offsets the target covers barely
+// moves. Measured against the minimum, each step changed the delay, which
+// rose at once and released slowly, so the target first jumped later and
+// then overshot by most of the step for several seconds.
+//
+// The smallest offset is still the baseline: the buffer is reported, and
+// held between its minimum and maximum, as the target's distance past it.
+// The baseline moves toward the window minimum at a bounded rate, as VRR
+// Pacing Mode's playout offset does: fast next to clock drift, too slow to
+// see, so the minimum buffer never steps the target either.
 class PlayoutBuffer
 {
 public:
@@ -265,7 +273,8 @@ public:
         resetHistory();
     }
 
-    // Keeps the delay, which is still the best guess for a new timeline
+    // Keeps the delay, which is still the best guess for a new timeline. The
+    // target is placed that far past the new timeline's baseline.
     void resetHistory()
     {
         m_Slots = {};
@@ -275,10 +284,11 @@ public:
         m_AppliedBaselineUs = 0;
         m_BaselineFrames = 0;
         m_LastSampleUs = 0;
+        m_HaveTarget = false;
     }
 
     // Records one frame's offset from source time to readiness and returns
-    // how late it was against the recent baseline
+    // how late it was against the recent minimum
     uint64_t addSample(uint64_t readyUs, double offsetUs)
     {
         const uint64_t bucket = readyUs / BucketUs;
@@ -313,22 +323,28 @@ public:
         }
         m_LastSampleUs = std::max(m_LastSampleUs, readyUs);
 
+        if (!m_HaveTarget) {
+            m_TargetUs = m_AppliedBaselineUs + m_DelayUs;
+            m_HaveTarget = true;
+        }
+        holdTargetInBounds();
+
         // Measured against the true minimum, so a baseline still on its way
         // to it doesn't count as lateness
         return uint64_t(std::llround(offsetUs - m_BaselineUs));
     }
 
-    // Counts a frame's lateness toward the delay. See Policy::schedule for
+    // Counts a frame's offset toward the target. See Policy::schedule for
     // the frames that aren't.
-    void admit(uint64_t readyUs, uint64_t latenessUs)
+    void admit(uint64_t readyUs, double offsetUs)
     {
-        m_History[m_NextHistory] = { readyUs, (uint32_t)std::min<uint64_t>(latenessUs, UINT32_MAX) };
+        m_History[m_NextHistory] = { readyUs, offsetUs };
         m_NextHistory = (m_NextHistory + 1) % HistoryCapacity;
         m_HistoryCount = std::min(m_HistoryCount + 1, HistoryCapacity);
     }
 
-    // Moves the delay toward the configured share of recent lateness. Called
-    // after the frame's target is chosen, so that target uses the delay in
+    // Moves the target toward the configured share of recent offsets. Called
+    // after the frame's target is chosen, so that target uses the one in
     // force before it arrived.
     void updateDelay(uint64_t nowUs)
     {
@@ -336,34 +352,46 @@ public:
         for (size_t i = 0; i < m_HistoryCount; i++) {
             const Entry& entry = m_History[i];
             if (entry.atUs + WindowUs > nowUs) {
-                m_Scratch[count++] = entry.latenessUs;
+                m_Scratch[count++] = entry.offsetUs;
             }
         }
 
         // With no admitted frames in the window there is no evidence for
         // holding a delay, so it releases toward the minimum
-        double wantUs = m_MinimumUs;
+        double wantUs = m_AppliedBaselineUs + m_MinimumUs;
         if (count != 0) {
             const size_t rank = std::min(count - 1, (size_t(m_TargetPerMille) * (count - 1) + 500) / 1000);
             std::nth_element(m_Scratch.begin(), m_Scratch.begin() + rank, m_Scratch.begin() + count);
-            wantUs = std::max(m_MinimumUs, std::min(m_MaximumUs, m_Scratch[rank] + MarginUs));
+            wantUs = m_Scratch[rank] + MarginUs;
         }
-        if (wantUs > m_DelayUs) {
-            m_DelayUs = wantUs;
+        if (wantUs > m_TargetUs) {
+            m_TargetUs = wantUs;
         }
         else if (m_LastUpdateUs != 0 && nowUs > m_LastUpdateUs) {
-            m_DelayUs = std::max(wantUs, m_DelayUs - (nowUs - m_LastUpdateUs) * ReleasePerUs);
+            m_TargetUs = std::max(wantUs, m_TargetUs - (nowUs - m_LastUpdateUs) * ReleasePerUs);
         }
         m_LastUpdateUs = nowUs;
+        holdTargetInBounds();
     }
 
-    // The baseline targets are placed from
+    // The baseline the buffer is measured from
     double baselineUs() const { return m_AppliedBaselineUs; }
     // The smallest offset in the window, which that baseline follows
     double windowMinimumUs() const { return m_BaselineUs; }
+    // The buffer: how far past the baseline frames are shown
     double delayUs() const { return m_DelayUs; }
+    // The offset from source time at which frames are shown
+    double targetOffsetUs() const { return m_TargetUs; }
 
 private:
+    // Keeps the buffer between its minimum and maximum. Only a baseline
+    // moving past those bounds moves the target with it.
+    void holdTargetInBounds()
+    {
+        m_TargetUs = std::max(m_AppliedBaselineUs + m_MinimumUs, std::min(m_AppliedBaselineUs + m_MaximumUs, m_TargetUs));
+        m_DelayUs = m_TargetUs - m_AppliedBaselineUs;
+    }
+
     struct Slot {
         uint64_t bucket = 0;
         double minimumUs = 0;
@@ -371,18 +399,22 @@ private:
     };
     struct Entry {
         uint64_t atUs = 0;
-        uint32_t latenessUs = 0;
+        double offsetUs = 0;
     };
 
     std::array<Slot, Buckets> m_Slots {};
     std::array<Entry, HistoryCapacity> m_History {};
-    std::array<uint32_t, HistoryCapacity> m_Scratch {};
+    std::array<double, HistoryCapacity> m_Scratch {};
     size_t m_HistoryCount = 0;
     size_t m_NextHistory = 0;
     int m_TargetPerMille = 990;
     double m_MinimumUs = 2000;
     double m_MaximumUs = 16000;
     double m_DelayUs = 2000;
+    // Offset from source time at which frames are shown, once a timeline
+    // has a baseline
+    double m_TargetUs = 0;
+    bool m_HaveTarget = false;
     double m_BaselineUs = 0;
     double m_AppliedBaselineUs = 0;
     uint32_t m_BaselineFrames = 0;
@@ -863,9 +895,15 @@ public:
         m_UnreportedPeriodUs = 0;
     }
 
-    // decoderQueueUs is how long the frame waited to enter the decoder
+    // decoderQueueUs is how long the frame waited to enter the decoder.
+    // renderLeadUs is how long it takes to render once ready, so a frame can
+    // be shown no sooner than readyUs plus it. The buffer covers that time,
+    // not just readiness: on the 2026-10-08 Deck captures the target was
+    // within the lead of readiness for 23-91% of frames, which then missed
+    // their V-blank unless a refresh's slack happened to absorb them.
     Decision schedule(bool timestampValid, int32_t frameNumber, uint32_t rtpTimestamp,
-                      uint64_t readyUs, uint32_t hostLatencyUs, uint64_t decoderQueueUs = 0)
+                      uint64_t readyUs, uint32_t hostLatencyUs, uint64_t decoderQueueUs = 0,
+                      uint64_t renderLeadUs = 0)
     {
         Decision decision;
         if (!timestampValid) {
@@ -908,7 +946,8 @@ public:
         decision.hostJerkUs = source.hostJerkUs;
         decision.hostJerkValid = source.hostJerkValid;
 
-        decision.latenessUs = m_Buffer.addSample(readyUs, double(readyUs) - source.sourceUs);
+        const double offsetUs = double(readyUs + renderLeadUs) - source.sourceUs;
+        decision.latenessUs = m_Buffer.addSample(readyUs, offsetUs);
 
         // Lateness that says nothing about the next frame doesn't size the
         // buffer. Left out: a new or re-anchored timeline, whose lateness is
@@ -920,9 +959,9 @@ public:
                             decision.latenessUs <= m_MaximumBufferUs * StallBufferMultiple &&
                             m_Service.keepsUp(readyUs, m_Timeline.periodUs());
         if (decision.admitted) {
-            m_Buffer.admit(readyUs, decision.latenessUs);
+            m_Buffer.admit(readyUs, offsetUs);
         }
-        const double targetUs = source.sourceUs + m_Buffer.baselineUs() + m_Buffer.delayUs();
+        const double targetUs = source.sourceUs + m_Buffer.targetOffsetUs();
         decision.targetUs = targetUs > 0 ? uint64_t(std::llround(targetUs)) : 0;
         decision.bufferUs = uint64_t(m_Buffer.delayUs());
         decision.paced = true;

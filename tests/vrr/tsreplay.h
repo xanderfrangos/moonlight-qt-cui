@@ -427,6 +427,9 @@ struct Settings {
     // Fixed refresh only: grid phases averaged, since the real phase isn't
     // known to the model
     int phases = 8;
+    // The render lead given to the policy; negative: each frame's recorded
+    // one, as the pacer gives it
+    int64_t bufferLeadUs = -1;
 };
 
 // The settings the capture ran with
@@ -566,6 +569,18 @@ inline bool applySetting(Settings& settings, const Settings& session, const QStr
         settings.renderUs = renderUs;
         return true;
     }
+    if (key == QLatin1String("buffer_lead_us")) {
+        if (value.isString() && text == QLatin1String("recorded")) {
+            settings.bufferLeadUs = -1;
+            return true;
+        }
+        int leadUs = 0;
+        if (!integer(0, 20000, leadUs)) {
+            return false;
+        }
+        settings.bufferLeadUs = leadUs;
+        return true;
+    }
     if (key == QLatin1String("phases")) {
         return integer(1, 64, settings.phases);
     }
@@ -631,8 +646,11 @@ struct Replayed {
     std::vector<double> sourcePeriodUs;
 };
 
+// The policy is given each frame's recorded render lead, as the pacer gives
+// it, unless bufferLeadUs replaces it (zero: size the buffer from readiness
+// alone, as the policy did before 2026-10-18)
 inline Replayed replayPolicy(const std::vector<Row>& scheduled, const TimestampPacingOptions& options,
-                             int streamFps)
+                             int streamFps, int64_t bufferLeadUs = -1)
 {
     Replayed replayed;
     replayed.decisions.reserve(scheduled.size());
@@ -640,8 +658,9 @@ inline Replayed replayPolicy(const std::vector<Row>& scheduled, const TimestampP
     TimestampPacing::Policy policy;
     policy.configure(options, streamFps);
     for (const Row& row : scheduled) {
+        const uint64_t leadUs = bufferLeadUs >= 0 ? uint64_t(bufferLeadUs) : row.renderLeadUs;
         replayed.decisions.push_back(policy.schedule(row.rtpValid, row.frame, row.rtp, row.readyUs,
-                                                     row.hostLatencyUs, row.decoderQueueUs));
+                                                     row.hostLatencyUs, row.decoderQueueUs, leadUs));
         replayed.sourcePeriodUs.push_back(policy.sourcePeriodUs());
     }
     return replayed;
@@ -1022,7 +1041,7 @@ inline ScenarioResult runScenario(const Trace& trace, const std::vector<bool>& r
     ScenarioResult result;
     result.settings = settings;
     if (settings.pacing) {
-        result.replayed = replayPolicy(trace.scheduled, settings.options, settings.streamFps);
+        result.replayed = replayPolicy(trace.scheduled, settings.options, settings.streamFps, settings.bufferLeadUs);
     }
     const Replayed* replayed = settings.pacing ? &result.replayed : nullptr;
     const bool grid = settings.fixedRefresh && settings.displayHz > 0;
@@ -1054,6 +1073,10 @@ inline QJsonObject settingsJson(const Settings& settings)
     object[QStringLiteral("render_us")] = settings.renderUs >= 0 ? QJsonValue(qint64(settings.renderUs))
                                                                   : QJsonValue(QStringLiteral("recorded"));
     object[QStringLiteral("phases")] = settings.fixedRefresh && settings.displayHz > 0 ? settings.phases : 1;
+    if (settings.pacing) {
+        object[QStringLiteral("buffer_lead_us")] = settings.bufferLeadUs >= 0 ? QJsonValue(qint64(settings.bufferLeadUs))
+                                                                             : QJsonValue(QStringLiteral("recorded"));
+    }
     return object;
 }
 
