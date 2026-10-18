@@ -35,10 +35,29 @@ VrrSessionConfig config(int streamRateHz = 60, int displayRefreshHz = 120)
     return value;
 }
 
+// Explicit recorded Reduce judder revision 2. These historical performance and
+// replay fixtures retain their original 6/3 ms policy; production revision 4
+// has separate source-gap boundary/provenance coverage in tst_sourcegapsmoothing.
+VrrTimingParameters recordedJudderParameters(const VrrSessionConfig& session)
+{
+    auto policy = vrrTimingParametersForSession(session);
+    policy.playoutSmoothingWindowedCadence = 2;
+    policy.playoutSmoothingMaxLagUs = 6000;
+    if (session.smoothFrameTiming) {
+        policy.playoutSmoothingPeriodFeedbackPerMillion = 20000;
+        policy.playoutSmoothingReserveMaxUs = 3000;
+        policy.playoutSmoothingReserveToleranceUs = 500;
+        policy.playoutSmoothingReservePercentilePerMille = 980;
+        policy.playoutSmoothingReserveReleaseUsPerSecond = 500;
+        policy.playoutSmoothingResetSlewUs = 1000;
+    }
+    return policy;
+}
+
 // Explicit pre-customization policy for historical regression fixtures.
 VrrTimingParameters legacyPresetParameters(const VrrSessionConfig& session)
 {
-    auto policy = vrrTimingParametersForSession(session);
+    auto policy = recordedJudderParameters(session);
     const int mode = session.latencyMode;
     policy.playoutAbsorbedJitterRelease = 0;
     policy.playoutIntervalToleranceUs = 0;
@@ -2913,11 +2932,13 @@ void testNativeScheduledRetimingBounds()
         session.latencyMode = mode;
         const auto scheduled = vrrTimingParametersForSession(session, true, true);
         const auto paced = vrrTimingParametersForSession(session, true, false);
-        expect(scheduled.playoutSmoothingMaxLagUs == 2000 &&
-                   scheduled.playoutSmoothingReserveMaxUs == 2000 &&
-                   scheduled.playoutSmoothingGainPerMille == paced.playoutSmoothingGainPerMille &&
-                   paced.playoutSmoothingMaxLagUs == 6000 && paced.playoutSmoothingReserveMaxUs == 3000,
-               "native retiming must retain the smoothing gain while preserving the worker-paced quantized-source policy");
+        const auto tolerance = uint64_t(session.timingOptions.resolved(mode).toleranceUs);
+        expect(scheduled.playoutSmoothingWindowedCadence == 4 &&
+                   scheduled.playoutSmoothingMaxLagUs == tolerance &&
+                   scheduled.playoutSmoothingReserveMaxUs == 0 &&
+                   paced.playoutSmoothingWindowedCadence == 4 &&
+                   paced.playoutSmoothingMaxLagUs == tolerance && paced.playoutSmoothingReserveMaxUs == 0,
+               "native and worker-paced Reduce judder must share one tolerance with no standing reserve");
         VrrTimingController controller(session, true, scheduled);
         uint32_t ticks = 0;
         uint64_t previousTarget = 0;
@@ -2925,8 +2946,8 @@ void testNativeScheduledRetimingBounds()
             ticks += i % 71 == 70 ? 4590U : uint32_t(90000 / rate);
             const uint64_t at = decodedTimeForRtp(1000000, ticks) + uint64_t(i % 5) * 100;
             const auto d = controller.schedule(frame(i + 1, ticks, true, at), at);
-            expect(d.cadenceSmoothingUs <= 2000 && controller.smoothingReserveUs() <= 2000,
-                   "rate changes and irregular readiness must retain the native retiming and reserve bounds");
+            expect(std::abs(d.cadenceSmoothingUs) <= int64_t(tolerance) && controller.smoothingReserveUs() == 0,
+                   "rate changes and irregular readiness must retain the shared tolerance bound without a reserve");
             expect(!previousTarget || d.targetUs >= previousTarget + controller.displayPeriodUs(),
                    "bounded native retiming must retain the accepted display deadline floor");
             controller.notePreparationDuration(1000, 0, at + 1000);
@@ -4173,6 +4194,36 @@ void testGpuReadinessLeadIsSeparateFromTarget()
            "failed GPU waits must not train readiness head start");
 }
 
+void testGpuReadinessPercentileExpiresDuplicateSamples()
+{
+    const auto session = config(60, 120);
+    auto policy = vrrTimingParametersForSession(session);
+    policy.playoutGpuReadinessWindowUs = 100000;
+    policy.playoutGpuReadinessPercentile = 50;
+    policy.playoutGpuReadinessMarginUs = 0;
+    policy.playoutGpuReadinessAttackUs = 20000;
+    policy.playoutGpuReadinessReleaseUsPerSecond = 1000000;
+    VrrTimingController controller(session, true, policy);
+    controller.schedule(frame(0, 0, true, 1000000), 1000000);
+
+    controller.noteGpuReadyWait(1000, true, 1000000);
+    controller.noteGpuReadyWait(4000, true, 1010000);
+    controller.noteGpuReadyWait(4000, true, 1020000);
+    controller.noteGpuReadyWait(8000, true, 1030000);
+    expect(controller.gpuReadinessLeadUs() == 4000,
+           "GPU readiness median must include duplicate waits");
+
+    controller.noteGpuReadyWait(1000, true, 1200000);
+    expect(controller.gpuReadinessLeadUs() == 1000,
+           "expired duplicate waits must leave the readiness window");
+    controller.noteGpuReadyWait(6000, true, 1210000);
+    expect(controller.gpuReadinessLeadUs() == 1000,
+           "readiness percentile must use the same lower-rank rule");
+    controller.noteGpuReadyWait(7000, true, 1220000);
+    expect(controller.gpuReadinessLeadUs() == 6000,
+           "readiness percentile must update after window rollover");
+}
+
 void testDeferredGpuObservationDoesNotCreateBufferPressure()
 {
     auto session = config(120, 240);
@@ -4806,20 +4857,25 @@ void testProductionSmoothFrameTiming()
             session.latencyMode = mode;
             session.smoothFrameTiming = enabled != 0;
             const auto policy = vrrTimingParametersForSession(session);
+            const auto tolerance = uint64_t(session.timingOptions.resolved(mode).toleranceUs);
             expect(policy.playoutSmoothingGainPerMille == (enabled ? 150 : 0) &&
                        policy.playoutSmoothingPeriodAlphaPerMille == 25 &&
                        policy.playoutSmoothingRecoveryUs == 0 &&
-                       policy.playoutSmoothingMaxLagUs == 6000 &&
-                       policy.playoutSmoothingPeriodFeedbackPerMillion == (enabled ? 20000U : 0U) &&
-                       policy.playoutSmoothingReserveMaxUs == (enabled ? 3000U : 0U) &&
-                       policy.playoutSmoothingReserveToleranceUs == (enabled ? 500U : 0U) &&
-                       policy.playoutSmoothingReservePercentilePerMille == (enabled ? 980U : 0U) &&
-                       policy.playoutSmoothingReserveReleaseUsPerSecond == (enabled ? 500U : 0U) &&
+                       policy.playoutSmoothingMaxLagUs == (enabled ? tolerance : 6000) &&
+                       policy.playoutSmoothingWindowedCadence == (enabled ? 4U : 2U) &&
+                       policy.playoutSmoothingRecenterPerMille == 0 &&
+                       policy.playoutSmoothingAbsorbReserveUs == 0 &&
+                       policy.playoutSmoothingPeriodFeedbackPerMillion == 0 &&
+                       policy.playoutSmoothingReserveMaxUs == 0 &&
+                       policy.playoutSmoothingReserveToleranceUs == 0 &&
+                       policy.playoutSmoothingReservePercentilePerMille == 0 &&
+                       policy.playoutSmoothingReserveReleaseUsPerSecond == 0 &&
                        policy.playoutMetronomeEnabled == 0,
                    "the preference must select bounded smoothing independently of the timing preset");
             VrrTimingController controller(session, true, policy);
             uint32_t ticks = 0;
             uint64_t lastSubmission = 0, previousInterval = 0;
+            int64_t previousSmoothing = 0;
             for (int i = 0; i < 1800; ++i) {
                 // A host stall, then a sustained change to 60 FPS, must not
                 // trap the smoother at the original rate or grow phase debt.
@@ -4834,9 +4890,10 @@ void testProductionSmoothFrameTiming()
                 controller.notePreparationDuration(1000);
                 controller.noteSchedulerDelays(lateWake, 0, true);
                 controller.noteSubmission(true, false, submitted);
-                expect(d.cadenceSmoothingUs <= int64_t(policy.playoutSmoothingMaxLagUs) &&
+                expect(std::abs(d.cadenceSmoothingUs) <= int64_t(tolerance) &&
+                           std::abs(d.cadenceSmoothingUs - previousSmoothing) <= int64_t(tolerance) &&
                            (enabled || d.cadenceSmoothingUs == 0),
-                       "smoothing must respect its positive retiming cap and the off switch");
+                       "production smoothing must respect both total/per-gap tolerance bounds and the off switch");
                 expect(submitted >= decoded && submitted - decoded <= 30000 &&
                            d.playoutDelayUs <= controller.playoutQueueLimitUs(),
                        "host jitter, stalls and rate changes must retain bounded latency and queue capacity");
@@ -4846,8 +4903,9 @@ void testProductionSmoothFrameTiming()
                 }
                 if (i > 1200) {
                     expect(std::abs(int64_t(controller.sourcePeriodUs()) - 16667) <= 2 &&
-                               std::abs(d.cadenceSmoothingUs) <= 100,
-                           "the smoother must settle at a new source rate without persistent phase debt");
+                               std::abs(d.cadenceSmoothingUs) <= int64_t(tolerance) &&
+                               d.cadenceSmoothingUs == previousSmoothing,
+                           "the smoother must follow a new source rate without changing clean intervals to repay phase");
                 }
                 const uint64_t interval = submitted - lastSubmission;
                 if (i >= 200 && i < 600) {
@@ -4856,22 +4914,22 @@ void testProductionSmoothFrameTiming()
                     results[enabled].latency += submitted - decoded;
                     ++results[enabled].samples;
                 }
+                previousSmoothing = d.cadenceSmoothingUs;
                 previousInterval = interval;
                 lastSubmission = submitted;
             }
         }
-        expect(results[1].jerk * 2 < results[0].jerk,
-               "moderate smoothing must more than halve adjacent interval wobble near 77 FPS");
+        expect(results[1].jerk < results[0].jerk,
+               "one-tolerance smoothing must reduce the excess wobble without trying to flatten the entire source variation");
         std::fprintf(stderr, "production smoothing mode %d: mean jerk %llu -> %llu us, latency %llu -> %llu us\n",
                      mode, static_cast<unsigned long long>(results[0].jerk / results[0].samples),
                      static_cast<unsigned long long>(results[1].jerk / results[1].samples),
                      static_cast<unsigned long long>(results[0].latency / results[0].samples),
                      static_cast<unsigned long long>(results[1].latency / results[1].samples));
-        // Unlike the captured stream, this clean-delivery fixture has little
-        // spare buffering. Retiming can acquire extra readiness protection;
-        // bound its average cost to 4 ms, well below one 13 ms source frame.
-        expect(results[1].latency <= results[0].latency + results[1].samples * 4000ULL,
-               "moderate smoothing must add at most 4 ms average latency under alternating host jitter");
+        // This clean-delivery fixture must not buy the old multi-ms reserve.
+        const auto tolerance = uint64_t(VrrTimingOptions{}.resolved(mode).toleranceUs);
+        expect(results[1].latency <= results[0].latency + results[1].samples * tolerance,
+               "source-gap smoothing must add at most one tolerance average latency under alternating host jitter");
     }
 }
 
@@ -5284,7 +5342,7 @@ void testResponsiveSmoothingWithWideJitter()
             auto session = config(120, 120);
             session.latencyMode = mode;
             session.smoothFrameTiming = smooth;
-            VrrTimingController controller(session, true, vrrTimingParametersForSession(session));
+            VrrTimingController controller(session, true, recordedJudderParameters(session));
             uint32_t ticks = 0;
             uint64_t last = 0, previousInterval = 0;
             unsigned active = 0;
@@ -5330,7 +5388,7 @@ void testWindowedSmoothingQuantizedCadence()
         for (int windowed : {0, 1}) {
             auto session = config(120, 120);
             session.latencyMode = mode;
-            auto policy = vrrTimingParametersForSession(session);
+            auto policy = recordedJudderParameters(session);
             expect(policy.playoutSmoothingWindowedCadence == 2,
                    "every live preset must use windowed cadence qualification");
             policy.playoutSmoothingWindowedCadence = windowed;
@@ -5393,7 +5451,7 @@ void testCompensatedHalfPeriodCadence()
         for (int revision : {1, 2}) {
             auto session = config(120, 120);
             session.latencyMode = mode;
-            auto policy = vrrTimingParametersForSession(session);
+            auto policy = recordedJudderParameters(session);
             policy.playoutSmoothingWindowedCadence = revision;
             policy.playoutSmoothingRecoveryUs = 200000;
             VrrTimingController controller(session, true, policy);
@@ -5446,7 +5504,7 @@ void testWindowedSmoothingResetsOnDiscontinuity()
     for (int mode : {0, 1, 2}) for (int fault : {0, 1, 2, 3, 4}) {
         auto session = config(120, 120);
         session.latencyMode = mode;
-        auto policy = vrrTimingParametersForSession(session);
+        auto policy = recordedJudderParameters(session);
         // Keep the ordinary cadence fixtures above the readiness floor so
         // they measure requalification independently of buffer release.
         policy.playoutMeanMissReleaseUsPerSecond = 0;
@@ -5506,7 +5564,7 @@ LowRateSmoothingResult runLowRateSmoothingFixture(int mode, bool bounded,
     auto session = config(120, 120);
     session.latencyMode = mode;
     session.smoothFrameTiming = smoothing;
-    auto policy = vrrTimingParametersForSession(session);
+    auto policy = recordedJudderParameters(session);
     // Isolate the recorded readiness-bound correction from subsequent score
     // and preset changes. Both sides replay revision 7's original goals.
     policy.playoutResponsiveBuffer = 7;
@@ -5731,7 +5789,7 @@ void testReduceJudderEasesCadenceResets()
     for (int mode : {0, 1, 2}) {
         auto session = config(116, 120);
         session.latencyMode = mode;
-        const auto production = vrrTimingParametersForSession(session);
+        const auto production = recordedJudderParameters(session);
         auto stepped = production;
         stepped.playoutSmoothingResetSlewUs = 0;
         const auto eased = runJudderFixture(session, production, 3000, 600, slowdownTicks);
@@ -5749,7 +5807,7 @@ void testReduceJudderEasesCadenceResets()
     }
     auto session = config(116, 120);
     session.smoothFrameTiming = false;
-    expect(vrrTimingParametersForSession(session).playoutSmoothingResetSlewUs == 0,
+    expect(recordedJudderParameters(session).playoutSmoothingResetSlewUs == 0,
            "timestamp-following playout has no retiming to ease");
 }
 
@@ -5762,7 +5820,7 @@ void testReduceJudderReserveCoversQuantizedCadence()
     for (int mode : {0, 1, 2}) for (bool tight : {false, true}) {
         auto session = config(120, 120);
         session.latencyMode = mode;
-        auto production = vrrTimingParametersForSession(session);
+        auto production = recordedJudderParameters(session);
         if (tight) {
             production.playoutDelayMaximumUs = production.playoutDelayMinimumUs;
             production.playoutDelayMaximumPeriodPerMille = 0;
@@ -5803,7 +5861,7 @@ void testReduceJudderReserveIgnoresDeliveryJitter()
     for (int mode : {0, 1, 2}) {
         auto session = config(120, 120);
         session.latencyMode = mode;
-        const auto production = vrrTimingParametersForSession(session);
+        const auto production = recordedJudderParameters(session);
         const auto ticks = [](int i) { return static_cast<uint32_t>((i + 1) * 750); };
         const auto without = runJudderFixture(session, withoutJudderReserve(production), 3600, 1200, ticks);
         const auto with = runJudderFixture(session, production, 3600, 1200, ticks);
@@ -5818,7 +5876,7 @@ void testReduceJudderReserveReleases()
     // reserve must drain instead of remaining as standing latency.
     auto session = config(120, 120);
     session.latencyMode = 1;
-    auto production = vrrTimingParametersForSession(session);
+    auto production = recordedJudderParameters(session);
     production.playoutDelayMaximumUs = production.playoutDelayMinimumUs;
     production.playoutDelayMaximumPeriodPerMille = 0;
     uint64_t reserveDuringJudder = 0;
@@ -5862,7 +5920,7 @@ void testReduceJudderFollowsRateDrift()
     for (int mode : {0, 1, 2}) {
         auto session = config(120, 120);
         session.latencyMode = mode;
-        const auto production = vrrTimingParametersForSession(session);
+        const auto production = recordedJudderParameters(session);
         auto noFeedback = production;
         noFeedback.playoutSmoothingPeriodFeedbackPerMillion = 0;
         const auto ticks = [](int i) {
@@ -7503,8 +7561,121 @@ void testSourceRelativeCadenceDetection()
            "uneven CPU enqueues must not become display deviations when scheduled presentation absorbs them");
 }
 
+// These are revision-6 local-predictor regressions, with its historical
+// learned reserve. Revision 7's fixed 2T pad and shared movement contract are
+// checked in tst_sourcegapsmoothing; it intentionally has a different budget.
+VrrTimingParameters historicalAbsorb6(const VrrSessionConfig& session)
+{
+    auto p=vrrTimingParametersForSession(session);
+    p.playoutInputStableAdaptation=0;
+    p.playoutSmoothingWindowedCadence=6;
+    p.playoutSmoothingMaxLagUs=8000;
+    p.playoutSmoothingReserveMaxUs=5000;
+    p.playoutSmoothingReservePercentilePerMille=995;
+    p.playoutSmoothingReserveReleaseUsPerSecond=500;
+    p.playoutSmoothingAbsorbReserveUs=0;
+    return p;
+}
+void testAbsorbTracksUniformSourceRateBeforeLongFitCatchesUp()
+{
+    for (int mode : {0, 1, 2}) {
+        uint64_t extraSum[2] = {}, lateSum[2] = {}, jerkSum[2] = {};
+        for (int candidate : {0, 1}) {
+            auto session = config(116, 120);
+            session.latencyMode = mode;
+            session.absorbMicrostutter = true;
+            auto policy = historicalAbsorb6(session);
+            policy.playoutSmoothingWindowedCadence = candidate ? 6 : 2;
+            if (!candidate) policy.playoutSmoothingResetSlewUs = 1000;
+            VrrTimingController controller(session, true, policy);
+            uint32_t ticks = 0;
+            uint64_t last = 0, previousInterval = 0;
+            for (int i = 0; i < 1600; ++i) {
+                // A real 80 -> 116 FPS source transition. Uniform source
+                // stamps already establish the new cadence while the long
+                // endpoint fit still includes the slower interval history.
+                ticks += i < 1000 ? 1125 : 776;
+                const auto decoded = decodedTimeForRtp(1000000, ticks);
+                const auto now = std::max(last, decoded);
+                const auto d = controller.schedule(frame(i, ticks, true, decoded), now);
+                const uint64_t ready = std::max(now, d.renderStartUs) + 1000;
+                const uint64_t submitted = std::max(d.targetUs, ready);
+                controller.notePreparationDuration(1000, 0, ready);
+                controller.noteSchedulerDelays(0, 0, true);
+                controller.noteSubmission(true, false, submitted);
+                const uint64_t interval = submitted - last;
+                if (i >= 1005 && i < 1120) {
+                    extraSum[candidate] += d.plannedExtraDelayUs();
+                    lateSum[candidate] += submitted - decoded;
+                    jerkSum[candidate] += interval > previousInterval ?
+                        interval - previousInterval : previousInterval - interval;
+                }
+                expect(d.cadenceSmoothingUs <= int64_t(policy.playoutSmoothingMaxLagUs),
+                       "local cadence qualification must preserve the retiming cap");
+                last = submitted;
+                previousInterval = interval;
+            }
+        }
+        std::printf("absorb uniform transition mode=%d extra %llu -> %llu us latency %llu -> %llu us jerk %llu -> %llu us\n",
+            mode, (unsigned long long)(extraSum[0] / 115), (unsigned long long)(extraSum[1] / 115),
+            (unsigned long long)(lateSum[0] / 115), (unsigned long long)(lateSum[1] / 115),
+            (unsigned long long)(jerkSum[0] / 115), (unsigned long long)(jerkSum[1] / 115));
+        expect(extraSum[1] < extraSum[0] && lateSum[1] < lateSum[0],
+               "Absorb must not repeatedly create slow-fit lag after uniform faster source output is established");
+        expect(jerkSum[1] <= jerkSum[0] + 115 * 100,
+               "faster source tracking must not trade recovered latency for repeated cadence jumps");
+    }
+}
+
+void testAbsorbLocalCadencePreservesVariableAndQuantizedSources()
+{
+    for (int mode : {0, 1, 2}) for (int pattern : {0, 1, 2, 3}) {
+        auto session = config(116, 120);
+        session.latencyMode = mode;
+        session.absorbMicrostutter = true;
+        auto currentPolicy = historicalAbsorb6(session);
+        auto previousPolicy = currentPolicy;
+        previousPolicy.playoutSmoothingWindowedCadence = 2;
+        previousPolicy.playoutSmoothingResetSlewUs = 1000;
+        const auto ticks = [pattern](int i) -> uint32_t {
+            if (pattern == 0) return hostQuantizedTicks(i, 90, 120);
+            if (pattern == 1) return uint32_t((i + 1) / 2 * 2340 + ((i + 1) % 2 ? 810 : 0));
+            if (pattern == 2) {
+                const int n = i + 1;
+                return uint32_t(std::min(n, 600) * 4500 +
+                    std::clamp(n - 600, 0, 600) * 3000 +
+                    std::clamp(n - 1200, 0, 600) * 1000 +
+                    std::max(n - 1800, 0) * 776);
+            }
+            uint32_t sum = 0;
+            for (int k = 0; k <= i; ++k) {
+                const int phase = k % 540;
+                const int ramp = phase < 270 ? phase : 540 - phase;
+                sum += 900 + uint32_t(ramp) * 386 / 270;
+            }
+            return sum;
+        };
+        const auto previous = runJudderFixture(session, previousPolicy, 3600, 600, ticks);
+        const auto current = runJudderFixture(session, currentPolicy, 3600, 600, ticks);
+        std::printf("absorb local cadence mode=%d pattern=%d jerk %.3f -> %.3f mean %llu -> %llu us latency %llu -> %llu us\n",
+            mode, pattern, previous.jerkShare(), current.jerkShare(),
+            (unsigned long long)previous.meanJerkUs(), (unsigned long long)current.meanJerkUs(),
+            (unsigned long long)previous.meanLatencyUs(), (unsigned long long)current.meanLatencyUs());
+        expect(current.jerkShare() <= previous.jerkShare() + 0.005 &&
+                   current.meanJerkUs() <= previous.meanJerkUs() + 100,
+               "local cadence tracking must preserve quantized, alternating, stepped and ramped source smoothness");
+        expect(current.meanLatencyUs() <= previous.meanLatencyUs() + 500,
+               "local cadence tracking must not buy smoothness with unbounded added latency");
+        expect(current.maximumSmoothingUs <= int64_t(currentPolicy.playoutSmoothingMaxLagUs) &&
+                   current.maximumReserveUs <= currentPolicy.playoutSmoothingReserveMaxUs,
+               "local source qualification must preserve retiming and reserve limits");
+    }
+}
+
 int main()
 {
+    testAbsorbTracksUniformSourceRateBeforeLongFitCatchesUp();
+    testAbsorbLocalCadencePreservesVariableAndQuantizedSources();
     testPresentTiming();
     testSourceRelativeCadenceDetection();
     testNativeScheduledRetimingBounds();
@@ -7597,6 +7768,7 @@ int main()
     testStableNativeSmoothnessReference();
     testPreparationKeepsLearnedLead();
     testGpuReadinessLeadIsSeparateFromTarget();
+    testGpuReadinessPercentileExpiresDuplicateSamples();
     testDeferredGpuObservationDoesNotCreateBufferPressure();
     testSmoothnessFeedback();
     testRefreshReferencesAreNotDisplayEvents();

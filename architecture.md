@@ -1,3 +1,632 @@
+Rolling required-buffer convergence (2026-10-17, revision 5): new adaptive
+sessions select `playout_input_stable_adaptation=5`. This replaces revision 4's
+hard historical-score hold and revision 3's speculative plateau reductions.
+The active cadence layer retains each eligible frame's budget-adjusted required
+protection duration as observed, expiring by the user's configured history (10--300 s;
+120 s is only the Balanced preset). Copied seeds, invalid observations and
+unmatched epoch boundaries do not supply modeled clean intervals.
+
+For a constant candidate buffer, the input-only model propagates outstanding
+lateness using each interval's bounded recovery room. A new input can cause a
+stretch above tolerance only when it exceeds the preceding carried requirement
+by more than tolerance. Such an interval contributes its required protection;
+other matched intervals contribute zero. Proven same-frame actual input hitches
+override a modeled recovery assumption, so estimated carry cannot hide a measured
+protection requirement. The selected rolling percentile is the
+smallest buffer covering the user's configured share of modeled intervals.
+Steady late input therefore does not manufacture recurring hitch pressure.
+Old requirements are not reprojected into today's clock mapping: the estimate
+answers what protection the retained frames needed when they were delivered.
+Candidate scoring recomputes outcomes at the candidate size, rather than counting
+past misses recorded at different applied buffers. Actual outcome reporting stays
+separate. A fresh actual eligible preventable hitch still authorizes upward
+protection; raw harmless input alone cannot buy additional standing latency.
+
+The full session history calibrates the modeled allowance against actual goal
+error. Below goal, modeled tail allowance becomes user_tail^2/actual_miss_rate;
+at or above goal it is exactly the user's allowance. This continuous correction
+permits some modeled misses and helps a deficient window recover without a hard
+hold. A real full-window deficit also authorizes the measured rolling estimate
+for growth; clean input while at goal cannot buy unrelated standing latency.
+Actual reporting and the user-selected goal/window are unchanged.
+
+Downward movement converges proportionally toward the estimate, capped by the
+existing configured fall rate. Upward movement keeps the established rise rate
+so an asymptotic approach cannot prolong proven misses. The release time
+constant is history/30, bounded
+to 1--10 s (60/120/300 s presets give 2/4/10 s). Fractional movement is preserved
+and the release rate tapers near the target. The old below-goal hold and 200-frame wait
+are absent. Larger learned layers retain immediate upward restoration; smaller
+layers converge normally. Historical revisions 0--4 retain exact replay behavior;
+calibration identity includes the revision. This input model does not resimulate
+worker admission, GPU contention, compositor timing or physical scanout.
+
+Selected-window release gate (2026-10-17, revision 4): new adaptive sessions
+select `playout_input_stable_adaptation=4`. The full session coverage history
+(Balanced: 99.5% over 120 seconds), aged on the session clock across source-rate
+layers, now gates downward input-buffer movement. A below-goal window
+holds applied protection, including lower measured demand and lower-layer
+drain. A new qualifying miss also prevents that observation from releasing.
+Growth keeps its existing eligibility and measured-demand rules. Meeting the
+selected goal resumes revision-3 continuous release at the configured fall rate,
+without a 200-frame wait, a replacement fixed hold, or accumulated drain credit.
+The 10-second displayed score and one-second local feedback cannot override this
+gate. Empty history retains ordinary obsolete-seed expiry; it is not counted
+as clean evidence for a probe. Historical revisions 0--3 retain their recorded behavior for exact replay;
+calibration identity already includes the revision. Target demand may remain
+below the held buffer. This is an input-buffer policy, not a guarantee that the
+selected score is achievable or proof of physical display smoothness.
+
+Continuous plateau release (2026-10-17): new adaptive sessions select
+`playout_input_stable_adaptation=3`. This supersedes revision 2 below.
+Qualified clean feedback can continuously lower a retained raw-input plateau
+at the configured fall rate (normally 250 us/s). The 100 us / T/4 target
+lookahead no longer starts a one-second / 200-eligible-frame waiting period
+after each completed reduction. No replacement ten-second clean hold is added.
+The existing eligibility, fresh qualifying-miss feedback, physical recovery
+room, per-interval movement allowance, ordinary growth and layer restore rules
+remain unchanged. The configured smoothness target and learning window are
+unchanged; this is not the proposed ten-second proportional-score controller.
+Historical revisions 0--2 retain their recorded behavior. Existing calibration
+identity includes the stable-adaptation revision. Live smoothness is unverified.
+
+Bounded plateau recovery (2026-10-17, reconciled source baseline `2689cd7a`, originally `7d1148f9`): new adaptive
+sessions select `playout_input_stable_adaptation=2`, retaining input-hitch policy
+10 and the configured probability/history. Revision 1 remains explicit for
+historical exact replay.
+
+Revision 1 disabled all release probes to avoid oscillation, which also disabled
+measured-surplus acceleration and left a raw readiness quantile able to pin
+protection even without fresh preventable hitches. The completed
+`moonlight-pacing-20261017-171738-793163.vrrtrace` contains an 8,621 us plateau
+for 107.199018 s (frames 39926--51181), with the qualifying miss total unchanged
+at 372. SHA-256:
+`272a4d9927c706d860b912d6123a8f995a1b410494d8995756d9e2cc74b8f466`.
+The untouched capture passes both exact-baseline and sequence-integrity gates.
+This is separate from the initial presentation-starvation episode in that file.
+
+Revision 2 reuses finite feedback-qualified release trials: at most
+min(100 us, T/4), followed by at least one second and enough new eligible outcomes
+at the reduced buffer to support one expected tail observation (200 at 99.5%).
+A fresh qualifying miss cancels a trial and preserves the existing growth gate.
+Invalid observations and copied layer seeds cannot supply clean feedback.
+Both measured falling demand and trials retain the configured normal fall rate
+(250 us/s in this capture); the existing per-interval physical-room limit still
+applies. Ordinary release is unchanged. Trial reductions do not redefine the selected target, erase old misses,
+reset the rolling history, or continuously chase a lower buffer. Larger learned
+layers may still restore immediately; smaller layers drain normally and cannot
+save inherited excess as their own learned floor. Cache identity includes the
+stable-adaptation revision. Input buffer, extra delay and real decoder-to-CPU
+submission latency remain separate quantities.
+
+The compact numeric trace fixture retains all decisions from stream start.
+`tst_inputtracechunks` checks every revision-1 buffer state before scoring local
+revision-2 progress. It consumes recorded input and recorded submission feedback;
+it does not model alternate worker admission or physical display. Rolling 1/2/5/10
+second diagnostics complement, and never replace, the selected 120-second
+learning window. Startup presentation starvation is reported separately and is
+not repaired by this buffer adaptation change.
+
+## Receive-clock correction (2026-10-17)
+
+New sessions select input clock-relative history revision4. Revisions0--3 keep
+historical replay semantics. The drift observer fits packet-receive/RTP offsets,
+using100ms bucket minima over the existing120s clock-fit window, rather than
+fitting producer mapping that includes decoder service. Buffer learning history,
+coverage target/tolerance, rate layers and actuator rise/fall laws are unchanged.
+A material change in actual source cadence starts a new drift-fit window without
+resetting buffer evidence or accumulated clock coordinates; it retains the last
+qualified oscillator slope while reacquiring. Clock qualification is independent
+of cached FPS layer selection. Invalid packets do not become evidence and an
+unrefreshed slope expires after120s. Calibration identity includes clock revision.
+Cache identity resolves the same effective adaptive session options as the worker
+before constructing policy tags, so new clock sessions cannot share an older
+clock policy's startup-delay namespace. The configured goal/window remain learning
+objectives; native synthetic tests can still contain below-target windows. Native
+correctness evidence and target attainment must be reported separately.
+
+Buffer quality observability (2026-10-17, accepted base `75e97d26`):
+the CPU optimization and eligible-age/fresh-reacquisition correction are now
+separate local commits. The staged native A/B binaries remain unchanged.
+Decision-applied B (`playout_delay_us`) is distinct from the historical
+post-feedback controller snapshot. Opt-in `MOONLIGHT_VRR_BUFFER_AUDIT=1` adds
+typed before/after scalar snapshots, stable cached-layer identity, eligible
+evidence age, qualification/authorization reasons and normal slew budgets.
+The existing bounded asynchronous trace handoff owns formatting and accounting.
+Frozen-input `vrrreplay` and production-worker virtual-clock `vrrworkerreplay`
+answer different questions: only the latter recalculates admission/drops, and
+neither proves GPU/compositor/optical or network behavior. See
+[Buffer quality contracts](tests/vrr/BUFFER-QUALITY.md) for CLI, provenance,
+metrics, missing-evidence handling, predeclared workloads and overhead limits.
+
+Historical offline exact-score experiment: interval-quality integer totals update on ring
+mutation/expiry. Weighted sums retain the original physical-index floating-point
+addition order; sparse zero-only buckets are skipped. Reporting/control policy,
+source timing, target/window and scoring are unchanged. This experiment is not
+installed and is separate from the frozen CPU-only application.
+
+Isolated exact segmented input-window experiment (2026-10-17, based on `7d1148f9`):
+`InputPercentileBuffer` retains chronological samples for expiry and outcomes,
+with small sorted blocks indexing raw requirements and proven misses. Integer
+nearest ranks, duplicate multiplicity, selected target/history, seeded layers,
+source coordinates and adaptation rules remain unchanged. Valid adjacent-pair
+coverage is maintained on insertion and expiry; large expiry advances compact
+indexes once. Splits/merges bound ordinary shifts to a small block rather than
+moving the entire retained history. Block allocation and retention are CPU and
+memory tradeoffs, not a statistical or timing-policy change. This experiment
+is isolated and has no physical display validation.
+
+Stable input adaptation (2026-10-17, based on `181415ec`): new adaptive
+sessions retain input-hitch scoring policy 10 and additionally select
+`playout_input_stable_adaptation=1`. This supersedes the release behavior below.
+
+The selected long-window percentile and actual-miss protection floor size the
+learned target. Release follows genuine falling demand at the established
+250 us/s rate. Repeated speculative 100 us target reductions and their accelerated
+roughly 5 ms/s release are disabled. Growth still requires an eligible,
+same-frame readiness-attributed preventable hitch below the selected goal, is
+limited to its measured requirement, and uses the normal configured rise rate.
+Unprotectable requirements, invalid mappings, packet loss, overload, harmless
+readiness overruns and post-input timing errors keep their existing exclusion
+rules. The score's definition, selected target/history, and recent reporting
+window do not change. A substantially larger learned layer can restore protection
+at once; smaller layers retain applied protection and use the same normal drain.
+
+Timing recovery remains bounded by the current PhaseTrajectory, physical floors
+and intentional extra-delay budget. The historical uncapped timing-recovery
+ablation is not selected: on the latest completed capture it reduces
+modeled jerk while accumulating unacceptable modeled latency. Input adaptation
+is therefore restored independently of scoring and timing recovery. Old captures
+without the new parameter select zero and preserve their historical release law.
+Cache identity includes the effective stable-adaptation revision.
+
+Matched final-policy replay uses the newest completed capture selected for this
+iteration, `moonlight-pacing-20261017-005745-33392.vrrtrace` (SHA-256
+`ea74dd760492a91a666f3f62dba248c9e1559418378b9dbd5d085df5fd9606ef`).
+The untouched capture passes exact baseline and sequence-integrity checks.
+Stable adaptation reduces qualifying input misses from 400 to 201. On matching
+frames outside the first five seconds and one second around rate/phase changes,
+within continuous matched spans, total buffer movement falls 52.471 to 30.877 ms,
+with reversals of at least 400 us falling 16 to 13. Mean decode-to-submission rises 14.868 to 15.365 ms,
+and p99 32.247 to 32.415 ms. Modeled presented-jerk pairs over 2 ms fall
+20.7% to 19.5%; sender-spacing residual p99 is reported separately in the replay
+artifacts. All five nominal/decision/preparation/submission/scheduler scenarios
+pass explicit buffer, mean/p99 latency and modeled interval-safety bounds without
+worker saturation. Fault bounds are relative to the unchanged policy under the
+same injection and are not normal operating latency. These are software/model
+results, not physical display or live integration proof. Artifacts are under
+`build/stable-buffer-recovery-20261017/`.
+
+Layer-drain correction (2026-10-17, based on `1a5bef09`): new adaptive
+sessions select input-hitch policy 10. This supersedes policy 9 below.
+
+Policy 9 mistakenly coupled the layer rework to slower ordinary adaptation.
+Policy 10 restores the established input rise rate (configured 250--1000 us/s)
+and healthy continuous release: at most 0.5% of the source interval, T/2 and
+available VRR headroom per interval. Fresh eligible coverage, capacity and
+miss attribution still qualify adaptation. There is no 200-frame wait between
+100 us release probes. Genuine lower measured demand can also use the ordinary
+fall rate when accelerated release is not qualified. Fresh qualifying misses
+still interrupt healthy release and authorize measured growth; old misses alone
+cannot sustain further growth.
+
+Confirmed layers retain the 30 FPS separation, saved evidence and continuous
+session coverage. A substantially larger learned layer may restore protection
+immediately. Selecting a smaller layer retains the currently applied buffer,
+reports the learned destination at once, and drains with the normal release
+code. There is no T-per-frame downward shortcut or repeated post-drop snap.
+Interrupted transitions store the selected layer's own learned destination,
+not protection inherited from the previous layer. Intentional smoothing and
+recovery retain their movement budget, but input adaptation no longer spends
+that budget or accumulates debt that freezes extra-delay recovery. The fixed
+2T Absorb pad and physical readiness/ownership floors remain in force.
+
+The normal overlay and timing graph report recent eligible coverage over 10 s.
+The normal overlay also shows the full selected history (Balanced: 120 s),
+which remains the controller's learning history. Both reporting windows count
+actual matched eligible outcomes, survive rate changes and expire individually;
+invalid input never counts as clean, and an empty window reports N/A. This
+changes reporting responsiveness without redefining the selected target or
+resetting history at layer changes. Historical policies 0--9 remain explicit
+for replay, and cache identity includes policy 10.
+
+Nightly VRR integration (2026-10-17, master baseline `f0507ea5`):
+new adaptive sessions select input-hitch policy 9; Absorb microstutter selects
+smoothing revision 7. These supersede the historical policy descriptions below.
+
+Policy 9 caps ordinary input-buffer growth and release at the selected interval
+tolerance T per second. Intentional smoothing and recovery share the remaining
+movement allowance after the input buffer has moved; they cannot each add another
+T/s. Fractional credit preserves small rates at high FPS. Physical readiness and
+scanout ownership floors remain mandatory, are reported, and are not invented
+adaptive-buffer demand. Actual input readiness never moves its own scoring deadline.
+The source-clock estimator is a separate clock transform, not another buffer;
+policy 9 no longer remaps applied protection during the post-rate-rise window.
+A shrinking FPS-dependent maximum lowers demand without instantly truncating
+already applied protection.
+
+A layer switch requires at least 30 Hz separation in rounded source FPS, in
+addition to policy 8's symmetric 1.5x period departure and consistent RTP-run
+qualification. Both detection and saved-layer lookup apply this gate. Three
+consistent intervals can still qualify a real 90 -> 30 or 30 -> 90 change;
+40 -> 20 cannot create another layer. Ordinary fit movement does not switch.
+A selected layer restores its saved protection immediately only for an increase
+larger than T. Smaller differences slew normally. Decreases larger than T retain
+the old applied buffer and drain by at most T per fresh source frame, sharing
+that allowance with extra delay. Repeated decisions cannot spend it again.
+The same T/frame bound follows falling demand while the new source mapping
+settles (at least one second, at most ten, ending once the mapping settles).
+It never follows that moving target with an instantaneous downward assignment.
+An interrupted drain stores the selected layer's learned target, not inherited
+excess from the previous rate. Session coverage reporting remains continuous.
+
+The previous 100 us release probe was renewed every frame and could drain near
+5 ms/s as soon as historical coverage crossed its goal. Policy 9 separates
+measured surplus from a speculative trial. A trial releases at most min(100 us,
+T/4), then waits at least one second and enough new eligible outcomes to support
+one expected tail sample (200 frames at 99.5%) before trying again. A fresh miss
+cancels it. Old historical misses do not prohibit fresh bounded release forever.
+Crossing the long-window percentage cannot revoke a growth request while its
+qualifying miss is still in the fresh one-second feedback window. Old misses
+alone cannot sustain further growth. VRR credit cannot abruptly remove a whole
+standing input quantile; it funds bounded trials and genuine layer transitions.
+
+Absorb's reserve is fixed at 2T, independent of FPS. Revision 7 retains the local
+cadence predictor but removes the separately learned reserve (previously up to
+5 ms). Timing can spend only the fixed pad, so smoothing adds between zero and
+2T and cannot borrow the input buffer or acquire another positive reserve.
+Planned timing corrections and recovery pass through the shared slew
+budget as well. The reserve itself starts at 2T; source phase adjustments can
+spend that reserve, so instantaneous planned extra delay is a separate quantity.
+Capping phase corrections as well as adaptation limits how quickly this candidate
+can absorb source jitter; this is not a claim of improved displayed smoothness.
+Recorded input policies 0--8 and smoothing revisions 0--6 remain selectable.
+Cache identity includes the new policy/revision, preventing old learned delays
+from being imported as this build's starting protection.
+
+The completed capture selected for this investigation was
+`moonlight-pacing-20261016-230433-563754-connection-2.vrrtrace`, SHA-256
+`cf4fa07454f2d732f8973c7b3e079da0d6c43cd0ec73445280f68844dcf50982`.
+It has 5,847 rows and a clean footer with zero writer drops. It was decoded for
+inspection only. Replay simulations and exact-baseline verification remain
+deferred at the user's request; deterministic checks do not establish optical
+fluidity or physical scanout behavior.
+
+Previous rate-layer test build (2026-10-16, based on `4a4ed116`):
+recorded input-hitch policy 8. Policy 7 falsely classified short
+source tails against a stale startup/layer anchor as a rate transition. In the
+completed `moonlight-pacing-20261016-223958-554910.vrrtrace` (SHA-256
+`50bda0f03e84572348c5c425cfa3055cb2285e0e8cf3a575188133ca2dc763ba`),
+frames 567--569 have RTP intervals 12.645, 13.311 and 13.600 ms while the prior
+fit is 11.095 ms. The buffer steps from 1.526 to 1.000 ms and active coverage
+from 410 observations/3 misses to zero. This is a controller-selection defect;
+these source intervals alone do not establish a host stall or optical stutter.
+The capture has a clean footer and no dropped trace rows. It was decoded for
+observation only; replay simulations and exact-baseline validation are deferred.
+
+Policy 8 separates layer selection from the continuously moving source fit.
+A fast transition requires three adjacent, consistent RTP intervals departing
+by at least a 1.5x period ratio from both the layer anchor and the operating fit
+at the start of qualification. The run's full spread must fit within
+max(500 us, 10% of its mean). Source intervals are bounded by the negotiated
+rate before qualification. Missing identity, an isolated interval, and ordinary
+variation cannot bypass this gate through the long fit. A gradual large change
+can also qualify after at least 12 tightly clustered intervals spanning 200 ms,
+with spread at most max(500 us, 5%) and the fit within 10% of their mean.
+A confirmed return resumes the nearest matching saved layer. Lookup uses the
+same 1.5x boundary; the active layer wins until a transition qualifies.
+
+Each layer owns its learned protection and adaptation evidence. Eight own
+eligible observations qualify retention; a previously qualified layer survives
+brief return visits. Inactive history still expires. Physical queued frames
+remain chronological; layers store control state, not video. Policy 8 preserves
+the observed timing percentage in a separate session-wide trailing history of
+actual eligible outcomes. It survives layer changes and source rebases, expires
+at the profile's selected window, and resets at a new session. Invalid samples
+never count as clean. Internally, growth/release still use each layer's own
+coverage. In policy-8 telemetry and trace rows, `input_percentile_recent_*`
+report this continuous history; `samples` and release feedback remain local to
+the active layer. Recorded policies 0--7 preserve their prior behavior.
+
+Inside a layer, growth follows the selected rise rate and healthy release uses
+policy 7's bounded probes: at most min(100 us,T/4) below a percentile plateau,
+with fresh qualified input, at least eight own observations and 500 ms of valid
+pair coverage, no qualifying miss in the last second, and actual coverage at
+or above goal. Accelerated release shares a per-interval budget bounded by
+0.5% of the intended interval, T/2 and available VRR credit. Policy 8 removes
+the repeated post-drop `followTarget()` snap window; only a confirmed layer
+transition may restore or credit protection immediately. Rate-rise mapping
+coordinate correction remains distinct from buffer adaptation, and the existing
+PhaseTrajectory still bounds actual cadence recovery. Cache identity includes
+`input-hitch-misses=8`. Deterministic checks and the local application build do
+not establish visible fluidity; live testing is still required.
+
+Absorb microstutter correction (2026-10-16, after bcb06f04): new Absorb
+sessions select source cadence smoothing revision 6. The previous revision-2
+PLL repeatedly reseeded its short-period predictor from a longer source fit
+that still contained earlier slower intervals. After the source had already
+settled to uniform faster output, it could recreate up to 8 ms positive
+retiming, reset it, and repeat. Four consecutive valid RTP gaps all within the
+selected tolerance T of their mean now qualify that local source cadence even
+when the longer fit has not caught up. When its predictor differs from this
+qualified mean by more than T, it reseeds to that mean rather than repeatedly
+reverting to the old long fit. Nonuniform quantized/alternating source output
+keeps the phase-locked smoothing path. This changes the short-term smoothing
+predictor, not the source timestamps, main cadence fit, input-miss classification
+or independent selected protection bounds. Ordinary Reduce judder remains
+revision 4. Cadence-reset retiming releases by at most min(1 ms,T/2) per frame,
+250 us at default T=500 us. Reserve cap/percentile/attack/release stay unchanged:
+5 ms, p99.5 over 128 placed frames, 250 us per-frame attack, 500 us/s release.
+Recorded revisions 0--5 retain their explicit behavior for exact replay.
+
+
+Matched final replay for `moonlight-pacing-20261016-202136-501609.vrrtrace`
+(SHA-256 `9211611e889885f748f0e7996a4fe456ea9313215c754f3c45183318f4249e03`)
+compares input policy 6 with old smoothing 2 versus smoothing 6/reset 250 us.
+Mean decode-to-submission falls 6.508 to 6.309 ms and p99 15.151 to 14.154 ms.
+Requested Extra p99 falls 8.000 to 7.547 ms, standard deviation 1.738 to
+1.583 ms; display-jerk p99 falls 3.085 to 3.015 ms with >2 ms pairs unchanged
+at 18 per mille. Actual eligible misses change from 50 to 52 out of 15,904;
+the final window changes 11 to 12 out of 3,190, remaining above the selected
+99.50% goal (99.655% to 99.624%). The uniform 80-to-116 FPS fixture reduces
+mean Extra 1.187 to 0.171 ms and mean jerk 67 to 10 us across all presets.
+Two independent older Absorb recordings improve mean latency about 0.13 ms
+with a one-per-mille increase in >2 ms display-jerk pairs; this is not universal
+smoothness dominance. The final ordinary steady-rate replay reproduces exactly.
+Untouched old-policy replay passes exactness and recorded-sequence integrity;
+ten nominal/decision/preparation/submission/scheduler stress scenarios pass
+explicit buffer, decode-to-submission p99 and modeled interval-safety bounds,
+without worker saturation. These are replay/model results, not optical proof.
+Final artifacts are under `build/extra-delay-stability-fix/`.
+
+Extra-delay phase accounting correction (2026-10-16, after `bcb06f04`):
+`Extra delay` is the nonnegative net phase requested by smoothing, display
+ownership and retained recovery, beyond the input buffer. The previous worker
+added cadence smoothing to the recovery wait remaining after the current
+frame's readiness clamp. This mixed phase with marginal wait: in the matched
+Absorb capture, frames 14382--14384 reported 3.739, 8.205 and 4.317 ms while
+submission intervals stayed near 8.4 ms and retained phase drained gradually.
+
+The trajectory now exposes its requested target before the current readiness
+bound, independently of its unchanged actual target. The controller retains
+independent display-floor and recovery requests for reporting. Both overlays
+consume one derived net phase value. A newly late input itself does not count
+as smoothing/recovery protection, and no reported value changes input scoring
+or demand. Signed smoothing cancels positive requested phase before clamping
+at zero; arithmetic saturates. Replay exposes `planned_extra_delay_us`,
+`planned_total_delay_us`, `overlay_extra_delay_us` and a per-frame
+`simulated_planned_extra_delay_us` column. Historical `pacer_delay_us` remains
+the old marginal-wait diagnostic for comparison. Trace fields stay unchanged.
+
+Rate-transition correction (2026-10-16, after `25a18cfa`): production
+selects input-hitch policy 6. A rate-dependent producer baseline change exposed
+two separate issues. The live source mapping moved several milliseconds while
+the already applied buffer released only at 250 us/s, retaining the correction
+again as real delay. The history drift fit also fitted a line through the rate
+transition's baseline step, treating phase movement as host/client clock skew.
+That shifted retained demand and made a naive buffer-coordinate correction
+spend real protection.
+
+For ten seconds after a layer change to a rate at least 25% faster than the last
+qualified settled layer, a continuously active layer translates current buffer
+and previous requested target by movement of the actual applied source mapping.
+The inverse buffer movement preserves the planned source deadline, subject to
+selected bounds. It uses the raw applied mapping, not the drift-normalized
+history coordinate. A created/restored layer first keeps its own protection;
+subsequent movement uses the current live mapping basis. Historical coverage is
+not rewritten, and genuine new demand retains the existing actual-miss gate.
+Normal steady-state release and physical recovery bounds remain unchanged.
+
+During rate-rise/drop settling, the drift fitter discards its old point window
+and estimate. It collects a fresh steady baseline afterward and requires the
+existing 15-second span before fitting again. Source-coordinate continuity,
+retained input samples, layer history and observed outcomes are preserved.
+A deterministic fixture separates an 8 ms rate-dependent baseline step from
+actual clock skew, including renewed learning with +/-50 ppm clock drift.
+
+The reported transition is present in the completed
+`moonlight-pacing-20261016-200843-497715.vrrtrace` session, SHA-256
+`970371d3c310313fd0025dbfd59575c4476516d84c699c8686c119710a876828`.
+At frame 2108 a qualifying miss raises protection from 1.00 to 10.26 ms; the
+producer mapping subsequently advances about 8.5 ms while policy 2 leaves the
+extra protection draining for tens of seconds. The source cadence change itself
+is not classified as a hitch by this finding. A newer completed session stays
+near 90 FPS and does not contain the transition; it is a separate steady-rate
+regression check. Artifacts are under `build/rate-transition-latency-fix/`.
+
+Final `final-v6-*` validation uses a freshly rebuilt replay and unchanged source
+hashes. The untouched baseline passes exact reproduction and recorded-sequence
+integrity. Across the same 1,509 presented frames at recorded seconds 28--45,
+mean buffer falls from 7.743 to 2.573 ms and decode-to-submission from 8.639 to
+4.355 ms. Full-session decode-to-submission p99 falls from 9.210 to 6.385 ms;
+presented jerk over 2 ms changes from 52 to 51 per mille. The final rolling
+coverage remains 62 misses out of 11,178 eligible frames, while cumulative
+misses increase from 266 to 277 out of 50,145. This is lower latency with a
+small increase in earlier misses, not identical coverage at every point.
+The separate earlier judder-coverage recording retains the selected 99.50%
+final-window goal (15/3,041 misses, 99.507%, versus 14/3,041 previously), with
+37 versus 27 cumulative misses. The steady-90 recording reproduces exactly.
+All eleven deterministic test targets and ten nominal/injected-fault replay
+scenarios pass, including explicit latency and zero modeled-interval-violation
+bounds. Injected-fault bounds do not describe normal operating latency.
+
+Policies 0--5 retain their explicit behavior for recorded replay; 3--5 are
+intermediate coordinate-correction designs, not production defaults. Cache keys
+include `input-hitch-misses=6`. Replay and deterministic checks do not replace
+fresh live/optical validation.
+
+Coverage protection correction (2026-10-16, after `bf4f0992`): policy 2
+introduced the retained-miss rule, which policy 6 keeps. Policy 1 could trim a proven playback miss as a
+raw-input learning outlier and could lower the request on a following clean
+update while coverage remained below goal. Policy 2 retains a separate quantile
+of actual qualifying miss requirements in the immutable source clock. It leaves
+only floor(eligible frames * permitted miss fraction) of the largest misses
+unprotected, then uses the remaining miss quantile as a protection floor while
+below goal. Raw late inputs cannot increase this floor. Once a qualifying miss puts the
+history below goal, policy 2 can retain the justified target immediately, bounded
+by that same frame's measured input requirement minus tolerance. This retains
+delay the hitch already incurred; an older larger target or harmless late frame
+cannot fund the jump. Ordinary follow-up growth keeps its rise-rate limit, and
+capacity and selected-maximum qualification remain required. The floor expires with its
+samples and is projected through current clock/budget changes exactly once.
+This does not reclassify earlier outcomes as successful. Historical policy 0
+(raw inputs) and 1 (original hitch gate) remain exact-replay compatible. Cache
+keys include the effective policy version.
+
+Matched replay evidence for the reported judder-on session:
+`moonlight-pacing-20261016-194234-486829-connection-3.vrrtrace`, SHA-256
+`91b48d9c05eefe51ef2a236ebdf8cbc1eca4f0edf46d31fe44a4a5e3e408121a`.
+The untouched policy-1 capture passes exact baseline and sequence-integrity
+checks. With the same captured inputs, policy 2 reduces session misses from
+142/5541 to 27/5541 (97.44% to 99.51% coverage). Mean input buffer increases
+4.34 to 7.34 ms; mean decode-to-submission increases 5.42 to 7.83 ms and p99
+11.024 to 13.002 ms. Ten original/candidate nominal and injected-stall scenarios
+pass explicit buffer, latency and modeled interval-safety assertions without
+worker saturation. These are controller/replay results, not live or optical
+confirmation. The final 120-second overlay/rate-layer window improves from 82/3041 misses
+(97.30% coverage) to 14/3041 (99.54%), meeting the selected 99.50% goal.
+
+Stats contrast correction (2026-10-16, revised after user review): stats use
+high-luminance yellow-green (#D4FF00) text with a thin black glyph outline and
+an offset black shadow. Its nominal sRGB contrast against black is 18.1:1 using
+the W3C relative-luminance formula (lavender was 12.5:1). This is a text/outline
+calculation, not a guarantee of visibility in every game or an HDR measurement.
+There is no rectangular stats backing. Both colored text and shadow masks wrap
+with the same unoutlined font, so long rows keep their shadow without displaced
+line breaks. Pixels between letters remain transparent. Software fixtures check
+transparent space and both glyph colors, including forced wrapping, and preview
+Deck and 4K layouts over white. The graph panel and status messages retain their
+existing styles. The preceding opaque stats backing was rejected and removed.
+
+Extra-delay overlay clarification (2026-10-16, after `bf4f0992`): both the
+frametime graph and normal stats show `Extra delay` with a `smoothing/recovery`
+explanation and a separate `Planned total` equal to input buffer plus extra.
+Extra is the nonnegative net cadence-smoothing, presentation-floor and recovery
+correction for the reported frame; it is not an end-to-end latency measurement,
+a tolerance allowance, or additional protection used to score input misses.
+The worker computes it once for both telemetry consumers. Graph history carries
+this value independently of the Buffer line and its dashed buffer-plus-tolerance
+threshold. Zero extra remains visible. The stats give extra its own compact row.
+This reporting change does not alter scheduling, scoring or the trace schema.
+
+Preventable input-hitch goal (2026-10-16): new adaptive-input sessions set
+`playout_input_hitch_misses_only=6` (policy 1 introduced the original hitch gate). A scored miss requires valid causal input
+lateness beyond the applied buffer plus tolerance, a measured source-matched
+interval stretch beyond tolerance attributed to the same frame's readiness
+missing its intended deadline, and qualified spare service capacity. The input
+must be protectable within the selected maximum; a larger overrun is excluded
+from the preventable goal, never invented as clean playback. Loss, unknown
+bases, source/cadence changes and sustained overload retain their exclusions.
+The compressed successor of a late frame is not another miss for that hitch.
+Late input with steady output spacing stays clean. Post-input scheduler or
+present-path errors without an input overrun cannot count as input misses.
+
+The selected frame percentile sizes protection, but growth now also requires
+this actual preventable-miss history to be below the profile goal. Raw lateness
+alone cannot buy buffer, including during learning or from seeded rate-layer
+evidence. Even while older misses leave the history below goal, clean late
+inputs cannot enlarge the request beyond demand justified by actual misses. Physical VRR room can reduce demand while the actual goal is met;
+it cannot erase an observed hitch or discount its tail when below goal.
+Raw network/decode stage misses remain independent diagnostics. The stats row's
+coverage now refers to these eligible preventable-hitch outcomes. Its history
+still records each frame's actual outcome, not retroactive success after growth.
+Old traces default the new parameter to zero and retain the raw-input scoring
+and growth policy for exact replay. Calibration keys add the effective `input-hitch-misses` version
+so an older raw-input cache cannot silently seed the new outcome policy.
+
+Reduce judder tolerance contract restored (2026-10-16): ordinary Reduce judder
+now selects source-gap revision 4 in `vrrTimingParametersForSession()`. Let T be
+the resolved preset/custom interval tolerance. Consecutive valid source/RTP gaps
+within T of the fitted source period do not change the retained smoothing phase.
+For larger errors, correct only the excess beyond T, by at most T per gap; bound
+the entire retained phase to [-T,+T]. Clean gaps retain that phase, so they are
+not changed to repay earlier smoothing. There is no standing readiness reserve,
+period blending, or phase recentering in this policy. A source/cadence reset can
+clear the phase, still within the shared bound. With T=500 us the smoothing
+phase cannot exceed +/-500 us. Readiness, input buffering, display-spacing and
+bounded late recovery remain separate constraints; this is not a T bound on
+total client latency or a guarantee that every actual presentation matches its
+intended source interval. The separately enabled Absorb microstutter option
+uses the local-cadence revision-6 gain/reserve policy described above
+(reserve <=5 ms, lag <=8 ms); recorded revision 2 remains replayable.
+Recorded revisions 2, 4 and 5 retain their explicit parameters for exact replay;
+new session calibration keys include the changed cadence, reserve and lag
+parameters so old smoothing profiles cannot silently seed this policy.
+
+The regression investigation below describes the earlier rollback and its
+measurements, not the final ordinary Reduce judder policy above.
+
+VRR buffer regression correction (2026-10-16): users reported higher VRR
+buffers and coverage dipping to about 98% after daily.183. Replaying 18 Deck
+captures (daily.183-era sessions through 2026-10-15; the three Oct 10
+dev-build captures cannot replay their reference) under each daily's policy,
+from each capture's first-row parameter snapshot, separated four causes:
+
+- daily.184 bounded catch-up held successors up to a whole source period
+  behind their slots (25 ms on 30 FPS spans).
+- daily.187 bounded the input recovery credit to T, so low-rate spans pinned
+  the input buffer near its cap (overlay maximum 9.2 -> 13.9 ms on average,
+  25 ms on a Smooth capture).
+- daily.184's rate layers seeded a never-seen faster layer with a slower
+  layer's lateness, and learning followed the single largest requirement:
+  25 ms learned on a 21 FPS loading screen held a Smooth session for minutes.
+- daily.188 revision 5 passed jitter within T and placed corrected gaps on
+  the tolerance-band edge. Near the panel's maximum rate (about 115 FPS on
+  120 Hz) that edge is below the display period, bounded catch-up floored those
+  frames, and carry, repaid at carry/32, ratcheted toward a source period:
+  4-6 ms more latency for no jerk benefit, absent from the overlay buffer and
+  counted as input misses (the 98% coverage). Revision 5 had been validated
+  against revision 4, which never shipped, not against revision 2.
+
+Comparisons need display-side metrics. The legacy controller left latched
+presents unfloored and let the flip queue hold them, so decode-to-submission,
+submission jerk and pacer delay omitted a wait that bounded catch-up schedules
+explicitly. vrrreplay now estimates display as max(submission, previous
+display + display period) (`replay_display_*` jerk,
+`simulation.decode_to_estimated_display_us`) and reports
+`queue_inclusive_delay_us`: playout delay + retiming + display-floor push +
+deliberate recovery hold + submission-to-display wait, with readiness lateness
+excluded, also sampled once per second like the overlay.
+
+Production now uses the revision-2 smoother for Reduce judder and a wider
+revision-2 reserve/lag for Absorb microstutter, credits the physical VRR room
+scaled by the profile miss allowance, seeds new layers only from layers at
+most 1.5x slower, trims one outlier while learning, and caps catch-up carry at
+min(4 ms, half a period), the VRR17 bound. A 2 ms cap cost most of bounded
+catch-up's smoothness (Low Latency capture 33 -> 56 per mille). Faster or
+ramped repayment, credit caps, learning ceilings and revision 5 with a
+presentable floor were all on the same or a worse frontier. The initial overlay
+change led with the total. The subsequent reporting correction in section 14
+keeps retiming and recovery holds visible but leads with the applied input
+buffer to match the graph. The later clarification gives extra its own row,
+e.g. `Extra delay: 1.20 ms (smoothing/recovery) | Planned total: 9.82 ms`
+with an input buffer of 8.62 ms.
+
+| All 18 captures, Reduce judder on | 183 | 184 | 187 | 188 | Current |
+|---|---:|---:|---:|---:|---:|
+| Display jerk > 2 ms (per mille) | 23.0 | 18.1 | 16.7 | 18.5 | 17.4 |
+| Display jerk p90 / p99 (ms) | 0.76 / 2.82 | 0.65 / 2.73 | 0.59 / 2.60 | 0.91 / 2.55 | 0.62 / 2.57 |
+| Decode-to-display p50 / p95 / p99 (ms) | 4.59 / 8.15 / 10.17 | 4.52 / 7.84 / 9.68 | 4.76 / 8.09 / 10.37 | 6.82 / 10.76 / 12.27 | 4.36 / 7.69 / 9.19 |
+| Queue-inclusive delay p50 / p99.9 (ms) | 7.63 / 17.36 | 7.73 / 17.35 | 8.05 / 18.34 | 9.80 / 17.23 | 7.84 / 16.02 |
+| Overlay-sampled buffer / total max (ms) | 8.59 / 19.52 | 9.18 / 19.30 | 13.87 / 21.61 | 14.82 / 21.55 | 8.79 / 16.92 |
+
+Every value is weighted by each capture's presented-pair count. Per
+capture the current policy wins 100, ties 41 and loses 57 of 198
+stat comparisons with daily.183. The losses concentrate on Smooth sessions,
+where daily.183's fixed ~9.4 ms buffer cost 2.6-5.4 ms more median latency.
+Absorb microstutter on the same base (reserve <= 5 ms at p99.5, 8 ms lag):
+display jerk > 2 ms 14.0 per mille (p99 2.34 ms), decode-to-display
+p50/p95/p99 4.81/8.36/10.18 ms, overlay buffer/total maxima 8.41/17.29 ms.
+daily.188's Absorb reached 9.0 per mille only with 8.26 ms median latency and
+a 15 ms buffer maximum; halving the miss allowance as well reached 12.6 per
+mille but raised the buffer maximum to 10.8 ms and would silently retarget
+the profile's coverage.
+Replay keeps recorded admission and GPU/native execution: it cannot model
+GPU contention, compositor behavior or physical scanout, the captures are all
+Deck/Linux worker-paced (native scheduled Windows presentation is not
+validated by this study), and live smoothness needs a fresh session. The
+harness, per-capture configs and JSON are in `build/vrr-regress-20261016/`.
+
 Main input-accounting correction (2026-10-12): current bounded-catch-up sessions serialize
 `playout_input_clock_relative_history=3` and
 `playout_input_bounded_recovery_credit=1`; absent fields keep historical captures
@@ -44,6 +673,57 @@ its original accounting. Diagnostic
 `MOONLIGHT_VRR_INPUT_ACCOUNTING=0` selects the historical control in the same
 binary. Tests and frozen capture guards establish software behavior; live
 GPU/compositor behavior requires a coordinated comparison.
+
+Absorb microstutter recovery (2026-10-14, superseded 2026-10-16): the recovered source-gap smoother
+records revision 5. Reduce judder alone corrects the excess beyond the configured
+interval tolerance within a phase limit of max(2 ms, 12% of the fitted period).
+Absorb adds a standing reserve of min(2 ms, 15% of the fitted period) and uses
+max(8 ms, 20% of the fitted period) for its phase limit. The previous 4 ms
+Absorb limit clipped 763 of 15,577 adjacent submitted-frame decisions in the
+latest completed capture, leaving short source displacements partly uncorrected.
+The 8 ms limit changes correction room, not the standing reserve, frame admission,
+profile buffer allowance, source-rate detector or presentation floor. Captured
+parameters retain the old limit for exact replay; the calibration identity
+includes the new limit so incompatible cached profiles cannot cross-seed it.
+This recovery excludes the stash's separate decode-hold and LFC experiments.
+
+Validation selected `/home/deck/moonlight-logs/moonlight-pacing-20261014-211054-23716.vrrtrace`
+(5,187,557 bytes, last write 2026-10-15 02:16:12.575886 UTC, SHA-256
+`57580ed4d55001c6ac9eb574c1b575501f3bff4a56d8b08d12863b0108039b60`).
+Its clean-close footer accounts for all 15,677 rows. Fresh recorded-policy
+baselines before and after the final rebuild both exit zero with valid sequence
+integrity and `baseline_exact=true`. The candidate uses the full captured
+controller snapshot with only `playout_smoothing_max_lag_us` changed to 8,000;
+a partial override over generic defaults is not the matched comparison.
+
+| Matched replay metric | Stashed 4 ms | Fixed 8 ms |
+|---|---:|---:|
+| Presented interval-change pairs over 2 ms | 53 per mille | 12 per mille |
+| Presented interval-change p99 | 4.133 ms | 2.210 ms |
+| Decode-to-submission mean / p50 | 16.541 / 15.506 ms | 14.784 / 13.817 ms |
+| Decode-to-submission p95 / p99 | 24.207 / 32.481 ms | 23.337 / 31.818 ms |
+| Decode-to-submission p99.9 / p99.95 | 34.858 / 36.811 ms | 36.777 / 37.109 ms |
+| Sender-spacing residual p99 | 4.325 ms | 7.736 ms |
+| Sender-relative jerk p99 | 6.204 ms | 8.398 ms |
+
+The deliberate source retiming improves presented cadence while reducing sender
+timestamp fidelity; it does not establish an abnormal source stall. The 6/8/10/12
+ms sweep puts the useful knee at 8 ms. Ten matched nominal, periodic decision,
+preparation, submission and two-frame scheduler-burst scenarios pass their
+interval-safety and latency assertions without worker saturation. The nominal
+p99 bound is 33 ms and the injected-fault bound is 45 ms. A heavier three-frame
+4+4 ms wake injection saturates both policies and is excluded from cadence and
+latency conclusions. The deterministic 6 ms displacement regression reduces
+maximum presented interval change from 2,501 to 1,001 us on both presenter paths.
+All fourteen selected VRR suites and replay help pass after the final diagnostic
+build; the native app build, offscreen help and Desktop launcher help pass.
+
+Replay retains admission and GPU/native execution costs. It cannot verify GPU
+contention, compositor improvement or physical scanout. Raster bounds remain
+unclassified on this Vulkan capture. Live visual improvement needs a fresh
+session; an already running executable retains its old image. Complete configs,
+test logs, baseline/candidate JSON, tail metrics, raster bounds and binary hashes
+are in `build/absorb-fix-20261014/validation.json` and its sibling artifacts.
 
 # Streaming, VRR, and timing architecture
 
@@ -176,11 +856,14 @@ it does not establish that a particular deployed executable matches the source.
 Current source review baseline: this fork's `dae1bb7d` (downscaling
 preference, libplacebo selection, D3D11 filtering, dithering, debanding and
 its own pacing and overlay changes) merged with upstream `master` at
-`6613bfe1` (2026-10-13). Upstream's own baseline notes follow.
+`3ae5f3b0` (2026-10-18). The fork's VRR and timestamp pacing traces share
+`TraceFile` (pacer/tracefile.h) instead of the worker's inline file writer;
+upstream's worker-replay completeness check reads `TraceFile::close()`.
+Upstream's own baseline notes follow.
 
 Current integration (2026-10-11): approved Deck history through 3c32553e
 retains native Wayland/nightly packaging through 2083d82a. The compact normal
-overlay keeps host smoothness and two plan-referenced VRR lines, with decoder
+overlay keeps host smoothness and three compact VRR lines, with decoder
 skips and detailed tracing confined to logs. Historical task-4 notes below
 describe earlier candidates, not the final integrated overlay.
 
@@ -232,13 +915,14 @@ See task-4/readability-analysis/ for source/build/test provenance and previews.
 Current source review baseline: approved Deck history through `3c32553e`,
 reconciled with nightly/platform packaging through `2083d82a` (2026-10-11).
 The normal overlay retains incoming host smoothness, removes decoder skips,
-and adds two compact VRR summary lines; full diagnostics stay in logs even when
+and adds three compact VRR summary lines; full diagnostics stay in logs even when
 deep tracing is enabled. The 1280x800 and 4K overlay-fit fixtures include host
 smoothness. Native Wayland and unsigned all-platform nightly packaging remain.
 The 2026-10-09 source-relative cadence detector adds separate submission and
 identity-matched OS display evidence without changing revision-12 control.
-The 2026-10-10 replay qualification additionally caps native scheduled
-smoothing and its reserve at 2 ms, retaining 6/3 ms on worker-paced presenters.
+Current source-gap smoothing uses the same bounded phase policy on native
+scheduled and worker-paced presenters; section 8.3 describes its reserve and
+input-buffer accounting. Recorded older policies retain their own bounds.
 Schema-5 rows now append `lost_packets` so packet-loss buffer eligibility is
 replayable; older rows without it retain their historical zero-loss input.
 Qualified Windows D3D11 VRR playback defaults to waitable DXGI queue admission.
@@ -3014,6 +3698,22 @@ response. It does not prove how a particular Sunshine/GFE version captures,
 timestamps, paces, or encodes in response. A refresh hint is not host/client
 clock synchronization.
 
+Successful launch/resume responses may include the optional direct-child
+`clientWarning=virtual_display_disabled_by_client`. `backend/launchwarning.h`
+accepts only the recognized code in bounded, well-formed successful XML with a
+stream-start flag. Unknown codes, duplicates, DTDs and malformed warnings are
+ignored without changing launch success. Text comes from the client's localized
+catalogue, never arbitrary host markup. `Session` retains it only after successful
+RTSP connection; the existing status overlay shows it once for ten seconds after
+the streaming window is ready and clears it at teardown. It neither reconnects
+nor opens a dialog. Other status sources retain their own state.
+
+This client does not currently send `virtualDisplay=0`; the warning receiver is
+protocol support, not evidence that ordinary Nonary sessions trigger it. A
+compatible caller must explicitly send that disable and implement the response
+extension. Unchanged third-party Artemis clients may ignore it. No client display
+preference or persistent configuration is added by this extension.
+
 ## 4. Packet ingress, frame assembly, and recovery
 
 The video receive thread reads UDP into staging buffers, optionally decrypts
@@ -3432,10 +4132,14 @@ It also sets `latchedFloorDisabled=1` and disables the extra queue-mode budget.
 | GPU readiness ceiling | `min(12,000 us, fitted source period)`; target/deadline unchanged |
 | Capacity telemetry | `playout_capacity_telemetry=1` exposes unclamped demand and cap pressure in live decisions |
 | Smoothing gain | 150 when Reduce judder is checked; 0 when unchecked |
-| Smoothing period EMA | 25 per mille with fractional carry, plus 20,000 per million phase-error feedback; active only with smoothing enabled |
-| Positive smoothing lag cap | 2,000 us for native scheduled presentation; 6,000 us for worker-paced presentation, shared with the readiness reserve; active only with smoothing enabled |
-| Smoothing readiness reserve | p98 of the last 128 smoother-caused shortfalls minus 500 us, at most 2,000 us for native scheduled or 3,000 us for worker-paced presentation, +250 us per frame, released at 500 us/s; zero when unchecked |
-| Smoothing readiness bound | Enabled with Reduce judder; early retiming preserves known decode readiness and the raw target's typical render allowance; smoothing-only misses cannot grow or renew the interval buffer |
+| Smoothing revision | 2 (phase-locked smoother); revision 5 is replay-only since 2026-10-16 |
+| Smoothing period EMA | 25 per mille with 20,000 per million phase-error feedback |
+| Smoothing lag | 6,000 us worker-paced, 2,000 us native scheduled; Absorb microstutter 8,000 us |
+| Smoothing reserve | Learned p98 shortfall beyond 500 us, at most 3,000 us (bounded by the lag), released at 500 us/s; Absorb microstutter p99.5, at most 5,000 us |
+| Smoothing readiness bound | Retiming spends only known readiness slack before the raw slot |
+| Bounded catch-up carry ceiling | min(4,000 us, half the fitted source period); beyond it a successor accepts compression to the physical floor |
+| Input recovery credit | Physical VRR room scaled by the profile miss allowance: 1000/500/50 per mille at 99/99.5/99.95% (clamped 1..1000) |
+| Input layer seeding / learning | A never-seen layer seeds from the previous one only when that layer ran at most 1.5x slower; learning ignores the single largest requirement |
 | Render lead floor | 3,000 us |
 | Preparation start | Use the existing playout interval (`playout_prepare_on_arrival=1`), with no additional post-submission delay |
 | Minimum preparation lead input | 2,500 us |
@@ -3456,8 +4160,10 @@ Negotiated FPS supplies fallback timing and bounds the fitted source rate.
 
 Cadence history is bounded (6 minimum and 512 maximum samples by schema). Loose
 and tight windows are 350 ms and 1 s. A major departure uses a provisional rate
-candidate; production requires at least three candidate samples spanning 200 ms
-before accepting a sustained change. A subsequent interval must return within
+candidate; the general estimator requires at least three candidate samples
+spanning 200 ms before accepting a sustained change. Adaptive input policy 9
+first checks the confirmed layer-transition detector described at the top of
+this document; that path accepts clear large changes in three source intervals. A subsequent interval must return within
 5:4 of the old fitted period to cancel the candidate; captured policies retain
 their recorded ratio. Isolated gaps should not temporarily turn a high-rate
 stream into a low-rate stream and resize every dependent budget.
@@ -3487,6 +4193,46 @@ learning. Do not apply that fallback path's percentile-spread formula to normal
 timestamp production behavior.
 
 ### 8.3 Cadence smoothing
+
+Current ordinary Reduce judder sessions (2026-10-16) use the tolerance-bounded
+source-gap policy, revision 4: ignore gaps within T of the fitted period,
+correct only the excess by at most T per gap, and keep the total retained phase
+within +/-T. There is no smoothing reserve or recentering; clean source gaps
+keep their spacing even when earlier gaps left a retained phase. Qualification
+uses consecutive valid RTP identities; rate/phase changes, rebases and invalid
+or nonadjacent source timing reset the phase. The actual target still respects
+known readiness, input buffering and display-spacing/recovery constraints.
+
+**Absorb microstutter (adds latency)** separately selects revision 6: the
+phase-locked smoother with uniform local source-cadence qualification described
+at the top, its wider learned reserve (at most 5 ms at p99.5) and 8 ms lag. Revision 5
+(daily.188) remains replayable through explicit parameters but is not selected.
+The earlier regression/rollback evidence at the top predates this restoration.
+
+Recorded revision 5 (daily.188) used the source-gap policy. A consecutive valid RTP
+gap G is compared with the fitted source period P. Error through the configured
+tolerance T is accepted; the retained phase changes by the entire excess beyond
+T, bounded by the phase limit. Clean intervals can return phase toward zero
+only using the tolerance those intervals have left. The source-only phase is
+independent of local arrival, decode and presentation timing. The final target
+still respects known readiness and the physical display floor. Rate changes,
+phase breaks, invalid/nonadjacent timestamps and rebases reset source phase.
+
+Reduce judder uses max(T, 2 ms, 12% of P) for the phase limit. The optional
+**Absorb microstutter (adds latency)** preference uses max(T, 8 ms, 20% of P)
+and adds a standing reserve of min(2 ms, 15% of P), including across phase
+resets. It defaults off, requires Reduce judder, is snapshotted across decoder
+recreation, and supports `--vrr-absorb-microstutter` and its `--no-` form.
+Reconnect after changing either preference. Readiness evidence uses
+`source + min(0, phase + reserve)` so the adaptive input buffer cannot release
+the reserve as spare delivery slack. Queue capacity accounts for the phase
+limit and reserve separately from the timing profile's buffer cap. No learned
+smoothing reserve is active in revision 5. Large source gaps remain bounded by
+the correction room; this is not a fixed FPS generator or a scanout guarantee.
+
+The following describes recorded revisions 0-2 and the gain/reserve mechanism
+still used by the optional Absorb microstutter policy. Ordinary Reduce judder
+uses the one-tolerance policy above instead.
 
 The **Reduce judder** checkbox controls cadence smoothing
 independently of the three VRR timing presets. It defaults on and preserves
@@ -4408,6 +5154,27 @@ worker run, and rejects focus loss during frame delivery.
 
 ### Linux Vulkan presentation
 
+Offscreen target contract (issue #18 investigation, source baseline `fbbfd11f`,
+2026-10-18): both deferred Mailbox rendering and opt-in off-thread preparation
+create targets with renderable, blit-source and blit-destination access.
+libplacebo clears uncovered letterbox/pillarbox pixels using a destination blit;
+renderable plus blit-source access alone leaves that clear invalid. Both paths
+use `plVkOffscreenRenderTargetParams()` to preserve the acquired target's size
+and format and request the required access. The offscreen software-Vulkan
+regression checks actual rendering and border/interior pixel readback, including
+odd target extents. Omitting destination access reproduces the reported clear
+validation and leaves old border pixels; enabling it clears them correctly.
+
+This establishes a target-access correction, not the reported fractional-scale
+SIGSEGV's cause. The first deferred-path frame uses a real swapchain image and
+seeds the offscreen template for later frames. Both vrr18 and current code query
+`SDL_Vulkan_GetDrawableSize()` before every swapchain resize/acquire, and a failed
+resize skips acquisition. A dropped resize event during startup does not prove
+that the swapchain remains unsized. The reporter's exact Flatpak commit and
+resolved faulting stack, current reproduction and physical display behavior
+remain unverified; the isolated regression uses libplacebo 7.360.1 rather than
+the reporter's libplacebo 365.
+
 Linux package capabilities must be qualified independently of launch/version.
 The daily.183 AppImage disabled Moonlight Wayland, lacked matching Qt Wayland
 plugins, and built SDL without its Wayland backend; its X11 launch test did not
@@ -4542,21 +5309,38 @@ left two KWin states that composite every frame until something resets them:
 `streaming/kwinscanoutguard.cpp` runs on its own thread while a stream is
 active. Every 2 s while fullscreen it reads KWin's `activeEffects` over D-Bus
 and reloads a short animation effect active for 6 s, at most three times per
-effect. Every 10 s it reads KMS state with plain ioctls: an active connector
-with HDR metadata whose CRTC has no `GAMMA_LUT` is the shadow-buffer fallback.
-The guard then re-applies that output's current SDR brightness through
-`kde_output_management_v2`. Any applied configuration makes KWin rerun
-`tryKmsColorOffloading()`, with no visible change. Outputs set to prefer color
-accuracy use the shadow buffer on purpose and are left alone; retries stop
-after three. Every action is logged with the prefix `KWin scanout guard:`.
+effect. KMS checks identify active HDR connectors with no CRTC `GAMMA_LUT`;
+that can indicate hardware-color fallback. Recovery requires two consistent
+fullscreen observations at least 2 s apart and consumes a single attempt per
+stream, including failures or uncertain replies. Intentional color-accuracy
+outputs are left alone. Unknown KMS state and output hotplug reset only the
+settling observation, never a consumed retry budget.
+
+Output discovery supports legacy `kde_output_device_v2` globals through
+version 16 and `kde_output_device_registry_v2` at version 21. Initial state
+must include `done`; removed outputs/modes, duplicate descriptions, stale
+state and configuration failures are handled without applying stale values.
+Registry-based KWin receives an output-configuration apply with no setting
+setters. Legacy KWin receives only the current SDR reference value, after a
+freshness check; no brightness nudge or mode/HDR/VRR/calibration setter is sent.
+Source-path fixtures for KWin 6.7.3 and 6.4.3 verify that an unchanged reference
+creates the change set and reaches `tryKmsColorOffloading()`. The 6.7.3 apply
+path adds current DPMS state even to an empty configuration. These fixtures
+verify the retry entry, not GPU acceptance. A live KWin 6.7.3 test restored a
+nonzero CRTC gamma LUT at the unchanged 300-nit reference; the user confirmed
+correct color and no flicker. The remaining present-timing issue was not
+resolved. Hardware gamma offload alone does not establish direct scanout or
+correct display cadence. An accepted configuration is logged separately from
+the later KMS result.
 
 The guard links neither libwayland-client nor libdrm (the AppImage disables
-both). It loads libwayland-client at runtime, and every compositor wait has a
-2 s deadline so the end of a stream never blocks on it. The Flatpak needs
-`--talk-name=org.kde.KWin` for the effect check. The KMS check and the HDR
-retry use only the Wayland socket and `/dev/dri`. `MOONLIGHT_KWIN_SCANOUT_GUARD=0`
-disables the guard, and `tests/vrr/tst_kwinscanoutguard` exercises it against a
-fake KWin.
+both). It loads libwayland-client at runtime. A single 2 s deadline covers the
+whole short-lived output-management operation, including enumeration,
+freshness and reply waits. The Flatpak needs `--talk-name=org.kde.KWin` for the
+effect check. The KMS check and HDR retry use the Wayland socket and `/dev/dri`.
+`MOONLIGHT_KWIN_SCANOUT_GUARD=0` disables the guard. The isolated
+`tests/vrr/tst_kwinscanoutguard` fixture checks registry/legacy requests,
+unchanged settings, hotplug, timeouts and the one-attempt policy under sanitizers.
 
 ## 12. Audio, input, and end-to-end latency
 
@@ -4795,6 +5579,18 @@ The parser supports schemas 3, 4, and 5, but the inspected strict
 calls the launchers schema-4/replay-grade. Inspect actual captured schema and
 gate results rather than trusting that label.
 
+Replay validates canonical CSV values while borrowing field slices from each
+decoded row; values retained across rows are copied. The header resolves to a
+column lookup once per scenario instead of repeatedly scanning hundreds of
+column names for every row. Exact percentile histograms allocate only occupied
+256-bucket pages, preserving microsecond bucket boundaries and summary values.
+The controller selects generic rolling percentiles without sorting the whole
+sample window and keeps a sorted GPU-wait companion to its bounded FIFO, so
+GPU readiness quantiles no longer rebuild and sort on every sample. The
+sample-window and percentile rules remain unchanged. Batch scenarios still run
+as separate processes, bounded by `--jobs`; each process currently reads the
+trace independently. These changes do not alter the trace schema.
+
 The baseline reconstructs the controller using recorded parameters, arrivals,
 execution costs, configuration, and lifecycle. Exactness includes complete
 sequence/footer accounting, valid timing relationships, required native/GPU
@@ -4945,9 +5741,18 @@ still apply. Historical score debt alone never authorizes growth.
 Historical revisions retain their recorded averaging/control behavior for exact replay.
 
 The normal overlay retains Moonlight's original performance rows and incoming
-host smoothness, then appends two compact VRR lines for buffer/coverage and
-plan-referenced display timing. Decoder skips and detailed controller breakdowns
-remain in logs. Deep tracing does not expand the on-screen overview. Display
+host smoothness, then appends three compact VRR lines for buffer/coverage, extra delay/planned
+total, and plan-referenced display timing. Decoder skips and detailed controller breakdowns
+remain in logs. As of the 2026-10-16 reporting correction, the value labeled
+`VRR buffer` is the applied input buffer (`playoutDelayUs`), matching the timing
+graph's `Buffer` line. A separate row in both overlays labels the net positive
+smoothing, display-floor and recovery adjustment as `Extra delay`, with buffer
+plus extra labeled `Planned total`. Extra delay can exceed T because display/recovery protection is separate
+from the tolerance-bounded source-gap smoother. Previously
+the total led under the buffer label, so smoothing could make the stats number
+jump while the graph's buffer stayed steady. This changes presentation only;
+controller timing and graph measurements retain their existing behavior.
+Deep tracing does not expand the on-screen overview. Display
 feedback is OS telemetry, not optical proof of smoothness or HDR output.
 
 Native scheduled retiming qualification (2026-10-10): selected the completed
@@ -6475,6 +7280,13 @@ advertises LI_CCAP_HAPTICS_PCM. See third-party/saxense/PROVENANCE.md.
 
 In merged controller mode, startup opens attached DualSense controllers first
 so the host's first player-0 announcement describes the actual feedback target.
+Each analog stick selects the connected controller's complete X/Y pair with
+the greatest squared radial deflection. Equal magnitudes retain the lowest
+controller slot, independent of which controller generated the event. This
+prevents an idle controller's larger X offset from replacing held-forward Y;
+buttons remain combined by OR and triggers by their maximum. Multi-controller
+mode retains each controller's own axes. The pure selector regressions are in
+`tests/input/gamepadstickmerge.pro`; physical Deck validation remains pending.
 Multi-controller numbering retains enumeration order. Rumble and adaptive
 trigger feedback are routed by player index to the matching DualSense; SDL
 remains responsible for input and non-waveform effects. Waveform teardown joins
@@ -6602,9 +7414,12 @@ keeping the adaptive buffer. Traces serialize the active parameters, so captures
 replay with their own policy; a strict replay of a 2026-10-10 VRR17 capture (its
 start-delay seed restored) still reproduces every decision.
 
-**Buffer.** The profile smoothness target and history (for example 99.50% over
-200 s) select a frame-coverage percentile of producer lateness relative to the
-unbuffered source slot. Each requirement subtracts the profile tolerance once and
+**Buffer.** The current preventable-hitch goal is described at the top of this
+document. The following producer-percentile sizing mechanics remain, with growth
+additionally gated by actual preventable misses below the profile goal; recorded
+older captures use their historical raw-input coverage. The profile smoothness
+target and history (for example 99.50% over 200 s) select a frame-coverage
+percentile of producer lateness relative to the unbuffered source slot. Each requirement subtracts the profile tolerance once and
 the VRR recovery headroom (`recoveryHeadroomUs()`: source period minus the larger
 of display period and typical render), so a lower frame rate never needs more
 buffer than a higher one for the same jitter. Once learned, eligible evidence
@@ -6612,7 +7427,8 @@ rises at 1000 us/s and falls at 250 us/s; packet loss, overload and invalid
 mappings are ineligible. The overlay shows the buffer with its target and
 coverage with its target on one line.
 
-**Rate layers and learning.** Lateness itself depends on the rate (22:55
+**Rate layers and learning (policies through 6; policies 7--8 are described above).**
+Lateness itself depends on the rate (22:55
 capture: median 2.9 ms at 110 FPS, -0.35 ms at 30 FPS), so the controller keeps
 one buffer layer per source-rate range: a rate within 15% of a layer's anchor
 period shares it. Each layer keeps its own evidence, protection and coverage. A
@@ -6720,3 +7536,23 @@ uniformly scales the complete surface only if it exceeds either bound, preservin
 all text/lanes and alpha without cropping; graph-only/already-fitting overlays
 keep their native size. The meaningful Deck/4K fit assertions remain mandatory.
 No GPU work or rasterization was moved into the streaming frame path.
+
+### Queue and budget display clarification (2026-10-17)
+
+The compact VRR overlay reports the measured decoder-output-to-Present-return
+interval once, with queue/pacing, GPU decode synchronization and CPU render/submit
+shown as included components. All four numbers use the same rendered-frame
+counter population and averaging window; dropped/cancelled work is excluded.
+GPU synchronization is recovered exactly as total minus queue minus rendering,
+using the existing bounded telemetry partition. Raw counters and pacing policy
+are unchanged. Render-start and target waits remain part of queue/pacing.
+
+The buffer and positive retiming correction remain explicitly scheduling budgets,
+with their combined budget marked “not added to measured times.” The applied
+budget is the latest decision, not the mean residence of rendered frames. There
+is no reliable causal buffer-wait partition: the trace contains the actual
+schedule, not a counterfactual schedule without buffering. In particular, a late
+frame can have queue time below the budget, and a zero-budget frame can still
+wait for physical presentation constraints. Subtracting the budget from queue
+would therefore discard measured time. OS presentation after CPU submission,
+scanout and pixel response are outside the measured total shown here.

@@ -26,6 +26,8 @@ unix:!macx:packagesExist(libplacebo) {
     SUBDIRS += plvkpresentation
     plvkswapchain.file = $$PWD/plvkswapchain.pro
     SUBDIRS += plvkswapchain
+    plvkoffscreen.file = $$PWD/plvkoffscreen.pro
+    SUBDIRS += plvkoffscreen
 }
 
 unix:!macx:packagesExist(sdl2) {
@@ -68,11 +70,15 @@ preferences.file = $$PWD/preferences.pro
 SUBDIRS += preferences
 
 timingcontroller.file = $$PWD/timingcontroller.pro
+sourcegapsmoothing.file = $$PWD/sourcegapsmoothing.pro
+SUBDIRS += sourcegapsmoothing
 framelimitercapabilities.file = $$PWD/framelimitercapabilities.pro
 ratepolicy.file = $$PWD/ratepolicy.pro
 diagnostics.file = $$PWD/diagnostics.pro
 pacingworker.file = $$PWD/pacingworker.pro
 replay.file = $$PWD/replay.pro
+workerreplay.file = $$PWD/workerreplay.pro
+SUBDIRS += workerreplay
 replayconfig.file = $$PWD/replayconfig.pro
 queuesim.file = $$PWD/queuesim.pro
 
@@ -102,6 +108,8 @@ phasetrajectory.file = $$PWD/phasetrajectory.pro
 SUBDIRS += phasetrajectory
 inputpercentileintegration.file = $$PWD/inputpercentileintegration.pro
 SUBDIRS += inputpercentileintegration
+rollingquantile.file = $$PWD/rollingquantile.pro
+SUBDIRS += rollingquantile
 
 performancestats.file = $$PWD/performancestats.pro
 SUBDIRS += performancestats
@@ -109,3 +117,13 @@ SUBDIRS += performancestats
 # Clock-relative history and bounded recovery credit regression.
 SUBDIRS += inputaccounting
 inputaccounting.file = $$PWD/inputaccounting.pro
+
+receivedriftclock.file = $$PWD/receivedriftclock.pro
+SUBDIRS += receivedriftclock
+
+# Effective production policy must select the matching cache namespace.
+vrrcacheidentity.file = $$PWD/vrrcacheidentity.pro
+SUBDIRS += vrrcacheidentity
+
+inputtracechunks.file = $$PWD/inputtracechunks.pro
+SUBDIRS += inputtracechunks

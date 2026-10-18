@@ -230,8 +230,9 @@ bool TraceFile::minimumDurationCaptured() const
         m_LatestUs - m_StartUs >= kMinimumDurationUs;
 }
 
-void TraceFile::close(const QByteArray& footer)
+bool TraceFile::close(const QByteArray& footer)
 {
+    bool complete = m_File != nullptr;
     if (m_File != nullptr) {
         if (!m_Compressed && std::fflush(m_File) != 0) {
             m_WriteFailed = true;
@@ -266,12 +267,14 @@ void TraceFile::close(const QByteArray& footer)
         m_SizeCapped = false;
     }
     if (m_WriteFailed) {
+        complete = false;
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "%s trace reported a write failure", m_Label);
     }
 
     if (m_File != nullptr) {
         if (std::fclose(m_File) != 0) {
+            complete = false;
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "%s trace close reported a write failure", m_Label);
         }
@@ -279,4 +282,5 @@ void TraceFile::close(const QByteArray& footer)
     }
     m_Chunk.clear();
     m_WriteFailed = false;
+    return complete;
 }

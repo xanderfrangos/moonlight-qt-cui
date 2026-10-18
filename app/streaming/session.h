@@ -271,7 +271,8 @@ private:
                        bool* effectiveVrr = nullptr, bool smoothVrrFrameTiming = true,
                        bool gamescopeMailbox = false, int vrrLatencyMode = 0,
                        bool gamescopeRepaint = false,
-                       VrrTimingOptions vrrTimingOptions = {}, int ditheringMode = 0,
+                       VrrTimingOptions vrrTimingOptions = {},
+                       bool absorbVrrMicrostutter = false, int ditheringMode = 0,
                        bool temporalDithering = false, int debandMode = 0,
                        int ditherGrainMode = 0,
                        TimestampPacingOptions timestampPacing = {});
@@ -344,6 +345,7 @@ private:
         bool gamescopeMailbox = false;
         bool gamescopeRepaint = false;
         bool smoothVrrFrameTiming = true;
+        bool absorbVrrMicrostutter = false;
         int ditheringMode = 0;
         bool temporalDithering = false;
         int ditherGrainMode = 0;
@@ -391,6 +393,7 @@ private:
     SDL_JoystickID m_GamepadMenuJsId;
     int m_FlushingWindowEventsRef;
     QStringList m_LaunchWarnings;
+    QString m_HostLaunchWarning;
     bool m_ShouldExit;
     bool m_QuitHostAppRequested;
 

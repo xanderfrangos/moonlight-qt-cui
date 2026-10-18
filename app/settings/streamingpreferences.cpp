@@ -38,6 +38,7 @@
 #define SER_VRRLATENCYMODE "vrrlatencymode"
 #define SER_VRRTIMINGPRESETREVISION "vrrtimingpresetrevision"
 #define SER_SMOOTHVRRFRAMETIMING "smoothvrrframetiming"
+#define SER_ABSORBVRRMICROSTUTTER "absorbvrrmicrostutter"
 #define SER_HIGHPERFORMANCEGPUPOWER "highperformancegpupower"
 #define SER_TRACEVRRFRAMES "tracevrrframes"
 #define SER_GAMEOPTS "gameopts"
@@ -275,6 +276,7 @@ void StreamingPreferences::reload()
         settings.setValue(SER_VRRTIMINGPRESETREVISION, CURRENT_VRR_TIMING_PRESET_REVISION);
     }
     smoothVrrFrameTiming = settings.value(SER_SMOOTHVRRFRAMETIMING, true).toBool();
+    absorbVrrMicrostutter = settings.value(SER_ABSORBVRRMICROSTUTTER, false).toBool();
     {
         const TimestampPacingOptions defaults;
         m_TimestampPacing = TimestampPacingOptions{
@@ -677,6 +679,7 @@ void StreamingPreferences::save()
     settings.remove("gamescoperepaint");
     settings.remove("gamescopeforcecomposition");
     settings.setValue(SER_SMOOTHVRRFRAMETIMING, smoothVrrFrameTiming);
+    settings.setValue(SER_ABSORBVRRMICROSTUTTER, absorbVrrMicrostutter);
     settings.setValue("timestamppacing", m_TimestampPacing.enabled);
     // Renamed from timestampsmoothing when Light became the default and
     // Strong was removed, so saved values from before don't apply

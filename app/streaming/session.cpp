@@ -315,7 +315,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             int vrrDisplayRefreshHz,
                             [[maybe_unused]] bool* effectiveVrr, bool smoothVrrFrameTiming,
                             bool gamescopeMailbox, int vrrLatencyMode, bool gamescopeRepaint,
-                            VrrTimingOptions vrrTimingOptions,
+                            VrrTimingOptions vrrTimingOptions, bool absorbVrrMicrostutter,
                             int ditheringMode, bool temporalDithering, int debandMode,
                             int ditherGrainMode, TimestampPacingOptions timestampPacing)
 {
@@ -344,6 +344,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.gamescopeMailbox = gamescopeMailbox;
     params.gamescopeRepaint = gamescopeRepaint;
     params.smoothVrrFrameTiming = smoothVrrFrameTiming;
+    params.absorbVrrMicrostutter = absorbVrrMicrostutter;
     params.ditheringMode = ditheringMode;
     params.temporalDithering = temporalDithering;
     params.ditherGrainMode = ditherGrainMode;
@@ -818,6 +819,7 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     m_PresentationSettings.gamescopeRepaint = false; // Retired repaint experiment.
     m_PresentationSettings.gamescopeMailbox = false; // Retired Mailbox experiment.
     m_PresentationSettings.smoothVrrFrameTiming = m_Preferences->smoothVrrFrameTiming;
+    m_PresentationSettings.absorbVrrMicrostutter = m_Preferences->absorbVrrMicrostutter;
     m_PresentationSettings.ditheringMode = m_Preferences->ditheringMode;
     m_PresentationSettings.temporalDithering = m_Preferences->temporalDithering;
     m_PresentationSettings.ditherGrainMode = m_Preferences->ditherGrainMode;
@@ -2258,6 +2260,7 @@ public:
 // Called in a non-main thread
 bool Session::startConnectionAsync()
 {
+    m_HostLaunchWarning.clear();
     // The UI should have ensured the old game was already quit
     // if we decide to stream a different game.
     Q_ASSERT(m_Computer->currentGameId == 0 ||
@@ -2287,6 +2290,7 @@ bool Session::startConnectionAsync()
     }
 
     QString rtspSessionUrl;
+    LaunchWarning::Code launchWarning = LaunchWarning::Code::None;
 
     try {
         NvHTTP http(m_Computer);
@@ -2299,7 +2303,8 @@ bool Session::startConnectionAsync()
                       m_InputHandler->getAttachedPlayStationGamepadMask(),
                       !m_Preferences->multiController,
                       m_PresentationSettings.enableVrr,
-                      rtspSessionUrl);
+                      rtspSessionUrl,
+                      launchWarning);
     } catch (const GfeHttpResponseException& e) {
         emit displayLaunchError(tr("Host returned error: %1").arg(e.toQString()));
         return false;
@@ -2404,10 +2409,14 @@ bool Session::startConnectionAsync()
     // PyroWave partial frames: let the receive thread release a frame that
     // lost optional detail by its VRR slot instead of after a fixed silence.
     // Nothing is published unless the VRR pacer runs timestamp playout.
+#ifdef HAVE_FFMPEG
     VrrReceiveDeadline::clear();
     LiSetVideoReassemblyDeadlineCallback([](uint32_t rtpTimestamp) {
         return VrrReceiveDeadline::deadlineUs(rtpTimestamp, LiGetMicroseconds());
     });
+#else
+    LiSetVideoReassemblyDeadlineCallback(nullptr);
+#endif
 
     if (m_StreamConfig.supportedVideoFormats & VIDEO_FORMAT_MASK_PYROWAVE) {
         m_StreamConfig.pyrowaveLinkMbps = NetworkBuffers::routedWiredLinkMbps(
@@ -2427,6 +2436,7 @@ bool Session::startConnectionAsync()
     }
 
     m_ConnectionStartedAtTicks = SDL_GetTicks();
+    m_HostLaunchWarning = LaunchWarning::text(launchWarning);
     emit connectionStarted();
     return true;
 }
@@ -2486,6 +2496,7 @@ void Session::start()
             {"vrr_history_seconds", m_PresentationSettings.vrrTimingOptions.historySeconds},
             {"vrr_tolerance_us", m_PresentationSettings.vrrTimingOptions.toleranceUs},
             {"reduce_judder", m_PresentationSettings.smoothVrrFrameTiming},
+            {"absorb_microstutter", m_PresentationSettings.absorbVrrMicrostutter},
             {"timestamp_pacing", m_PresentationSettings.timestampPacing.enabled},
             {"timestamp_smoothing", m_PresentationSettings.timestampPacing.smoothing},
             {"timestamp_target_per_mille", m_PresentationSettings.timestampPacing.targetPerMille},
@@ -2754,7 +2765,21 @@ void Session::exec()
         m_VideoDecoder->notifyWindowChanged(&windowChangeInfo);
     };
 
+    // The async thread only supplies this after RTSP connection success. Start
+    // its lifetime when the streaming window is ready, without a Qt dialog.
+    bool hostWarningVisible = !m_HostLaunchWarning.isEmpty();
+    const auto hostWarningExpiresAt = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    if (hostWarningVisible) {
+        m_OverlayManager.setStatusMessage(Overlay::StatusSource::HostLaunch,
+                                         m_HostLaunchWarning.toUtf8().toStdString());
+        m_HostLaunchWarning.clear();
+    }
+
     for (;;) {
+        if (hostWarningVisible && std::chrono::steady_clock::now() >= hostWarningExpiresAt) {
+            m_OverlayManager.setStatusMessage(Overlay::StatusSource::HostLaunch, "");
+            hostWarningVisible = false;
+        }
 #if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
         Uint32 eventWaitTimeoutMs = 1000;
 #endif
@@ -3095,6 +3120,7 @@ void Session::exec()
                                m_PresentationSettings.vrrLatencyMode,
                                m_PresentationSettings.gamescopeRepaint,
                                m_PresentationSettings.vrrTimingOptions,
+                               m_PresentationSettings.absorbVrrMicrostutter,
                                m_PresentationSettings.ditheringMode,
                                m_PresentationSettings.temporalDithering,
                                m_PresentationSettings.debandMode,
@@ -3191,6 +3217,8 @@ void Session::exec()
     }
 
 DispatchDeferredCleanup:
+    m_OverlayManager.setStatusMessage(Overlay::StatusSource::HostLaunch, "");
+    m_HostLaunchWarning.clear();
     // Switch back to synchronous logging mode
     StreamUtils::exitAsyncLoggingMode();
 

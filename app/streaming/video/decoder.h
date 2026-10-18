@@ -65,6 +65,7 @@ typedef struct _VIDEO_STATS {
     uint64_t vrrGuardUs;
     uint64_t vrrSourcePeriodUs;
     uint64_t vrrAppliedBufferUs, vrrBufferCapUs, vrrGpuReadinessLeadUs;
+    uint64_t vrrAppliedSmoothingUs;
     // Timestamp pacing, merged the same way. Zero on other pacing paths.
     bool timestampActive;
     uint64_t timestampPacedFrames;
@@ -131,6 +132,7 @@ typedef struct _DECODER_PARAMETERS {
     bool gamescopeMailbox = false;
     bool gamescopeRepaint = false;
     bool smoothVrrFrameTiming;
+    bool absorbVrrMicrostutter = false;
     // StreamingPreferences::DitheringMode. Dithers video (8-bit, 10-bit SDR,
     // and 10-bit HDR to a 10-bit output) down to the output bit depth in the renderer rather than letting it be quantized
     // without dithering. libplacebo honors the exact kernel; D3D11VA has a

@@ -89,6 +89,7 @@ public:
                     bool smoothVrrFrameTiming = true,
                     const QString& calibrationKey = QString(),
                     int vrrLatencyMode = 0, VrrTimingOptions vrrTimingOptions = {},
+                    bool absorbVrrMicrostutter = false,
                     TimestampPacingOptions timestampPacing = {});
 
     void notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info);

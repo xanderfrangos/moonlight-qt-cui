@@ -2167,7 +2167,23 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 10000
                     ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
-                    ToolTip.text: qsTr("Evens out when frames are displayed, including games whose frame rate does not divide the host display's refresh rate. Adds up to a few milliseconds of delay only while uneven frames need it. Does not blend images or eliminate game stalls.") + "\n\n" +
+                    ToolTip.text: qsTr("Leaves source frame-time variation within your tolerance unchanged. Corrects only the excess, with a total timing adjustment of at most one tolerance. Absorb microstutter allows more smoothing and delay. Does not blend images or eliminate game stalls.") + "\n\n" +
+                                  qsTr("Reconnect the stream after changing this setting.")
+                }
+
+                CheckBox {
+                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
+                    text: qsTr("Absorb microstutter (adds latency)")
+                    font.pointSize: 12
+                    visible: StreamingPreferences.effectiveVsync && StreamingPreferences.enableVrr
+                    enabled: StreamingPreferences.smoothVrrFrameTiming
+                    checked: StreamingPreferences.absorbVrrMicrostutter
+                    onCheckedChanged: StreamingPreferences.absorbVrrMicrostutter = checked
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 10000
+                    ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
+                    ToolTip.text: qsTr("Lets Reduce judder even out short frame-time spikes from the game or host. Keeps a small reserve and allows more delay while frame times are uneven. Requires Reduce judder. Large gaps remain visible.") + "\n\n" +
                                   qsTr("Reconnect the stream after changing this setting.")
                 }
 

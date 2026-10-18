@@ -36,7 +36,7 @@ enum OverlayAnchor {
     // uploaded as a tiny texture instead of a screen-sized one.
     OverlayAnchorFill,
 };
-enum class StatusSource { Network, PacketLoss, ClientPacing, Mouse, Count };
+enum class StatusSource { Network, PacketLoss, ClientPacing, Mouse, HostLaunch, Count };
 
 class IOverlayRenderer
 {

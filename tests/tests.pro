@@ -5,6 +5,8 @@ CONFIG += ordered
 
 contains(CONFIG, tests) {
     SUBDIRS += common
+    launchWarning.file = $$PWD/backend/launchwarning.pro
+    SUBDIRS += launchWarning
     SUBDIRS += updates
     SUBDIRS += vrr
     SUBDIRS += haptics
@@ -12,6 +14,8 @@ contains(CONFIG, tests) {
     win32: SUBDIRS += rendering
     toleranceInput.file = $$PWD/input/tolerance.pro
     SUBDIRS += toleranceInput
+    gamepadStickMerge.file = $$PWD/input/gamepadstickmerge.pro
+    SUBDIRS += gamepadStickMerge
     calibrationHosts.file = $$PWD/qml/calibration-hosts.pro
     SUBDIRS += calibrationHosts
     macx {

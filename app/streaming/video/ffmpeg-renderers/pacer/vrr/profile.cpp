@@ -113,7 +113,7 @@ uint64_t loadStartDelay(const QString& path, const QString& key)
     const auto entry = readStartDelays(path).value(key).toObject();
     const auto age = QDateTime::currentSecsSinceEpoch() - jsonInteger(entry.value("updated"));
     if (age < 0 || age > 14 * 86400) return 0;
-    const auto delay = jsonInteger(entry.value("delay_us"), 0);
+    const auto delay = jsonInteger(entry.value("delay_us"));
     return delay > 0 && delay <= 1000000 ? uint64_t(delay) : 0;
 }
 

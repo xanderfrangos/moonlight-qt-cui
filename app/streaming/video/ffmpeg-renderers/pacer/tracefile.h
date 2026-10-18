@@ -43,8 +43,9 @@ public:
 
     // Writes footer, followed by the size cap, write failure and decoded
     // hash fields, and closes the file. footer starts with '#' and has no
-    // trailing newline.
-    void close(const QByteArray& footer);
+    // trailing newline. Returns false if no file was open, or if any write,
+    // the footer's included, or closing the file failed.
+    bool close(const QByteArray& footer);
 
     // Closes a file that never received rows, without a footer
     void abandon();

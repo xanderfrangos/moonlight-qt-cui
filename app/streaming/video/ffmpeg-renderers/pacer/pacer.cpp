@@ -386,6 +386,7 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                        bool enableVrr, int vrrDisplayRefreshHz,
                        bool smoothVrrFrameTiming, const QString& calibrationKey,
                        int vrrLatencyMode, VrrTimingOptions vrrTimingOptions,
+                       bool absorbVrrMicrostutter,
                        TimestampPacingOptions timestampPacing)
 {
     m_MaxVideoFps = maxVideoFps;
@@ -403,6 +404,7 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
         config.streamRateHz = maxVideoFps;
         config.displayRefreshHz = vrrDisplayRefreshHz;
         config.smoothFrameTiming = smoothVrrFrameTiming;
+        config.absorbMicrostutter = smoothVrrFrameTiming && absorbVrrMicrostutter;
         VrrFallbackReason fallbackReason = VrrFallbackReason::NoFallback;
         if (!calibrationKey.isEmpty()) {
             const QString display = QString::fromUtf8(SDL_GetDisplayName(SDL_GetWindowDisplayIndex(window)));
@@ -422,14 +424,31 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
             // Preserve the historical V2 calibration identity now that its
             // queue policy is unconditional rather than a live preference.
             context += QStringLiteral("|mean-miss-queue-v2");
-            const auto recoveryPolicy = vrrTimingParametersForSession(config);
+            const auto cacheConfig = VrrPacingWorker::resolvedInputConfig(config);
+            const auto recoveryPolicy = vrrTimingParametersForSession(cacheConfig);
+            if (recoveryPolicy.playoutInputClockRelativeHistory >= 4)
+                context += QStringLiteral("|input-receive-drift-clock=%1").arg(recoveryPolicy.playoutInputClockRelativeHistory);
+            if (recoveryPolicy.playoutInputHitchMissesOnly)
+                context += QStringLiteral("|input-hitch-misses=%1").arg(recoveryPolicy.playoutInputHitchMissesOnly);
+            if (recoveryPolicy.playoutInputStableAdaptation)
+                context += QStringLiteral("|stable-input-adaptation=%1").arg(recoveryPolicy.playoutInputStableAdaptation);
             context += QStringLiteral("|late-recovery=%1|buffer-ratio=%2")
                 .arg(recoveryPolicy.playoutLateRecovery)
                 .arg(recoveryPolicy.playoutDelayMaximumPeriodPerMille);
+            if (recoveryPolicy.playoutInputLayerSeedRatioPerMille != 0 ||
+                    recoveryPolicy.playoutCatchupCarryLimitUs != 0) {
+                context += QStringLiteral("|input-learning=%1-%2-%3-%6|carry-limit=%4-%5")
+                    .arg(recoveryPolicy.playoutInputBoundedRecoveryCredit)
+                    .arg(recoveryPolicy.playoutInputLayerSeedRatioPerMille)
+                    .arg(recoveryPolicy.playoutInputLearningTrim)
+                    .arg(recoveryPolicy.playoutCatchupCarryLimitUs)
+                    .arg(recoveryPolicy.playoutCatchupCarryLimitPeriodPerMille)
+                    .arg(recoveryPolicy.playoutInputRecoveryCreditRoomPerMille);
+            }
             if (smoothVrrFrameTiming) {
                 // The saved flag previously selected timestamp-following
                 // playout too. Do not cross-seed its readiness calibration.
-                const auto policy = vrrTimingParametersForSession(config);
+                const auto policy = vrrTimingParametersForSession(cacheConfig);
                 context += QStringLiteral("|frame-smoothing=%1-%2-%3|cadence=%4-%5")
                     .arg(policy.playoutSmoothingGainPerMille)
                     .arg(policy.playoutSmoothingPeriodAlphaPerMille)
@@ -437,6 +456,17 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                     .arg(policy.playoutSmoothingWindowedCadence)
                     .arg(policy.playoutSmoothingRecoveryUs);
                 context += QStringLiteral("|catchup=%1").arg(policy.playoutCatchupPerMille);
+                if (policy.playoutSmoothingRecenterPerMille != 0) {
+                    context += QStringLiteral("|recenter=%1").arg(policy.playoutSmoothingRecenterPerMille);
+                }
+                if (policy.playoutSmoothingMaxLagPeriodPerMille != 0) {
+                    context += QStringLiteral("|lag-period=%1").arg(policy.playoutSmoothingMaxLagPeriodPerMille);
+                }
+                if (policy.playoutSmoothingAbsorbReserveUs != 0) {
+                    context += QStringLiteral("|absorb-microstutter=%1-%2")
+                        .arg(policy.playoutSmoothingAbsorbReserveUs)
+                        .arg(policy.playoutSmoothingAbsorbReservePeriodPerMille);
+                }
                 if (policy.playoutSmoothingReadinessBound != 0) {
                     context += QStringLiteral("|smoothing-readiness-bound=%1")
                         .arg(policy.playoutSmoothingReadinessBound);
@@ -493,6 +523,7 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                                     "VRR pacing: target %d Hz with %d FPS stream (adaptive timestamp playout, frame timing %s, buffer %.2f frames, target %.2f%%, history %d s, tolerance %.2f ms)",
                                     m_DisplayFps, m_MaxVideoFps,
+                                    config.absorbMicrostutter ? "smoothed, absorbing microstutter" :
                                     config.smoothFrameTiming ? "smoothed" : "follows host timestamps",
                                     config.timingOptions.bufferPerMille / 1000.0,
                                     config.timingOptions.targetHundredths / 100.0,

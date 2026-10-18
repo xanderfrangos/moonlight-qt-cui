@@ -30,6 +30,9 @@ class VrrTimingController;
 // unpaced Pacer behavior never enter it.
 class VrrPacingWorker {
 public:
+    // Resolve the same production policy for cache identity and worker startup.
+    static VrrSessionConfig resolvedInputConfig(VrrSessionConfig config);
+
     VrrPacingWorker(IVrrFramePresenter* presenter,
                     const VrrSessionConfig& config,
                     PacerTelemetry* telemetry);
@@ -39,6 +42,17 @@ public:
     VrrPacingWorker& operator=(const VrrPacingWorker&) = delete;
 
     bool start();
+#ifdef VRR_WORKER_REPLAY
+    friend class VrrWorkerReplayHarness;
+    // Offline executable only. No hook, branch, lock, or callback exists in
+    // production builds. Called between iterations, outside queue locks.
+    void (*replayBeforeDequeue)(void*, bool) = nullptr;
+    void* replayContext = nullptr;
+    std::atomic_uint64_t replayTraceConsumed { 0 };
+    std::atomic_bool replayStartReady { false };
+    // Written during closeTrace(), after flushing/closing the required artifact.
+    bool* replayTraceResult = nullptr;
+#endif
 
     void submit(PacedFrame&& frame);
 
@@ -91,6 +105,8 @@ private:
     };
 
     struct FrameTelemetry {
+        bool bufferAuditValid = false;
+        VrrBufferAuditSnapshot bufferBefore;
         int64_t trajectorySuccessorFrame = -1;
         uint64_t trajectorySuccessorProof = 0;
         bool trajectoryResyncDropped = false;
@@ -176,6 +192,7 @@ private:
         VrrTimingDecision decision;
         VrrTimingDiagnostics diagnostics;
         Vrr13::IntervalBuffer::Stats bufferStats;
+        VrrBufferAuditSnapshot bufferAfter;
         VrrPresentFeedback feedback;
         FrameTelemetry telemetry;
         size_t completionQueueDepth = 0;
@@ -273,6 +290,8 @@ private:
     bool m_RebaseOnNextFrame = false;
     uint32_t m_RebaseOnNextFrameFlags = 0;
     bool m_DeepTraceEnabled = false;
+    bool m_BufferAuditEnabled = false;
+    VrrTimingParameters m_TraceParameters;
     TraceFile m_TraceFile;
     SDL_Thread* m_TraceThread = nullptr;
     std::unique_ptr<Vrr13::TraceQueue<TraceRow, 8192>> m_TraceQueue;
