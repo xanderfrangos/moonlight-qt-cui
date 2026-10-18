@@ -7086,7 +7086,14 @@ pacing records a frame trace whenever VRR Pacing Mode would: when
   `rows_dropped` can be nonzero under contention; every row is either written
   or counted.
 - **Tools:** `scripts/decode-vrr-trace.py` expands it. `vrrreplay` does not
-  read it. Settings capture export includes `Moonlight*.tstrace`, and
+  read it; `tsreplay` (2026-10-18, `tests/vrr/tsreplay.h`) does. It replays
+  the `scheduled` rows through `TimestampPacing::Policy`, which must
+  reproduce every recorded decision and late flag exactly. Then it scores
+  scenarios on a small fixed-grid or VRR presentation model. All nine
+  2026-10-08 Gamescope captures replay exactly under the current policy
+  (unchanged since `6700d95f`). Usage and model limits are in
+  [tests/vrr/README.md](tests/vrr/README.md), "Timestamp pacing replay".
+  Settings capture export includes `Moonlight*.tstrace`, and
   `capture-info.json` gains `timestamp_trace_files` and the session's
   timestamp pacing options. The diagnostic launchers skip exact replay and
   still upload the `.tstrace` when only it exists.

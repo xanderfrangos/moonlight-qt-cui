@@ -100,6 +100,97 @@ VRR trace's file handling (`TraceFile`): paths, concurrent producers, footer
 accounting, connection archiving, CSV output, and a real `TimestampPacer` on a
 synthetic V-blank grid.
 
+### Timestamp pacing replay
+
+`tsreplay` (`tsreplay.pro`, library in `tsreplay.h`) replays a `.tstrace`
+through `TimestampPacing::Policy`. `vrrreplay` cannot read these traces.
+Compressed and plain CSV traces both work, including those expanded by
+`decode-vrr-trace.py`.
+
+```powershell
+.\build\ci-tests\vrr\release\tsreplay.exe Moonlight.tstrace --require-exact-baseline `
+    --output .\build\ts-baseline.json
+.\build\ci-tests\vrr\release\tsreplay.exe Moonlight.tstrace `
+    --config tests\vrr\configs\tsreplay-buffer-sweep.json --output .\build\ts-sweep.json
+# After a policy change, rebuilt:
+.\build\ci-tests\vrr\release\tsreplay.exe Moonlight.tstrace `
+    --compare .\build\ts-baseline.json --output .\build\ts-candidate.json
+```
+
+- **Exact baseline.** The policy is pure, and every `scheduled` row records
+  its inputs: frame number, RTP timestamp, readiness, host latency and
+  decoder queue time. Replaying the session's settings must therefore
+  reproduce every recorded decision. The fields checked are paced, admitted,
+  repeat, restarted, reanchored, both targets, buffer, lateness, correction,
+  host jerk, source period, and the pacer's late flag (target against
+  readiness plus recorded render lead).
+  - The baseline and the trace's integrity are checked together: footer,
+    clean shutdown, no dropped rows, decoded SHA-256, and a complete sequence.
+  - `--require-exact-baseline` exits 2 unless both hold. The JSON reports
+    `fidelity.baseline_exact`, `fidelity.strict_ab_valid`, per-field mismatch
+    counts and the first mismatch.
+  - A capture recorded under an older policy reports which field diverged
+    first. Its results are exploratory, not a strict A/B.
+- **Scenarios.** Every run scores `session-policy` (the capture's settings)
+  and `pacing-off` (each frame shown once rendered). `--config` adds named
+  scenarios, and `--set KEY=VALUE` adds one called `candidate`. Each starts
+  from the session's settings. The keys (`--help` lists them):
+  - pacing, smoothing, target_per_mille, min_buffer_ms and max_buffer_ms
+    (the ranges `TimestampPacingOptions::resolved()` allows)
+  - display (session, fixed or vrr), display_hz
+  - render_us (default "recorded": each frame's recorded render lead)
+  - phases (grid phases averaged on fixed refresh, default 8)
+  Unknown keys and out-of-range values are errors.
+- **Presentation model.**
+  - **Fixed refresh:** a paced frame takes the V-blank its target falls on,
+    through the policy's `PhaseLock`. Ready plus render time too late for
+    it, the frame takes the next V-blank. A frame due no later than the one
+    before replaces it (mailbox). The model is averaged over grid phases.
+  - **VRR:** a frame is shown at max(target, ready + render), no sooner than
+    one refresh after the previous one.
+  - **Not modeled:** the release thread, learned margins, late shift,
+    Gamescope frame limits, the display-mode probe, GPU or compositor. So
+    the scores rank policies on one capture; they don't predict display
+    timing. On the 2026-10-08 Deck captures, modeled jerk over 2 ms matched
+    the recorded display reports on two captures and ran 2–5x low on
+    captures recorded under a Steam frame limit.
+- **Metrics,** per scenario:
+  - **Presented jerk:** the change in presented interval between
+    consecutive scored pairs, and the share over 2 ms. This is the headline
+    smoothness measure.
+  - **Cadence residual:** presented interval minus the host's RTP interval.
+    It measures fidelity to host stamps, which jitter, so on a fixed grid
+    it stays high even when the cadence is smooth.
+  - **late:** the pacer's definition, ready plus render after the target.
+  - **missed_plan:** ready plus render after the planned V-blank, so shown
+    later.
+  - **skipped:** replaced before shown.
+  - **delay and buffer:** shown minus ready, and the policy's buffer.
+- **Scoring rules.**
+  - Intervals are judged host step by host step across skipped frames. A
+    step over 25 ms (`long_source_intervals`) leaves its interval out of
+    the scores, as `vrrreplay` does. That is a metric exclusion, not a
+    finding that the host stalled: idle or lower-rate output produces such
+    steps legitimately.
+  - Steps touching host repeats or invalid timestamps are
+    `uncomparable_intervals`.
+  - `source` summarizes the host cadence on its own.
+  - `recorded` scores the capture's own display reports, matched to frames
+    through their release time. These are OS display reports, not optical
+    measurements.
+- **Compare.** `--compare` matches scenarios by name and refuses a summary
+  of a different trace (by file SHA-256). `--timeline` writes per-frame CSV
+  for every scenario at grid phase 0.
+
+`tst_tsreplay` records a trace from a real `TimestampPacer` and requires an
+exact baseline. The stream it uses has arrival jitter, stamp noise,
+unreported latency, host repeats, a host clock step, an invalid timestamp
+and a frame-number gap. The test also checks:
+- a different setting is not exact;
+- an edited decision is found at its sequence, and breaks the hash;
+- the model on steady, late, VRR-floor and long-source-step streams;
+- config validation.
+
 The interval-quality queue is the production VRR policy (responsive revision 12).
 The four customizable timing settings and their bounds are documented in
 [the architecture](../../architecture.md). Low Latency / Balanced / Smooth

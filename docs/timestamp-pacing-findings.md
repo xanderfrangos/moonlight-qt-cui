@@ -58,6 +58,10 @@ on this machine.
 
 ## 3. Replay model
 
+This section describes the 2026-10-07/08 scorers behind section 4. The
+checked-in `tsreplay` (section 9, item 7) replaces them, with a slightly
+different model.
+
 Each capture's (frame number, RTP timestamp, decode-complete time, decoder
 queue time) is fed through `TimestampPacing::Policy`. "Pacing off" shows each
 frame on arrival. Each frame is given 1 ms of render time.
@@ -376,9 +380,18 @@ SteamOS Desktop Mode:
    - One uncapped game on VRR.
 6. Decide on a maximum-buffer cap in V-blank mode from those captures
    (section 4.4).
-7. Check the replay scorer into the repo, so every future change is scored
-   against the same captures. The 2026-10-07/08 scorers lived in session
-   scratch.
+7. ~~Check the replay scorer into the repo, so every future change is scored
+   against the same captures.~~ Done 2026-10-18: `tsreplay`
+   (tests/vrr/README.md, "Timestamp pacing replay"). It requires an exact
+   policy baseline before scoring. All nine 2026-10-08 Gamescope captures
+   pass it.
+   - Its presentation model differs from section 3's. Render time is each
+     frame's recorded render lead, not 1 ms.
+   - "Late" is the pacer's own flag (ready plus render after the target),
+     reported beside missing the planned V-blank.
+   - On those captures, 23–91% of frames are late by the pacer's flag.
+     Their target falls within the render lead of readiness, because the
+     buffer is sized without the lead. Only 3–41% miss their planned V-blank.
 8. Later: render before waiting, and `Present(1,0)` for exclusive fullscreen.
 
 ## 10. Open questions

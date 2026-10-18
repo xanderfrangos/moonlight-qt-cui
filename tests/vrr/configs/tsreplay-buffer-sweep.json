@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "description": "Timestamp pacing buffer and smoothing sweep; every scenario starts from the capture's own settings",
+    "scenarios": [
+        { "name": "target-950", "target_per_mille": 950 },
+        { "name": "target-999", "target_per_mille": 999 },
+        { "name": "min-buffer-0", "min_buffer_ms": 0 },
+        { "name": "min-buffer-4", "min_buffer_ms": 4 },
+        { "name": "max-buffer-8", "max_buffer_ms": 8 },
+        { "name": "smoothing-off", "smoothing": "off" },
+        { "name": "smoothing-standard", "smoothing": "standard" },
+        { "name": "render-1ms", "render_us": 1000 }
+    ]
+}
