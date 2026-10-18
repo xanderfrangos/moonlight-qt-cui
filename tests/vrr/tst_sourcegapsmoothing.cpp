@@ -75,7 +75,12 @@ VrrTimingParameters revision5Policy(const VrrSessionConfig& session, bool synchr
                                     bool scheduled = false)
 {
     auto p = vrrTimingParametersForSession(session, synchronized, scheduled);
+    // daily.188 predates stable input adaptation. Production's rolling
+    // estimate (revision 5) converges by rate over time, so it rounds 1 us
+    // differently for targets the reserve moved and drains too slowly for the
+    // displaced-frame control below to need readiness at all.
     p.playoutInputHitchMissesOnly = 0;
+    p.playoutInputStableAdaptation = 0;
     if (p.playoutInputPercentileEnabled) p.playoutInputBoundedRecoveryCredit = 1;
     p.playoutInputLayerSeedRatioPerMille = p.playoutInputLearningTrim = 0;
     p.playoutCatchupCarryLimitUs = p.playoutCatchupCarryLimitPeriodPerMille = 0;
@@ -532,6 +537,50 @@ void testAbsorbReserveIsStandingLatency()
     }
 }
 
+// The same property on the live policy, whose input buffer converges at a
+// bounded rate. The reserve moves every target and submission, so that
+// convergence can round a microsecond or two differently; it must never
+// release the reserve itself.
+void testProductionAbsorbReserveStands()
+{
+    const auto judderSession = absorbSession(true, false);
+    const auto absorbingSession = absorbSession(true, true);
+    const auto judderPolicy = vrrTimingParametersForSession(judderSession);
+    const auto absorbPolicy = vrrTimingParametersForSession(absorbingSession);
+    expect(absorbPolicy.playoutInputStableAdaptation != 0 &&
+               absorbPolicy.playoutInputStableAdaptation == judderPolicy.playoutInputStableAdaptation,
+           "the production check must run the live stable input adaptation");
+    VrrTimingController judder(judderSession, true, judderPolicy);
+    VrrTimingController absorbing(absorbingSession, true, absorbPolicy);
+    uint32_t stamp = 0;
+    for (int i = 0; i < 600; ++i) {
+        stamp += 750;
+        const uint64_t source = 1000000 + uint64_t(stamp) * 100 / 9;
+        const uint64_t delivered = source + 1500 + uint64_t(i % 7) * 300;
+        PacedFrame a(nullptr, i, stamp, true, delivered), b(nullptr, i, stamp, true, delivered);
+        a.setDeliveryTimeline(delivered, delivered, delivered);
+        b.setDeliveryTimeline(delivered, delivered, delivered);
+        const auto da = judder.schedule(a, delivered);
+        const auto db = absorbing.schedule(b, delivered);
+        if (i > 100) {
+            const auto reserve = int64_t(absorbing.absorbReserveUs());
+            expect(reserve == int64_t(2 * absorbPolicy.playoutIntervalToleranceUs),
+                   "production Absorb must hold its fixed 2T pad");
+            expect(std::abs(int64_t(db.playoutDelayUs) - int64_t(da.playoutDelayUs)) <= 2,
+                   "the live input buffer must not release the standing reserve");
+            expect(db.cadenceSmoothingUs == reserve,
+                   "a clean source must keep the whole production reserve standing");
+            const int64_t shift = int64_t(db.originalTargetUs - da.originalTargetUs);
+            expect(shift >= reserve - 2 && shift <= reserve,
+                   "every production target must move later by the reserve");
+        }
+        judder.notePreparationDuration(1000);
+        absorbing.notePreparationDuration(1000);
+        judder.noteSubmission(true, false, da.targetUs);
+        absorbing.noteSubmission(true, false, db.targetUs);
+    }
+}
+
 struct DisplacedResult {
     int64_t worstPlannedErrorUs = 0;
     unsigned readinessPushes = 0;
@@ -730,6 +779,7 @@ int main()
     testAbsorbPolicySelection();
     testFixedPadAndSharedLiveSlew();
     testAbsorbReserveIsStandingLatency();
+    testProductionAbsorbReserveStands();
     testDisplacedFramesAreAbsorbed();
     testBoundaries();
     testConsecutiveGaps();
