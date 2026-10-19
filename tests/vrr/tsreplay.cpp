@@ -138,13 +138,13 @@ double number(const QJsonObject& object, const char* path)
 
 void printTable(const QJsonArray& scenarios)
 {
-    std::printf("\n%-24s %9s %9s %9s %9s %9s %9s %9s %9s\n", "scenario", "jerk>2ms", "jerk p99", "resid>2ms",
-                "late", "missed", "skipped", "delay", "delay p95");
-    std::printf("%-24s %9s %9s %9s %9s %9s %9s %9s %9s\n", "", "per mille", "ms", "per mille", "per mille",
-                "per mille", "per mille", "mean ms", "ms");
+    std::printf("\n%-24s %9s %9s %9s %9s %9s %9s %9s %9s %9s\n", "scenario", "jerk>2ms", "jerk p99", "resid>2ms",
+                "late", "missed", "skipped", "delay", "delay p95", "wraps");
+    std::printf("%-24s %9s %9s %9s %9s %9s %9s %9s %9s %9s\n", "", "per mille", "ms", "per mille", "per mille",
+                "per mille", "per mille", "mean ms", "ms", "per phase");
     for (const QJsonValue& value : scenarios) {
         const QJsonObject scenario = value.toObject();
-        std::printf("%-24s %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f\n",
+        std::printf("%-24s %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f\n",
                     scenario.value(QStringLiteral("name")).toString().toUtf8().constData(),
                     number(scenario, "presented_jerk_over_2ms_per_mille"),
                     number(scenario, "presented_jerk_us/p99") / 1000.0,
@@ -153,7 +153,8 @@ void printTable(const QJsonArray& scenarios)
                     number(scenario, "missed_plan_per_mille"),
                     number(scenario, "skipped_per_mille"),
                     number(scenario, "delay_us/mean") / 1000.0,
-                    number(scenario, "delay_us/p95") / 1000.0);
+                    number(scenario, "delay_us/p95") / 1000.0,
+                    number(scenario, "phase_wraps_per_phase"));
     }
 }
 

@@ -902,7 +902,7 @@ struct Outcome {
 // sooner than one refresh at displayHz after the previous frame.
 // Unpaced frames are shown once rendered.
 inline std::vector<Outcome> present(const std::vector<Row>& scheduled, const Replayed* replayed,
-                                    const Settings& settings, double phaseUs)
+                                    const Settings& settings, double phaseUs, uint64_t* phaseWraps = nullptr)
 {
     std::vector<Outcome> outcomes(scheduled.size());
     const double periodUs = settings.displayHz > 0 ? 1000000.0 / settings.displayHz : 0;
@@ -926,7 +926,12 @@ inline std::vector<Outcome> present(const std::vector<Row>& scheduled, const Rep
             uint64_t vblankUs;
             if (paced) {
                 vblankUs = atOrAfter(double(targetUs) + lock.trimUs());
+                const double trimBeforeUs = lock.trimUs();
                 lock.update(targetUs, vblankUs, periodUs, replayed->sourcePeriodUs[i]);
+                // A trim that wraps moves every following frame a refresh
+                if (phaseWraps != nullptr && std::fabs(lock.trimUs() - trimBeforeUs) > periodUs / 2) {
+                    (*phaseWraps)++;
+                }
                 outcome.plannedUs = vblankUs;
                 outcome.late = dueUs > targetUs;
                 outcome.missedPlan = dueUs > vblankUs;
@@ -978,6 +983,9 @@ struct Metrics {
     uint64_t longSourceIntervals = 0;
     uint64_t uncomparableIntervals = 0;
     uint64_t jerkOver2ms = 0;
+    // Phase lock trim wraps, summed over grid phases
+    uint64_t phaseWraps = 0;
+    int phases = 1;
     // Shown minus ready
     Distribution delayUs;
     Distribution bufferUs;
@@ -1071,9 +1079,11 @@ inline ScenarioResult runScenario(const Trace& trace, const std::vector<bool>& r
     const Replayed* replayed = settings.pacing ? &result.replayed : nullptr;
     const bool grid = settings.fixedRefresh && settings.displayHz > 0;
     const int phases = grid ? std::max(1, settings.phases) : 1;
+    result.metrics.phases = phases;
     const double periodUs = settings.displayHz > 0 ? 1000000.0 / settings.displayHz : 0;
     for (int phase = 0; phase < phases; phase++) {
-        std::vector<Outcome> outcomes = present(trace.scheduled, replayed, settings, periodUs * phase / phases);
+        std::vector<Outcome> outcomes =
+            present(trace.scheduled, replayed, settings, periodUs * phase / phases, &result.metrics.phaseWraps);
         score(trace.scheduled, repeats, replayed, outcomes, result.metrics);
         if (phase == 0) {
             result.outcomes = std::move(outcomes);
@@ -1126,6 +1136,7 @@ inline QJsonObject metricsJson(Metrics& m)
     object[QStringLiteral("scored_intervals")] = qint64(m.intervals);
     object[QStringLiteral("long_source_intervals")] = qint64(m.longSourceIntervals);
     object[QStringLiteral("uncomparable_intervals")] = qint64(m.uncomparableIntervals);
+    object[QStringLiteral("phase_wraps_per_phase")] = std::round(100.0 * double(m.phaseWraps) / std::max(1, m.phases)) / 100.0;
     return object;
 }
 
@@ -1457,6 +1468,7 @@ inline const QStringList& comparedMetrics()
         QStringLiteral("delay_us/p95"),
         QStringLiteral("delay_us/p99"),
         QStringLiteral("buffer_us/mean"),
+        QStringLiteral("phase_wraps_per_phase"),
     };
     return metrics;
 }

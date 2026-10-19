@@ -171,6 +171,10 @@ Compressed and plain CSV traces both work, including those expanded by
   - **missed_plan:** ready plus render after the planned V-blank, so shown
     later.
   - **skipped:** replaced before shown.
+  - **phase_wraps_per_phase:** fixed refresh only. How often the phase
+    lock's trim wrapped, moving every following frame a refresh, per grid
+    phase. Drift alone calls for about one wrap per beat (1 / rate
+    mismatch). More than that is chatter or wraps driven by the buffer.
   - **delay and buffer:** shown minus ready, and the policy's buffer.
 - **Scoring rules.**
   - Intervals are judged host step by host step across skipped frames. A

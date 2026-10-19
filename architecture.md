@@ -6419,6 +6419,30 @@ Pure and header-only; tested by `tst_timestamppacing`.
 - `PhaseLock`: active when the source period is within 2% of a whole multiple
   of the refresh period. It trims targets (±half a refresh) to sit mid-interval,
   so drift costs one deliberate repeat or skip per boundary crossing.
+  - **Wrap hysteresis (2026-10-18):** once per drift cycle, the trim's
+    resting point fell on its wrap. Frame noise then carried it back and
+    forth: a repeat, a skip, a repeat, each moving every frame a refresh.
+    A Deck capture (2026-10-18, 90 FPS at 90 Hz, 43 ppm, so one wrap due
+    every 256 s) wrapped 31 times in 8 minutes; 16 were undone within 2 s.
+  - **Rule:** a wrap back the way the last one came now needs the trim
+    0.5 ms past the boundary (at most an eighth of a refresh). A wrap onward
+    is unchanged. While a wrap back is held off, a frame can land up to
+    0.5 ms before its target, or wait that much longer than a refresh.
+  - **Replay** (ten Gamescope captures, frame-weighted):
+    - Wraps per grid phase: 36.5 → 17.3. On the Deck capture: 51.9 → 19.5,
+      with wraps undone within 2 s at phase 0 going from 81 to 13.
+    - Presented jerk over 2 ms: 8.09 → 7.65 per mille. Skipped: 2.12 → 1.90.
+      Missed: 1.46 → 1.57. Mean delay: +0.09 ms.
+  - **Not adopted:**
+    - The remaining wraps mostly follow the buffer moving 1–2 ms.
+    - A longer hold on the waiting side reduces them: 2.5 ms gave jerk 7.01
+      and missed 1.19 per mille, for +1.0 ms delay; 4 ms gave 6.75 for
+      +1.7 ms. That is a latency choice, so it isn't the default.
+    - A longer hold on the early side showed frames too early: 2 ms raised
+      missed to 2.56 per mille.
+  - **Platforms:** the lock serves every V-blank grid, D3D11's included, so
+    this applies on Windows too. Windows traces weren't available to
+    replay.
 
 **Execution** ([timestamppacer.cpp](app/streaming/video/ffmpeg-renderers/pacer/timestamppacer.cpp)).
 The decoder thread schedules each frame into a queue of at most three; a full

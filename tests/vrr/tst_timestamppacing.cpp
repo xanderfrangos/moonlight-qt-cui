@@ -548,6 +548,58 @@ void phaseLockAvoidsBoundaryFlicker()
 }
 }
 
+// Slow drift, as on the 2026-10-18 Deck capture: 90 FPS on a 90 Hz grid,
+// 43 ppm apart, so the trim's resting point crosses the wrap once in 256 s.
+// It used to sit on the wrap while frame noise carried it back and forth,
+// each wrap a repeat or a skip of every frame: the same loop wrapped 13 and
+// 31 times at these two noise levels. Now one crossing costs one repeat.
+void phaseLockDoesntChatterUnderSlowDrift()
+{
+    const double refreshUs = 1000000.0 / 90;
+    const double sourceUs = refreshUs * (1 + 43e-6);
+    for (const double noiseUs : { 100.0, 250.0 }) {
+        std::mt19937 random(11);
+        std::normal_distribution<double> noise(0, noiseUs);
+        VblankGrid grid;
+        grid.configure(refreshUs);
+        for (int i = 0; i < 20; i++) {
+            grid.observe(uint64_t(1000000 + i * refreshUs));
+        }
+        PhaseLock lock;
+        uint64_t lastVblank = 0;
+        int lastStep = 0, irregular = 0, reversals = 0, lastIrregularAt = -100000;
+        double earliestUs = 0, latestUs = 0;
+        // 300 s: the resting point crosses the wrap once
+        for (int i = 0; i < 27000; i++) {
+            const uint64_t targetUs = uint64_t(1000000 + 3000 + i * sourceUs + noise(random));
+            const uint64_t vblankUs = lock.assign(targetUs, grid);
+            lock.update(targetUs, vblankUs, grid.periodUs(), sourceUs);
+            if (i >= 200) {
+                earliestUs = std::min(earliestUs, double(vblankUs) - double(targetUs));
+                latestUs = std::max(latestUs, double(vblankUs) - double(targetUs));
+            }
+            if (lastVblank != 0) {
+                const int64_t stepUs = int64_t(vblankUs - lastVblank) - int64_t(std::llround(refreshUs));
+                if (std::llabs(stepUs) > 1000) {
+                    const int step = stepUs > 0 ? 1 : -1;
+                    irregular++;
+                    // A step undone within 2 s was chatter, not drift
+                    reversals += step == -lastStep && i - lastIrregularAt < 180;
+                    lastStep = step;
+                    lastIrregularAt = i;
+                }
+            }
+            lastVblank = vblankUs;
+        }
+        check(irregular >= 1 && irregular <= 2, "one wrap per crossing under slow drift");
+        check(reversals == 0, "no wrap is undone by the next");
+        check(earliestUs > -(PhaseLock::WrapHysteresisUs + 4 * noiseUs),
+              "no frame is shown before its target by more than the hysteresis and its noise");
+        check(latestUs < refreshUs + PhaseLock::WrapHysteresisUs + 4 * noiseUs,
+              "and none waits much more than a refresh");
+    }
+}
+
 // Only frames later than the usual lag count as missed: a compositor that
 // always adds a refresh costs latency, not smoothness
 void missesAreJudgedAgainstUsualLag()
@@ -809,6 +861,7 @@ int main()
     survivesWrapAndRestart();
     vblankGridFollowsWakeups();
     phaseLockAvoidsBoundaryFlicker();
+    phaseLockDoesntChatterUnderSlowDrift();
     missesAreJudgedAgainstUsualLag();
     refreshClassifierTellsFixedFromAdaptive();
     frameLimitIsMeasuredWithoutConfirmingItself();

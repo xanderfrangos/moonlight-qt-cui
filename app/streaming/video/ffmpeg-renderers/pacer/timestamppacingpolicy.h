@@ -564,13 +564,39 @@ private:
 // within half a refresh either side of zero: a target then still lands on a
 // V-blank no earlier than itself, and on average no later than it would
 // without the lock.
+//
+// Where the trim settles, keeping targets mid-interval, falls on the wrap
+// itself once per drift cycle, and frame-to-frame noise then carried it
+// back and forth across: a repeat, a skip, a repeat, each moving every
+// frame a refresh. On a Deck capture (2026-10-18, 90 FPS at 90 Hz, about
+// 43 ppm of drift, so one wrap due every 256 s) the trim wrapped 31 times in
+// 8 minutes, 16 of them undone within 2 s. So a wrap back the way the last
+// one came needs the trim to go WrapHysteresisUs past the boundary. A wrap
+// onward, which drift calls for, is unchanged. While a wrap back is held
+// off, a frame can land up to that much before its target, which its
+// minimum buffer covers, or wait that much longer than a refresh.
+//
+// Replayed over ten Gamescope captures (tsreplay), wraps per grid phase
+// went from 36.5 to 17.3 and presented jerk over 2 ms from 8.09 to 7.65 per
+// mille, for 0.09 ms more mean delay. What remains mostly follows the buffer
+// moving 1-2 ms. Holding wraps back longer only on the waiting side trades
+// latency for that: 2.5 ms gave 7.01 per mille for 1.0 ms more delay. On
+// the early side it showed frames too early: 2 ms raised missed V-blanks
+// from 1.46 to 2.56 per mille.
 class PhaseLock
 {
 public:
     static constexpr double Gain = 0.05;
     static constexpr double LockTolerance = 0.02;
+    // Far above the trim's frame-to-frame movement near the wrap (tens of
+    // microseconds on that capture); at most an eighth of a refresh
+    static constexpr double WrapHysteresisUs = 500;
 
-    void reset() { m_TrimUs = 0; }
+    void reset()
+    {
+        m_TrimUs = 0;
+        m_LastWrap = 0;
+    }
 
     double trimUs() const { return m_TrimUs; }
 
@@ -585,21 +611,31 @@ public:
         const double nearest = std::round(ratio);
         if (nearest < 1 || std::fabs(ratio - nearest) > LockTolerance * nearest) {
             m_TrimUs *= 0.95;
+            m_LastWrap = 0;
             return;
         }
 
         const double marginUs = vblankUs - (targetUs + m_TrimUs);
         m_TrimUs += Gain * (marginUs - refreshPeriodUs / 2);
-        if (m_TrimUs >= refreshPeriodUs / 2) {
+        // After a wrap up (from the lower edge) the trim sits at the upper
+        // edge, so a wrap down there would undo it, and the other way round
+        const double hysteresisUs = std::min(WrapHysteresisUs, refreshPeriodUs / 8);
+        const double upperUs = refreshPeriodUs / 2 + (m_LastWrap > 0 ? hysteresisUs : 0);
+        const double lowerUs = -refreshPeriodUs / 2 - (m_LastWrap < 0 ? hysteresisUs : 0);
+        if (m_TrimUs >= upperUs) {
             m_TrimUs -= refreshPeriodUs;
+            m_LastWrap = -1;
         }
-        else if (m_TrimUs < -refreshPeriodUs / 2) {
+        else if (m_TrimUs < lowerUs) {
             m_TrimUs += refreshPeriodUs;
+            m_LastWrap = 1;
         }
     }
 
 private:
     double m_TrimUs = 0;
+    // Direction of the last wrap: 1 up, -1 down, 0 none yet
+    int m_LastWrap = 0;
 };
 
 // Whether the display refreshes at its nominal rate or only when frames
