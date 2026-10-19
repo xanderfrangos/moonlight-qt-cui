@@ -286,6 +286,26 @@ int main(int argc, char** argv)
     summary[QStringLiteral("fidelity")] = fidelity;
     summary[QStringLiteral("source")] = TsReplay::sourceJson(trace, repeats);
     summary[QStringLiteral("recorded")] = TsReplay::recordedJson(trace, repeats);
+
+    // The current rule must reproduce a capture made with it; prediction
+    // alone reproduces captures made before it, and shows what it changed
+    const TsReplay::LateShiftReplay lateShift =
+        TsReplay::replayLateShift(trace, TimestampPacing::LateShift::ConfirmedMissesNeeded);
+    const TsReplay::LateShiftReplay predictionOnly = TsReplay::replayLateShift(trace, 0);
+    QJsonObject lateShiftObject;
+    lateShiftObject[QStringLiteral("applicable")] = lateShift.applicable;
+    if (lateShift.applicable) {
+        lateShiftObject[QStringLiteral("recorded_shifted_releases")] = qint64(lateShift.recordedShiftedReleases);
+        lateShiftObject[QStringLiteral("recorded_entries")] = qint64(lateShift.recordedEntries);
+        QJsonArray recordedTimes;
+        for (double atS : lateShift.recordedEntryTimesS) {
+            recordedTimes.append(atS);
+        }
+        lateShiftObject[QStringLiteral("recorded_entry_times_s")] = recordedTimes;
+        lateShiftObject[QStringLiteral("current_rule")] = TsReplay::lateShiftJson(lateShift);
+        lateShiftObject[QStringLiteral("prediction_only")] = TsReplay::lateShiftJson(predictionOnly);
+    }
+    summary[QStringLiteral("late_shift")] = lateShiftObject;
     QJsonObject model;
     model[QStringLiteral("long_source_interval_us")] = TsReplay::LongSourceIntervalUs;
     model[QStringLiteral("hitch_us")] = TsReplay::HitchUs;
@@ -330,6 +350,16 @@ int main(int argc, char** argv)
                         (long long)baseline.first.replayed);
         }
         std::printf("\n          Results are exploratory: this policy is not the one the capture ran.\n");
+    }
+    if (lateShift.applicable) {
+        const auto describe = [](const TsReplay::LateShiftReplay& replay) {
+            return QStringLiteral("%1 entries, %2 releases shifted%3")
+                .arg(replay.entries).arg(replay.shiftedReleases)
+                .arg(replay.matchesRecorded() ? QStringLiteral(", matches the capture") : QString());
+        };
+        std::printf("Late shift: recorded %llu entries, %llu releases shifted; current rule %s; prediction alone %s\n",
+                    (unsigned long long)lateShift.recordedEntries, (unsigned long long)lateShift.recordedShiftedReleases,
+                    describe(lateShift).toUtf8().constData(), describe(predictionOnly).toUtf8().constData());
     }
     printTable(scenarioArray);
 

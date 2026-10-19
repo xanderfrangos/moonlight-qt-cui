@@ -739,6 +739,58 @@ void frameLimitIsMeasuredWithoutConfirmingItself()
     check(secondsLimited <= LimitMeter::MaxProbeUs / 1000000 + 1, "by the next re-measurement at the latest");
 }
 
+// The late shift needs confirmed misses where the compositor reports them,
+// and falls back to prediction alone where it doesn't
+void lateShiftNeedsConfirmedMisses()
+{
+    const uint64_t periodUs = 11111;
+    // Every frame predicted late, with a report for each one released
+    const auto run = [&](LateShift& shift, int frames, int missedEvery, bool reports, uint64_t& nowUs) {
+        bool shifted = false;
+        for (int i = 0; i < frames; i++) {
+            nowUs += periodUs;
+            if (reports) {
+                shift.noteOutcome(missedEvery != 0 && i % missedEvery == 0, nowUs);
+            }
+            shifted |= shift.notePlanned(true, nowUs) == LateShift::Change::Shifted;
+        }
+        return shifted;
+    };
+
+    uint64_t nowUs = 1000000;
+    LateShift silent;
+    check(run(silent, 64, 0, false, nowUs) && silent.shifted(), "without reports, predicted lateness alone shifts");
+
+    LateShift confirmedNone;
+    check(!run(confirmedNone, 640, 0, true, nowUs), "reports showing every frame on time keep it unshifted");
+    LateShift confirmedFew;
+    check(!run(confirmedFew, 640, 22, true, nowUs), "so do the few misses of normal play (3 in 64)");
+    LateShift confirmedMany;
+    check(run(confirmedMany, 640, 4, true, nowUs), "a quarter of frames missed shifts");
+
+    // Reports that stop: prediction alone decides again
+    LateShift stale;
+    run(stale, 64, 0, true, nowUs);
+    check(!stale.shifted(), "unshifted while reports show frames on time");
+    nowUs += LateShift::ReportsStaleUs;
+    check(run(stale, 64, 0, false, nowUs), "and shifted once they have stopped for a second");
+
+    // Leaving the shift is unchanged: at most 2 of 64 predicted late, with
+    // or without reports
+    for (int i = 0; i < 61; i++) {
+        stale.notePlanned(false, nowUs += periodUs);
+    }
+    check(stale.shifted() && stale.lateCount() == 3, "still shifted with 3 of 64 predicted late");
+    check(stale.notePlanned(false, nowUs += periodUs) == LateShift::Change::Unshifted && !stale.shifted(),
+          "and unshifted at 2");
+    stale.reset();
+    check(!stale.shifted() && stale.lateCount() == 0 && stale.confirmedMisses() == 0, "reset starts over");
+
+    // Confirmation off: the rule before 2026-10-18, for older captures
+    LateShift predictionOnly(0);
+    check(run(predictionOnly, 64, 0, true, nowUs), "with confirmation off, reports don't hold it back");
+}
+
 int main()
 {
     smoothingRemovesStampNoise();
@@ -760,6 +812,7 @@ int main()
     missesAreJudgedAgainstUsualLag();
     refreshClassifierTellsFixedFromAdaptive();
     frameLimitIsMeasuredWithoutConfirmingItself();
+    lateShiftNeedsConfirmedMisses();
 
     if (failures == 0) {
         std::printf("tst_timestamppacing: all checks passed\n");

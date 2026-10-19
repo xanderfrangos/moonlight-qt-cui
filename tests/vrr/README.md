@@ -184,6 +184,16 @@ Compressed and plain CSV traces both work, including those expanded by
   - `recorded` scores the capture's own display reports, matched to frames
     through their release time. These are OS display reports, not optical
     measurements.
+- **Late shift.** Under Gamescope (the session's `compositor_probe`), the
+  summary's `late_shift` replays `TimestampPacing::LateShift` from the
+  releases, display reports and display mode changes, in sequence order.
+  - Each release's prediction is rebuilt from readiness, its recorded
+    release lead, and its V-blank less the refresh a recorded shift added.
+  - `current_rule` must match a capture made with the confirmation rule.
+    `prediction_only` matches captures made before it, and shows where the
+    new rule would not have shifted.
+  - After the first point where the two differ, outcomes still come from
+    the recorded run, so later entries are indicative only.
 - **Compare.** `--compare` matches scenarios by name and refuses a summary
   of a different trace (by file SHA-256). `--timeline` writes per-frame CSV
   for every scenario at grid phase 0.

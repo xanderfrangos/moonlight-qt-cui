@@ -456,6 +456,14 @@ void TimestampPacer::onDisplayEvent(uint64_t displayUs, uint64_t refreshPeriodUs
     }
     row.missed = noteDisplayLagLocked(displayUs, match->vblankUs, periodUs, match->decodeBound);
     match->vblankUs = 0;
+
+    // Confirmed misses for the late shift: each replaced frame, then this
+    // one's lag verdict. A frame that waited for its decode counts here,
+    // unlike for the margin: a refresh later would still have shown it.
+    for (uint32_t i = 0; i < replaced; i++) {
+        m_LateShift.noteOutcome(true, row.eventUs);
+    }
+    m_LateShift.noteOutcome(row.missed, row.eventUs);
 }
 
 void TimestampPacer::onFrameDisplayed(uint64_t presentStartUs, uint64_t displayUs, uint64_t refreshPeriodUs)
@@ -588,7 +596,7 @@ void TimestampPacer::refreshDisplayMode(std::unique_lock<std::mutex>& lock, uint
     trace(row);
 }
 
-void TimestampPacer::noteLateLocked(const Entry& shown, uint64_t assignedUs)
+void TimestampPacer::noteLateLocked(const Entry& shown, uint64_t assignedUs, uint64_t nowUs)
 {
     // Under Gamescope, a frame handed over less than its lead before its
     // V-blank misses the latch, and in Mailbox the next frame replaces it: a
@@ -606,43 +614,34 @@ void TimestampPacer::noteLateLocked(const Entry& shown, uint64_t assignedUs)
     // frames widen, so frames ready in time that Gamescope still missed
     // also lead here. The frame limit's FIFO already shows a late frame a
     // refresh later.
+    //
+    // Gamescope's display reports must also confirm misses before the
+    // shift (TimestampPacing::LateShift). Only Gamescope installs the
+    // display-mode probe, so the shift never runs elsewhere, and D3D11's
+    // display reports (onFrameDisplayed) never feed it.
     if (!m_DisplayModeProbe || m_DisplayMode == DisplayMode::FrameLimited || shown.readyUs == 0) {
         return;
     }
     const bool late = shown.readyUs + leadUsLocked(true) > assignedUs;
-    if (m_LateFilled == m_LateFlags.size()) {
-        m_LateCount -= m_LateFlags[m_LateIndex];
-    }
-    else {
-        m_LateFilled++;
-    }
-    m_LateFlags[m_LateIndex] = late ? 1 : 0;
-    m_LateCount += late ? 1 : 0;
-    m_LateIndex = (m_LateIndex + 1) % m_LateFlags.size();
-    if (m_LateFilled < m_LateFlags.size()) {
-        return;
-    }
-
-    if (!m_LateShift && m_LateCount >= m_LateFlags.size() / 2) {
-        m_LateShift = true;
+    switch (m_LateShift.notePlanned(late, nowUs)) {
+    case TimestampPacing::LateShift::Change::Shifted:
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Timestamp pacing: %zu of the last %zu frames were ready too late for their V-blank; planning frames a refresh later",
-                    m_LateCount, m_LateFlags.size());
-    }
-    else if (m_LateShift && m_LateCount <= 2) {
-        m_LateShift = false;
+                    "Timestamp pacing: %zu of the last %zu frames were ready too late for their V-blank, and Gamescope missed %zu of the last %zu; planning frames a refresh later",
+                    m_LateShift.lateCount(), TimestampPacing::LateShift::Window,
+                    m_LateShift.confirmedMisses(), TimestampPacing::LateShift::Window);
+        break;
+    case TimestampPacing::LateShift::Change::Unshifted:
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Timestamp pacing: frames are ready in time for their V-blank again; no longer planning them a refresh later");
+        break;
+    case TimestampPacing::LateShift::Change::None:
+        break;
     }
 }
 
 void TimestampPacer::resetGridLocked()
 {
-    m_LateShift = false;
-    m_LateFlags = {};
-    m_LateIndex = 0;
-    m_LateCount = 0;
-    m_LateFilled = 0;
+    m_LateShift.reset();
     m_Limit.reset();
     m_Grid.configure(m_RefreshPeriodUs);
     m_PhaseLock.reset();
@@ -892,7 +891,7 @@ uint64_t TimestampPacer::vblankForLocked(const Entry& entry) const
 
     // While most frames can't be ready their lead before their V-blank,
     // every frame is planned a refresh later (see noteLateLocked())
-    if (m_LateShift) {
+    if (m_LateShift.shifted()) {
         vblankUs = m_Grid.atOrAfter(double(vblankUs) + m_Grid.periodUs() / 2);
     }
 
@@ -1012,7 +1011,7 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
         vblankWaitValid = true;
         vblankWaitUs = int64_t(vblankUs) - int64_t(shown.targetUs);
         m_PhaseLock.update(shown.targetUs, assignedUs, m_Grid.periodUs(), m_SourcePeriodUs);
-        noteLateLocked(shown, assignedUs);
+        noteLateLocked(shown, assignedUs, nowUs);
         m_Releases[m_NextRelease] = { nowUs, vblankUs, false };
         m_NextRelease = (m_NextRelease + 1) % m_Releases.size();
         m_LastVblankUs = vblankUs;
@@ -1039,7 +1038,7 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
         row.gridPeriodUs = vblankGrid ? uint64_t(m_Grid.periodUs()) : 0;
         row.displayMode = uint8_t(m_DisplayMode);
         row.limitRefreshes = m_Limit.refreshes();
-        row.lateShift = m_LateShift;
+        row.lateShift = m_LateShift.shifted();
         for (size_t i = 0; i < supersededCount; i++) {
             TimestampTrace::Row supersededRow = frameRow(TimestampTrace::Event::Superseded, superseded[i], nowUs);
             supersededRow.queueDepth = row.queueDepth;

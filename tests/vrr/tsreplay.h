@@ -84,6 +84,13 @@ struct Row {
     bool matched = false;
     bool missed = false;
     uint32_t displayMode = 0;
+    // Released
+    bool vblankGrid = false;
+    uint64_t vblankUs = 0;
+    uint64_t releaseLeadUs = 0;
+    uint64_t gridPeriodUs = 0;
+    uint32_t superseded = 0;
+    bool lateShift = false;
     int32_t streamFps = 0;
     int32_t displayHz = 0;
     int32_t smoothing = 0;
@@ -92,6 +99,7 @@ struct Row {
     int32_t maxBufferMs = 0;
     int32_t vsyncMarginUs = 0;
     bool vblankGridAvailable = false;
+    bool compositorProbe = false;
 };
 
 struct Trace {
@@ -120,6 +128,8 @@ struct Trace {
     std::vector<Row> scheduled;
     std::vector<Row> presented;
     std::vector<Row> displays;
+    std::vector<Row> released;
+    std::vector<Row> displayModes;
 
     bool hashMatches() const { return !recordedSha256.isEmpty() && recordedSha256 == decodedSha256; }
 
@@ -366,6 +376,13 @@ inline bool load(const QString& path, Trace& trace, QString& error)
         row.maxBufferMs = int32_t(p.s("max_buffer_ms"));
         row.vsyncMarginUs = int32_t(p.s("vsync_margin_us"));
         row.vblankGridAvailable = p.b("vblank_grid_available");
+        row.compositorProbe = p.b("compositor_probe");
+        row.vblankGrid = p.b("vblank_grid");
+        row.vblankUs = p.u("vblank_us");
+        row.releaseLeadUs = p.u("release_lead_us");
+        row.gridPeriodUs = p.u("grid_period_us");
+        row.superseded = uint32_t(p.u("superseded"));
+        row.lateShift = p.b("late_shift");
         if (!p.ok) {
             error = QStringLiteral("line %1: malformed number").arg(lineNumber);
             return false;
@@ -390,6 +407,12 @@ inline bool load(const QString& path, Trace& trace, QString& error)
         else if (row.event == "display_event" || row.event == "frame_displayed") {
             trace.displays.push_back(row);
         }
+        else if (row.event == "released") {
+            trace.released.push_back(row);
+        }
+        else if (row.event == "display_mode") {
+            trace.displayModes.push_back(row);
+        }
     }
 
     // Rows from different threads can reach the file out of order. Scheduled
@@ -404,6 +427,8 @@ inline bool load(const QString& path, Trace& trace, QString& error)
     std::sort(trace.scheduled.begin(), trace.scheduled.end(), bySequence);
     std::sort(trace.presented.begin(), trace.presented.end(), bySequence);
     std::sort(trace.displays.begin(), trace.displays.end(), bySequence);
+    std::sort(trace.released.begin(), trace.released.end(), bySequence);
+    std::sort(trace.displayModes.begin(), trace.displayModes.end(), bySequence);
 
     if (!trace.haveSession) {
         error = QStringLiteral("trace has no session row");
@@ -1230,6 +1255,127 @@ inline QJsonObject recordedJson(const Trace& trace, const std::vector<bool>& rep
         object[QStringLiteral("cadence_residual_us")] = m.residualUs.json();
         object[QStringLiteral("cadence_residual_over_2ms_per_mille")] = perMilleExact(m.intervalsOver2ms, m.intervals);
     }
+    return object;
+}
+
+// The late shift (TimestampPacing::LateShift) replayed from the trace's
+// releases, display reports and display mode changes, in the order the pacer
+// handled them. Each release's prediction is rebuilt from the frame's
+// readiness, its recorded release lead and the V-blank it was planned for,
+// less the refresh the shift itself added.
+struct LateShiftReplay {
+    bool applicable = false;
+    size_t confirmedMissesNeeded = 0;
+    uint64_t releases = 0;
+    uint64_t mismatched = 0;
+    uint64_t firstMismatchSequence = 0;
+    uint64_t shiftedReleases = 0;
+    uint64_t recordedShiftedReleases = 0;
+    uint64_t entries = 0;
+    uint64_t recordedEntries = 0;
+    // Seconds after the first frame was ready
+    std::vector<double> entryTimesS;
+    std::vector<double> recordedEntryTimesS;
+
+    bool matchesRecorded() const { return applicable && releases != 0 && mismatched == 0; }
+};
+
+inline LateShiftReplay replayLateShift(const Trace& trace, size_t confirmedMissesNeeded)
+{
+    LateShiftReplay result;
+    result.confirmedMissesNeeded = confirmedMissesNeeded;
+    // Only Gamescope's display-mode probe enables the shift
+    result.applicable = trace.session.compositorProbe && !trace.released.empty();
+    if (!result.applicable) {
+        return result;
+    }
+    QHash<qint64, uint64_t> readyByFrame;
+    for (const Row& row : trace.scheduled) {
+        readyByFrame.insert(qint64(row.frame) << 32 | row.rtp, row.readyUs);
+    }
+
+    // Merge the three event kinds by sequence
+    std::vector<const Row*> events;
+    events.reserve(trace.released.size() + trace.displays.size() + trace.displayModes.size());
+    for (const std::vector<Row>* rows : { &trace.released, &trace.displays, &trace.displayModes }) {
+        for (const Row& row : *rows) {
+            events.push_back(&row);
+        }
+    }
+    std::sort(events.begin(), events.end(), [](const Row* a, const Row* b) { return a->sequence < b->sequence; });
+
+    const uint64_t startUs = trace.scheduled.empty() ? 0 : trace.scheduled.front().readyUs;
+    const auto secondsAfterStart = [startUs](uint64_t atUs) {
+        return std::round((double(atUs) - double(startUs)) / 100000.0) / 10.0;
+    };
+    // TimestampPacer::DisplayMode::FrameLimited
+    constexpr uint32_t frameLimited = 4;
+    TimestampPacing::LateShift shift(confirmedMissesNeeded);
+    bool recordedShift = false;
+    for (const Row* row : events) {
+        if (row->event == "display_mode") {
+            // Every mode change and refresh change starts the grid over
+            shift.reset();
+            recordedShift = false;
+            continue;
+        }
+        if (row->event == "display_event") {
+            if (row->matched) {
+                for (uint32_t i = 0; i < row->superseded; i++) {
+                    shift.noteOutcome(true, row->eventUs);
+                }
+                shift.noteOutcome(row->missed, row->eventUs);
+            }
+            continue;
+        }
+        if (row->event != "released") {
+            continue;
+        }
+        const uint64_t readyUs = readyByFrame.value(qint64(row->frame) << 32 | row->rtp, 0);
+        if (row->vblankGrid && row->paced && row->displayMode != frameLimited && readyUs != 0 && row->vblankUs != 0) {
+            const uint64_t shiftUs = recordedShift ? row->gridPeriodUs : 0;
+            const uint64_t assignedUs = row->vblankUs > shiftUs ? row->vblankUs - shiftUs : 0;
+            const bool before = shift.shifted();
+            shift.notePlanned(readyUs + row->releaseLeadUs > assignedUs, row->eventUs);
+            if (!before && shift.shifted()) {
+                result.entries++;
+                result.entryTimesS.push_back(secondsAfterStart(row->eventUs));
+            }
+        }
+        result.releases++;
+        result.shiftedReleases += shift.shifted();
+        result.recordedShiftedReleases += row->lateShift;
+        if (!recordedShift && row->lateShift) {
+            result.recordedEntries++;
+            result.recordedEntryTimesS.push_back(secondsAfterStart(row->eventUs));
+        }
+        if (shift.shifted() != row->lateShift) {
+            if (result.mismatched++ == 0) {
+                result.firstMismatchSequence = row->sequence;
+            }
+        }
+        recordedShift = row->lateShift;
+    }
+    return result;
+}
+
+inline QJsonObject lateShiftJson(const LateShiftReplay& replay)
+{
+    QJsonObject object;
+    object[QStringLiteral("confirmed_misses_needed")] = qint64(replay.confirmedMissesNeeded);
+    object[QStringLiteral("matches_recorded")] = replay.matchesRecorded();
+    object[QStringLiteral("releases")] = qint64(replay.releases);
+    object[QStringLiteral("mismatched_releases")] = qint64(replay.mismatched);
+    if (replay.mismatched != 0) {
+        object[QStringLiteral("first_mismatch_sequence")] = qint64(replay.firstMismatchSequence);
+    }
+    object[QStringLiteral("shifted_releases")] = qint64(replay.shiftedReleases);
+    object[QStringLiteral("entries")] = qint64(replay.entries);
+    QJsonArray times;
+    for (double atS : replay.entryTimesS) {
+        times.append(atS);
+    }
+    object[QStringLiteral("entry_times_s")] = times;
     return object;
 }
 

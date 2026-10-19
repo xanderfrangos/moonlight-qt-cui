@@ -6858,6 +6858,34 @@ the probe never forces a connector probe.
   (0.25 ms per clean 5 s). The capture before those (256–286 s, frames
   ready in time but still missed) would switch it on only through the
   widened margin. Not yet captured.
+- **Late shift needs confirmed misses (2026-10-18).** The rule is now
+  `TimestampPacing::LateShift`.
+  - **What went wrong:** on a Deck capture (2026-10-18, 90 FPS at 90 Hz,
+    Steam's limit off) the shift engaged with Gamescope reporting every
+    frame on its V-blank. The release lead's 4.5 ms Gamescope margin
+    predicted lateness that wasn't there: 262 of 265 frames predicted late
+    were shown on time. The shift held every frame 11 ms later for 30 s.
+    Leaving it then collided frames (12 of 64 missed), and it re-entered
+    twice.
+  - **New rule:** where Gamescope's display reports are arriving, the shift
+    also needs 8 confirmed misses in the last 64 reported outcomes (frames
+    replaced, or shown after their V-blank). That capture had at most 3,
+    and 1 when it fired. The stretch the shift was made for lost about a
+    quarter of its frames to replacement, about 16 in 64. That capture
+    isn't on this machine, so its replay against the new rule hasn't been
+    run.
+  - **Unchanged:** without a report in the last second, prediction alone
+    decides, as before. Leaving the shift is also unchanged.
+  - **Windows and other platforms:** only Gamescope's probe enables the
+    shift, so they never reach it. D3D11's `onFrameDisplayed` feeds only
+    the margin. `tst_timestamptrace` pins both: D3D11 misses still widen
+    the margin, and the shift never engages.
+  - **Replay:** `tsreplay` replays the shift from the trace's releases,
+    display reports and mode changes. Prediction alone reproduces that
+    capture's recorded shift state on all 65,099 releases. The new rule
+    skips the 225 s entry. Its two later entries are the recorded
+    re-entries after the recorded exit, whose misses only that exit
+    caused; a replay can't remove them.
 - **Replaced frames and FIFO; future-dated reports.** A 210 s Deck capture
   (2026-10-09) with the 90 FPS limit on throughout had its margin climb to
   6 ms (1.90% missed V-blanks). FIFO never replaces a frame, but the

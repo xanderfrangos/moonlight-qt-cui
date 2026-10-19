@@ -405,6 +405,102 @@ private slots:
     // against the refresh keeps moving and some are always planned for a
     // V-blank their decode can't make. Those miss, but handing frames over
     // earlier couldn't help them, so the margin must stay down.
+    // The Windows path: a V-sync source builds the grid, there is no
+    // compositor probe, and D3D11 reports display times through
+    // onFrameDisplayed. Half the frames are reported a refresh or more late.
+    // Those misses must still widen the submit margin, and the late shift,
+    // which only Gamescope's probe enables, must never engage however many
+    // frames look late.
+    void d3d11FeedbackWidensMarginWithoutShifting()
+    {
+        QTemporaryDir directory;
+        qputenv("MOONLIGHT_VRR_TRACE", directory.filePath("Moonlight.vrrtrace").toUtf8());
+        const auto unset = qScopeGuard([] { qunsetenv("MOONLIGHT_VRR_TRACE"); });
+
+        constexpr uint64_t periodUs = 16667;
+        PacerTelemetry telemetry;
+        TimestampPacer* pacer = nullptr;
+        std::atomic_int released { 0 };
+        TimestampPacer::Callbacks callbacks;
+        callbacks.release = [&](AVFrame* frame) {
+            const uint64_t startUs = LiGetMicroseconds();
+            const int index = released++;
+            pacer->notePresented(startUs, startUs + 500, 0, 0, true, uint32_t(frame->pts));
+            av_frame_free(&frame);
+            // On time, or two refreshes late
+            pacer->onFrameDisplayed(startUs, startUs + (index % 2 ? 2 * periodUs + 2000 : 1000), periodUs);
+        };
+        callbacks.drop = [](AVFrame* frame, bool) { av_frame_free(&frame); };
+
+        TimestampPacingOptions options;
+        options.enabled = true;
+        uint64_t maxMarginUs = 0;
+        {
+            TimestampPacer timestampPacer(options, 60, 60, true, false, &telemetry, callbacks);
+            pacer = &timestampPacer;
+            QVERIFY(timestampPacer.start());
+
+            std::atomic_bool stopVsync { false };
+            std::thread vsync([&] {
+                uint64_t nextUs = LiGetMicroseconds();
+                while (!stopVsync.load()) {
+                    nextUs += periodUs;
+                    while (LiGetMicroseconds() < nextUs) {
+                        std::this_thread::sleep_for(std::chrono::microseconds(500));
+                    }
+                    timestampPacer.onVsync(nextUs);
+                }
+            });
+
+            const uint64_t startUs = LiGetMicroseconds();
+            for (int i = 0; i < 180; i++) {
+                const uint64_t dueUs = startUs + uint64_t(i) * periodUs;
+                while (LiGetMicroseconds() < dueUs) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(500));
+                }
+                AVFrame* frame = av_frame_alloc();
+                frame->pts = int64_t(i) * 1500;
+                PacedFrame paced(frame, i + 1, uint32_t(i * 1500), true, dueUs);
+                paced.setHostLatencyUs(3000);
+                timestampPacer.submit(std::move(paced));
+                maxMarginUs = std::max(maxMarginUs, timestampPacer.extraMarginUs());
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            timestampPacer.stop();
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            stopVsync.store(true);
+            vsync.join();
+        }
+        QVERIFY2(maxMarginUs > 0, "missed V-blanks reported by D3D11 widen the margin");
+
+        const QByteArray text = decode(directory.filePath("Moonlight.tstrace"));
+        QVERIFY(!text.isEmpty());
+        QList<QByteArray> lines = text.split('\n');
+        lines.removeLast();
+        const QList<QByteArray> names = lines.first().split(',');
+        const qsizetype lateShift = names.indexOf("late_shift");
+        const qsizetype missed = names.indexOf("missed");
+        const qsizetype matched = names.indexOf("matched");
+        QVERIFY(lateShift > 0 && missed > 0 && matched > 0);
+        int releasedRows = 0, shiftedRows = 0, missedReports = 0;
+        for (qsizetype i = 1; i + 1 < lines.size(); i++) {
+            const QList<QByteArray> fields = lines[i].split(',');
+            if (fields.size() != names.size()) {
+                continue;
+            }
+            if (fields[2] == "released") {
+                releasedRows++;
+                shiftedRows += fields[lateShift] == "1";
+            }
+            else if (fields[2] == "frame_displayed" && fields[matched] == "1") {
+                missedReports += fields[missed] == "1";
+            }
+        }
+        QVERIFY(releasedRows > 100);
+        QVERIFY(missedReports > 20);
+        QCOMPARE(shiftedRows, 0);
+    }
+
     void marginIgnoresDecodeBoundMisses()
     {
         constexpr uint64_t refreshUs = 11111;

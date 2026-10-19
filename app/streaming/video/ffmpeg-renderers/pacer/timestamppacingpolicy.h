@@ -846,6 +846,123 @@ private:
     uint64_t m_ProbeIntervalUs = FirstProbeUs;
 };
 
+// Whether every frame is planned a refresh later, because frames keep missing
+// their V-blank (see TimestampPacer::noteLateLocked for why the shift exists).
+//
+// A frame is predicted late when it isn't ready its release lead before its
+// V-blank. That lead carries Gamescope's 4.5 ms submit margin, which proved
+// cautious: on a Deck capture (2026-10-18, 90 FPS at 90 Hz, fixed refresh)
+// 262 of 265 frames predicted late were shown on their V-blank anyway, yet
+// half of 64 being predicted late shifted every frame a refresh (11 ms) later
+// for 30 s, and leaving the shift and re-entering it dropped frames.
+//
+// So where the compositor reports what it showed, the shift also needs it to
+// confirm misses: frames it replaced, or showed after their V-blank. That
+// capture had at most 3 in any 64 reported outcomes, and 1 when the shift
+// fired; the stretch the shift was made for (2026-10-09) lost about a
+// quarter of its frames, 16 in 64. Without recent reports, prediction alone
+// decides, as it always did. Leaving the shift is unchanged: while shifted,
+// frames make their V-blank by design, so reports can't tell when the
+// unshifted plan would work again.
+class LateShift
+{
+public:
+    static constexpr size_t Window = 64;
+    static constexpr size_t ConfirmedMissesNeeded = 8;
+    // Reports older than this don't count as reports arriving
+    static constexpr uint64_t ReportsStaleUs = 1000000;
+
+    enum class Change : uint8_t {
+        None,
+        Shifted,
+        Unshifted,
+    };
+
+    // confirmedMissesNeeded zero: prediction alone, the rule before
+    // 2026-10-18's change (for replaying older captures)
+    explicit LateShift(size_t confirmedMissesNeeded = ConfirmedMissesNeeded) :
+        m_ConfirmedMissesNeeded(confirmedMissesNeeded)
+    {
+    }
+
+    void reset()
+    {
+        m_Late = {};
+        m_LateIndex = 0;
+        m_LateCount = 0;
+        m_LateFilled = 0;
+        m_Missed = {};
+        m_MissedIndex = 0;
+        m_MissedCount = 0;
+        m_MissedFilled = 0;
+        m_LastReportUs = 0;
+        m_Shifted = false;
+    }
+
+    // A frame released for a V-blank, predicted late or not, at nowUs
+    Change notePlanned(bool late, uint64_t nowUs)
+    {
+        push(m_Late, m_LateIndex, m_LateCount, m_LateFilled, late);
+        if (m_LateFilled < Window) {
+            return Change::None;
+        }
+        if (!m_Shifted && m_LateCount >= Window / 2 && confirmed(nowUs)) {
+            m_Shifted = true;
+            return Change::Shifted;
+        }
+        if (m_Shifted && m_LateCount <= 2) {
+            m_Shifted = false;
+            return Change::Unshifted;
+        }
+        return Change::None;
+    }
+
+    // What the compositor reported for one released frame, at nowUs: shown
+    // on its V-blank, or missed (replaced, or shown after it)
+    void noteOutcome(bool missed, uint64_t nowUs)
+    {
+        push(m_Missed, m_MissedIndex, m_MissedCount, m_MissedFilled, missed);
+        m_LastReportUs = nowUs;
+    }
+
+    bool shifted() const { return m_Shifted; }
+    size_t lateCount() const { return m_LateCount; }
+    size_t confirmedMisses() const { return m_MissedCount; }
+
+private:
+    bool confirmed(uint64_t nowUs) const
+    {
+        const bool reporting = m_LastReportUs != 0 && nowUs >= m_LastReportUs &&
+                               nowUs - m_LastReportUs < ReportsStaleUs;
+        return m_ConfirmedMissesNeeded == 0 || !reporting || m_MissedCount >= m_ConfirmedMissesNeeded;
+    }
+
+    static void push(std::array<uint8_t, Window>& flags, size_t& index, size_t& count, size_t& filled, bool value)
+    {
+        if (filled == Window) {
+            count -= flags[index];
+        }
+        else {
+            filled++;
+        }
+        flags[index] = value ? 1 : 0;
+        count += value ? 1 : 0;
+        index = (index + 1) % Window;
+    }
+
+    size_t m_ConfirmedMissesNeeded;
+    std::array<uint8_t, Window> m_Late {};
+    size_t m_LateIndex = 0;
+    size_t m_LateCount = 0;
+    size_t m_LateFilled = 0;
+    std::array<uint8_t, Window> m_Missed {};
+    size_t m_MissedIndex = 0;
+    size_t m_MissedCount = 0;
+    size_t m_MissedFilled = 0;
+    uint64_t m_LastReportUs = 0;
+    bool m_Shifted = false;
+};
+
 // Chooses each frame's target from its timestamp and readiness
 class Policy
 {

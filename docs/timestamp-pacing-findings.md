@@ -400,6 +400,17 @@ SteamOS Desktop Mode:
      - Missed planned V-blanks: 118 → 1.5 per mille.
      - Mean delay: 11.3 → 14.1 ms.
      A live capture with this build should confirm it on the display.
+   - That live capture (Deck, 2026-10-18 23:44, 12 min, 90 FPS at 90 Hz)
+     replays exactly, all 65,108 decisions.
+     - Ready late: 0.65%. Missed V-blanks: 0.30%.
+     - Display-reported jerk over 2 ms: 7.7 per mille overall, 1.4–3.2 under
+       Steam's frame limit.
+     - Replayed on that capture, the policy before both changes gives 16.1
+       per mille modeled jerk and 347 per mille late, against 2.9 and 6.5.
+     - Fixed refresh (limit off) suffered a false late shift: 11 ms for
+       30 s, then flapping. Fixed the same day: the shift now needs
+       Gamescope to confirm misses (architecture.md, "Late shift needs
+       confirmed misses").
 8. Later: render before waiting, and `Present(1,0)` for exclusive fullscreen.
 
 ## 10. Open questions

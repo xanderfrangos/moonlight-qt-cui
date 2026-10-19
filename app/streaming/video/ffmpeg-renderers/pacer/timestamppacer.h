@@ -166,7 +166,7 @@ private:
     // Puts the grid back at one V-blank per refresh
     void resetGridLocked();
     // Shifts every frame a refresh later while most are ready too late
-    void noteLateLocked(const Entry& shown, uint64_t assignedUs);
+    void noteLateLocked(const Entry& shown, uint64_t assignedUs, uint64_t nowUs);
     void trace(const TimestampTrace::Row& row);
     // Records a display report's row on every return, under the lock
     struct TraceOnReturn {
@@ -245,13 +245,9 @@ private:
     // refreshes apart frames are shown, measured from display reports
     double m_RefreshPeriodUs = 16667;
     TimestampPacing::LimitMeter m_Limit;
-    // Whether each of the last grid releases was ready too late for its own
-    // V-blank, and whether frames are planned a refresh later for it
-    std::array<uint8_t, 64> m_LateFlags {};
-    size_t m_LateIndex = 0;
-    size_t m_LateCount = 0;
-    size_t m_LateFilled = 0;
-    bool m_LateShift = false;
+    // Whether frames are planned a refresh later, from the last grid
+    // releases predicted late and the misses the compositor reported
+    TimestampPacing::LateShift m_LateShift;
 
     VrrTargetWaiter m_Waiter;
     // Pacing thread only. How far the precise waiter's sleeps have recently
