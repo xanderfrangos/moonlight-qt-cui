@@ -13,7 +13,9 @@
 // run the pacer's release thread, its learned margins, late shift, Gamescope
 // frame limits or the display-mode probe, and has no GPU or compositor. Its
 // scores rank policies against each other on the same capture; they are not
-// predictions of measured display timing.
+// predictions of measured display timing. A "stock" scenario models
+// Moonlight's own pacer instead (presentStock), as the baseline timestamp
+// pacing has to beat.
 
 #include "streaming/video/ffmpeg-renderers/pacer/timestamppacingpolicy.h"
 
@@ -31,6 +33,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <map>
 #include <vector>
@@ -130,6 +133,9 @@ struct Trace {
     std::vector<Row> displays;
     std::vector<Row> released;
     std::vector<Row> displayModes;
+    // V-sync source wakeups. None where the pacer had no V-sync source and
+    // took its grid from display reports (Gamescope).
+    uint64_t vsyncs = 0;
 
     bool hashMatches() const { return !recordedSha256.isEmpty() && recordedSha256 == decodedSha256; }
 
@@ -413,6 +419,9 @@ inline bool load(const QString& path, Trace& trace, QString& error)
         else if (row.event == "display_mode") {
             trace.displayModes.push_back(row);
         }
+        else if (row.event == "vsync") {
+            trace.vsyncs++;
+        }
     }
 
     // Rows from different threads can reach the file out of order. Scheduled
@@ -442,6 +451,9 @@ struct Settings {
     QString name;
     // Off shows each frame as soon as it is ready
     bool pacing = true;
+    // With pacing off, shows frames as Moonlight's own pacer would instead
+    // (see presentStock)
+    bool stock = false;
     TimestampPacingOptions options;
     int streamFps = 60;
     // A fixed V-blank grid at displayHz, or VRR no faster than displayHz
@@ -521,13 +533,14 @@ inline bool applySetting(Settings& settings, const Settings& session, const QStr
         if (text == QLatin1String("timestamp")) {
             settings.pacing = true;
         }
-        else if (text == QLatin1String("off")) {
+        else if (text == QLatin1String("off") || text == QLatin1String("stock")) {
             settings.pacing = false;
         }
         else {
-            error = QStringLiteral("pacing must be \"timestamp\" or \"off\"");
+            error = QStringLiteral("pacing must be \"timestamp\", \"off\" or \"stock\"");
             return false;
         }
+        settings.stock = text == QLatin1String("stock");
         return true;
     }
     if (key == QLatin1String("smoothing")) {
@@ -966,6 +979,195 @@ inline std::vector<Outcome> present(const std::vector<Row>& scheduled, const Rep
     return outcomes;
 }
 
+// pacer.cpp's MAX_QUEUED_FRAMES and TIMER_SLACK_MS
+constexpr size_t StockQueuedFrames = 3;
+constexpr uint64_t StockTimerSlackMs = 3;
+// TimestampPacer::DisplayMode::FrameLimited in display_mode rows
+constexpr uint32_t FrameLimitedMode = 4;
+
+// Shows the frames of one capture as Moonlight's own pacer would (Pacer,
+// with neither timestamp pacing nor VRR Pacing Mode), at one grid phase on
+// fixed refresh, so timestamp pacing can be compared with what it replaces.
+// The "off" model is not that: it shows only the newest frame at each
+// V-blank, so two frames due at one V-blank always cost a skip, where the
+// pacer's queues often show both a refresh apart instead.
+//
+// With a V-sync source (Windows, Wayland: the trace has vsync rows), as
+// Pacer::handleVsync: each V-blank hands the renderer the oldest frame in
+// the pacing queue, or waits up to a refresh less the timer slack for one to
+// arrive. It drops queued frames only to catch up: down to one once the
+// queue has held more than one at every V-blank for half a second, and
+// otherwise down to three, when the stream is at least as fast as the
+// display. A frame handed over is shown at the first V-blank after it has
+// rendered.
+//
+// Without one (Gamescope), frames are presented as soon as they are ready,
+// and what is shown follows the display mode the trace recorded. Under a
+// frame limit (FIFO), every frame is shown at its own refresh, in order, so
+// a late frame delays the ones behind it rather than being skipped; a full
+// queue drops its oldest. Otherwise the newest ready frame is shown at each
+// refresh, as in the "off" model. Tearing spans are also shown on the grid,
+// as the other models show them, and a frame limit below the refresh rate
+// isn't modeled.
+//
+// Frames enter the queues when ready, not when the decoder returns them. The
+// queue bound counts only the pacer's own queue, not the swapchain's images,
+// so after a late frame the model drops sooner, and adds less latency, than
+// the real pipeline can.
+inline std::vector<Outcome> presentStock(const Trace& trace, const Settings& settings, double phaseUs)
+{
+    const std::vector<Row>& scheduled = trace.scheduled;
+    std::vector<Outcome> outcomes(scheduled.size());
+    const double periodUs = 1000000.0 / settings.displayHz;
+    const auto vblankAt = [&](int64_t index) { return uint64_t(std::llround(phaseUs + double(index) * periodUs)); };
+    const auto indexAtOrAfter = [&](double timeUs) { return int64_t(std::ceil((timeUs - phaseUs) / periodUs)); };
+    const auto renderUs = [&](size_t i) {
+        return settings.renderUs >= 0 ? uint64_t(settings.renderUs)
+               : scheduled[i].renderLeadUs != 0 ? scheduled[i].renderLeadUs : DefaultRenderUs;
+    };
+    const auto dueUs = [&](size_t i) { return scheduled[i].readyUs + renderUs(i); };
+    // Frames reach the queue in the order the decoder returned them
+    const auto drop = [&](std::deque<size_t>& queue) {
+        outcomes[queue.front()].skipped = true;
+        queue.pop_front();
+    };
+    const auto admit = [&](std::deque<size_t>& queue, size_t i) {
+        if (queue.size() == StockQueuedFrames) {
+            drop(queue);
+        }
+        queue.push_back(i);
+    };
+
+    std::deque<size_t> queue;
+    size_t next = 0;
+    // Skip frames without a readiness time, and start at the first frame
+    const auto skipUnready = [&]() {
+        while (next < scheduled.size() && scheduled[next].readyUs == 0) {
+            outcomes[next++].skipped = true;
+        }
+    };
+    skipUnready();
+    if (next == scheduled.size()) {
+        return outcomes;
+    }
+    int64_t vblank = indexAtOrAfter(double(scheduled[next].readyUs));
+    uint64_t lastShownUs = 0;
+
+    if (trace.vsyncs != 0) {
+        // Pacer::handleVsync. The history only counts while the stream can
+        // outpace the display. A frame arriving between V-blanks is handed
+        // over by the wait at the V-blank before it.
+        vblank--;
+        const bool useHistory = settings.streamFps >= settings.displayHz;
+        const size_t historyLength = std::max<size_t>(1, size_t(settings.displayHz) / 2);
+        const uint64_t waitUs = (uint64_t(std::max<int>(int(1000 / settings.displayHz), int(StockTimerSlackMs))) -
+                                 StockTimerSlackMs) * 1000;
+        std::deque<size_t> history;
+        const auto show = [&](size_t i, uint64_t handedUs) {
+            // Rendered once handed over, and shown at the V-blank after its
+            // present
+            const uint64_t renderedUs = std::max(scheduled[i].readyUs, handedUs) + std::max<uint64_t>(renderUs(i), 1);
+            uint64_t shownUs = vblankAt(indexAtOrAfter(double(renderedUs)));
+            if (lastShownUs != 0) {
+                shownUs = std::max(shownUs, uint64_t(std::llround(double(lastShownUs) + periodUs)));
+            }
+            outcomes[i].shownUs = shownUs;
+            lastShownUs = shownUs;
+        };
+        while (next < scheduled.size() || !queue.empty()) {
+            const uint64_t vblankUs = vblankAt(vblank);
+            while (next < scheduled.size() && scheduled[next].readyUs <= vblankUs) {
+                admit(queue, next++);
+                skipUnready();
+            }
+            size_t dropTarget = 1;
+            if (useHistory) {
+                for (size_t length : history) {
+                    if (length <= 1) {
+                        dropTarget = 3;
+                        break;
+                    }
+                }
+                if (history.size() == historyLength) {
+                    history.pop_front();
+                }
+                history.push_back(queue.size());
+            }
+            while (queue.size() > dropTarget) {
+                drop(queue);
+            }
+            if (!queue.empty()) {
+                const size_t i = queue.front();
+                queue.pop_front();
+                show(i, vblankUs);
+                vblank++;
+                continue;
+            }
+            if (next < scheduled.size() && scheduled[next].readyUs <= vblankUs + waitUs) {
+                const size_t i = next++;
+                skipUnready();
+                show(i, scheduled[i].readyUs);
+                vblank++;
+                continue;
+            }
+            if (next == scheduled.size()) {
+                break;
+            }
+            // Nothing until the next frame: an empty queue at each V-blank
+            const int64_t arrival = std::max(vblank + 1, indexAtOrAfter(double(scheduled[next].readyUs)) - 1);
+            if (useHistory) {
+                for (int64_t k = vblank + 1; k < arrival && k < vblank + 1 + int64_t(historyLength); k++) {
+                    if (history.size() == historyLength) {
+                        history.pop_front();
+                    }
+                    history.push_back(0);
+                }
+            }
+            vblank = arrival;
+        }
+        return outcomes;
+    }
+
+    // Gamescope. The display mode in force at a time, from the trace.
+    size_t modeIndex = 0;
+    uint32_t mode = 0;
+    const auto modeAt = [&](uint64_t timeUs) {
+        while (modeIndex < trace.displayModes.size() && trace.displayModes[modeIndex].eventUs <= timeUs) {
+            mode = trace.displayModes[modeIndex++].displayMode;
+        }
+        return mode;
+    };
+    while (next < scheduled.size() || !queue.empty()) {
+        const uint64_t vblankUs = vblankAt(vblank);
+        while (next < scheduled.size() && scheduled[next].readyUs <= vblankUs) {
+            admit(queue, next++);
+            skipUnready();
+        }
+        const bool fifo = modeAt(vblankUs) == FrameLimitedMode;
+        // The frames rendered in time for this V-blank lead the queue
+        size_t rendered = 0;
+        while (rendered < queue.size() && dueUs(queue[rendered]) <= vblankUs) {
+            rendered++;
+        }
+        if (rendered != 0) {
+            if (!fifo) {
+                while (--rendered != 0) {
+                    drop(queue);
+                }
+            }
+            outcomes[queue.front()].shownUs = vblankUs;
+            queue.pop_front();
+        }
+        if (!queue.empty()) {
+            vblank++;
+        }
+        else if (next < scheduled.size()) {
+            vblank = std::max(vblank + 1, indexAtOrAfter(double(dueUs(next))));
+        }
+    }
+    return outcomes;
+}
+
 struct Metrics {
     uint64_t frames = 0;
     uint64_t paced = 0;
@@ -1082,8 +1284,12 @@ inline ScenarioResult runScenario(const Trace& trace, const std::vector<bool>& r
     result.metrics.phases = phases;
     const double periodUs = settings.displayHz > 0 ? 1000000.0 / settings.displayHz : 0;
     for (int phase = 0; phase < phases; phase++) {
+        // Moonlight's own pacer only differs from showing frames as they
+        // come on a fixed grid
         std::vector<Outcome> outcomes =
-            present(trace.scheduled, replayed, settings, periodUs * phase / phases, &result.metrics.phaseWraps);
+            settings.stock && grid
+                ? presentStock(trace, settings, periodUs * phase / phases)
+                : present(trace.scheduled, replayed, settings, periodUs * phase / phases, &result.metrics.phaseWraps);
         score(trace.scheduled, repeats, replayed, outcomes, result.metrics);
         if (phase == 0) {
             result.outcomes = std::move(outcomes);
@@ -1095,7 +1301,9 @@ inline ScenarioResult runScenario(const Trace& trace, const std::vector<bool>& r
 inline QJsonObject settingsJson(const Settings& settings)
 {
     QJsonObject object;
-    object[QStringLiteral("pacing")] = settings.pacing ? QStringLiteral("timestamp") : QStringLiteral("off");
+    object[QStringLiteral("pacing")] = settings.pacing ? QStringLiteral("timestamp")
+                                       : settings.stock ? QStringLiteral("stock")
+                                                        : QStringLiteral("off");
     if (settings.pacing) {
         object[QStringLiteral("smoothing")] = smoothingName(settings.options.smoothing);
         object[QStringLiteral("target_per_mille")] = settings.options.targetPerMille;

@@ -304,8 +304,9 @@ Compressed and plain CSV traces both work, including those expanded by
     counts and the first mismatch.
   - A capture recorded under an older policy reports which field diverged
     first. Its results are exploratory, not a strict A/B.
-- **Scenarios.** Every run scores `session-policy` (the capture's settings)
-  and `pacing-off` (each frame shown once rendered). `--config` adds named
+- **Scenarios.** Every run scores `session-policy` (the capture's settings),
+  `pacing-off` (each frame shown once rendered) and `pacing-stock`
+  (Moonlight's own pacer, the baseline timestamp pacing replaces). `--config` adds named
   scenarios, and `--set KEY=VALUE` adds one called `candidate`. Each starts
   from the session's settings. The keys (`--help` lists them):
   - pacing, smoothing, target_per_mille, min_buffer_ms and max_buffer_ms
@@ -327,8 +328,20 @@ Compressed and plain CSV traces both work, including those expanded by
     before replaces it (mailbox). The model is averaged over grid phases.
   - **VRR:** a frame is shown at max(target, ready + render), no sooner than
     one refresh after the previous one.
+  - **Stock** (`pacing: stock`, fixed refresh only; on VRR it is `off`):
+    Moonlight's own pacer, which `off` is not. `off` shows only the newest
+    frame at each V-blank, so two frames due at one V-blank always cost a
+    skip; the pacer's queues often show both a refresh apart instead, for a
+    refresh of latency. With a V-sync source (the trace has `vsync` rows) it
+    follows `Pacer::handleVsync`: one queued frame per V-blank, waiting up to
+    a refresh less 3 ms for one, dropping only to catch up after half a
+    second of a deeper queue. Without one (Gamescope), it follows the
+    recorded display mode: under a frame limit (FIFO) every frame takes its
+    own refresh in order, otherwise the newest ready frame is shown. The
+    queue bound is the pacer's three frames, without the swapchain's.
   - **Not modeled:** the release thread, learned margins, late shift,
-    Gamescope frame limits, the display-mode probe, GPU or compositor. So
+    Gamescope frame limits (outside the stock model), the display-mode
+    probe, GPU or compositor. So
     the scores rank policies on one capture; they don't predict display
     timing. On the 2026-10-08 Deck captures, modeled jerk over 2 ms matched
     the recorded display reports on two captures and ran 2–5x low on

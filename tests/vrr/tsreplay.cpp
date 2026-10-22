@@ -44,7 +44,7 @@ void printHelp()
         "  --help                    Shows this\n"
         "\n"
         "Scenario keys (each scenario starts from the session's settings):\n"
-        "  pacing            timestamp | off\n"
+        "  pacing            timestamp | off | stock (Moonlight's own pacer)\n"
         "  smoothing         off | light | standard\n"
         "  target_per_mille  900-999\n"
         "  min_buffer_ms     0-20\n"
@@ -58,8 +58,9 @@ void printHelp()
         "                    frame's recorded lead as the pacer gives it (default);\n"
         "                    0 sizes the buffer from readiness alone\n"
         "\n"
-        "Every run scores \"session-policy\" (the capture's settings) and\n"
-        "\"pacing-off\" (each frame shown once rendered).\n"
+        "Every run scores \"session-policy\" (the capture's settings),\n"
+        "\"pacing-off\" (each frame shown once rendered) and \"pacing-stock\"\n"
+        "(Moonlight's own pacer).\n"
         "\n"
         "Exit codes: 0 success, 1 error, 2 exact baseline required but not met.\n");
 }
@@ -229,6 +230,10 @@ int main(int argc, char** argv)
     off.name = QStringLiteral("pacing-off");
     off.pacing = false;
     scenarios.push_back(off);
+    TsReplay::Settings stock = off;
+    stock.name = QStringLiteral("pacing-stock");
+    stock.stock = true;
+    scenarios.push_back(stock);
     if (!configPath.isEmpty()) {
         QJsonObject config;
         if (!readJson(configPath, config, error) ||

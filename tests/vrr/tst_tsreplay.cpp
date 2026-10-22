@@ -299,6 +299,84 @@ private slots:
         QCOMPARE(result.metrics.longSourceIntervals, uint64_t(0));
     }
 
+    // Under a Gamescope frame limit (FIFO), Moonlight's own pacer shows the
+    // late frame and every one after it a refresh later instead of skipping
+    // one; showing the newest frame instead, it is the "off" model
+    void stockFifoQueuesALateFrame()
+    {
+        TsReplay::Trace trace = steadyTrace(240);
+        trace.scheduled[150].readyUs += 14000;
+        TsReplay::Row limited;
+        limited.event = "display_mode";
+        limited.displayMode = TsReplay::FrameLimitedMode;
+        trace.displayModes.push_back(limited);
+        const std::vector<bool> repeats = TsReplay::hostRepeats(trace.scheduled);
+        TsReplay::Settings stock = fixedSettings(trace);
+        stock.pacing = false;
+        stock.stock = true;
+        stock.phases = 1;
+        const TsReplay::ScenarioResult fifo = TsReplay::runScenario(trace, repeats, stock);
+        QCOMPARE(fifo.metrics.skipped, uint64_t(0));
+        QCOMPARE(fifo.outcomes[151].shownUs - fifo.outcomes[150].shownUs, uint64_t(16667));
+        const double before = double(fifo.outcomes[100].shownUs - trace.scheduled[100].readyUs);
+        const double after = double(fifo.outcomes[200].shownUs - trace.scheduled[200].readyUs);
+        QVERIFY(std::fabs(after - before - 16667) <= 100);
+
+        trace.displayModes.front().displayMode = 1;
+        TsReplay::Settings off = stock;
+        off.stock = false;
+        const TsReplay::ScenarioResult newest = TsReplay::runScenario(trace, repeats, stock);
+        const TsReplay::ScenarioResult plain = TsReplay::runScenario(trace, repeats, off);
+        QVERIFY(newest.metrics.skipped >= 1);
+        for (size_t i = 0; i < trace.scheduled.size(); i++) {
+            QCOMPARE(newest.outcomes[i].skipped, plain.outcomes[i].skipped);
+            if (!plain.outcomes[i].skipped) {
+                QCOMPARE(newest.outcomes[i].shownUs, plain.outcomes[i].shownUs);
+            }
+        }
+    }
+
+    // With a V-sync source, as Pacer::handleVsync: a late frame costs a
+    // refresh of latency rather than a skip, and a burst after a stall is
+    // trimmed to three queued frames at once and to one after half a second
+    // of a deeper queue, where it stays
+    void stockVsyncPacerCatchesUpOnlyAfterHalfASecond()
+    {
+        TsReplay::Trace trace = steadyTrace(400);
+        trace.vsyncs = 1;
+        trace.scheduled[150].readyUs += 14000;
+        const std::vector<bool> repeats = TsReplay::hostRepeats(trace.scheduled);
+        TsReplay::Settings stock = fixedSettings(trace);
+        stock.pacing = false;
+        stock.stock = true;
+        stock.phases = 1;
+        const TsReplay::ScenarioResult late = TsReplay::runScenario(trace, repeats, stock);
+        QCOMPARE(late.metrics.skipped, uint64_t(0));
+        const auto delay = [&](const TsReplay::ScenarioResult& result, size_t i) {
+            return double(result.outcomes[i].shownUs) - double(trace.scheduled[i].readyUs);
+        };
+        QVERIFY(std::fabs(delay(late, 200) - delay(late, 100) - 16667) <= 100);
+
+        // Frames 250-253 held up until frame 254 arrives. Frames normally
+        // arrive between V-blanks and are handed over as they come, so
+        // nothing is queued at a V-blank.
+        trace.scheduled[150].readyUs -= 14000;
+        for (size_t i = 250; i < 254; i++) {
+            trace.scheduled[i].readyUs = trace.scheduled[254].readyUs - (254 - i) * 10;
+        }
+        const TsReplay::ScenarioResult burst = TsReplay::runScenario(trace, repeats, stock);
+        QVERIFY(std::fabs(delay(burst, 200) - delay(late, 100)) <= 100);
+        // Frame 250 is handed over as it arrives, and the queue's bound of
+        // three drops 251
+        QVERIFY(!burst.outcomes[250].skipped);
+        QVERIFY(burst.outcomes[251].skipped);
+        // Three frames queued at every V-blank for half a second
+        QVERIFY(std::fabs(delay(burst, 270) - delay(burst, 200) - 3 * 16667) <= 100);
+        // Then the queue drops to one, which stays: a refresh of latency
+        QCOMPARE(burst.metrics.skipped, uint64_t(3));
+        QVERIFY(std::fabs(delay(burst, 350) - delay(burst, 200) - 16667) <= 100);
+    }
+
     // VRR shows a frame no sooner than one refresh after the previous one
     void vrrRespectsTheRefreshFloor()
     {
