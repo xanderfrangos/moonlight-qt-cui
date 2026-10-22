@@ -216,6 +216,15 @@ public:
         m_Stats.currentUs = m_Stats.targetUs;
         m_ReleaseFraction = 0;
     }
+    // A ready-successor replacement at the display ceiling is a visible step
+    // anyway. Take any pending release with it: released protection cannot
+    // reach the screen there except through a replaced frame.
+    void takePendingRelease() {
+        if (!m_Stats.initialized || m_Stats.targetUs >= m_Stats.currentUs) return;
+        m_Stats.currentUs = m_Stats.targetUs;
+        ++m_Stats.lowers;
+        m_ReleaseFraction = 0;
+    }
     // Applied protection is a local duration. Only movement of the actual
     // producer mapping changes that duration; drift normalization of retained
     // evidence is not another movement of the playback deadline.
@@ -234,8 +243,8 @@ public:
     }
     // Selecting a layer restores its learned buffer, but only a substantial
     // increase may jump. A decrease keeps the applied buffer and its learned
-    // destination while normal release drains it. Recorded policy 9 instead
-    // spends at most T per fresh source frame.
+    // destination. Policies 9 and 11 drain it by at most T per fresh source
+    // frame; recorded policy 10 drains it at the ordinary release law.
     void transitionFrom(uint64_t previousUs) {
         if (m_HitchMissesOnly < 9) return;
         const uint64_t learnedUs = m_Stats.currentUs;
@@ -406,7 +415,7 @@ public:
         // Only an explicitly new, empty rate layer may reacquire rapidly.
         // Its fixed eligible-input budget and original profile-window deadline
         // survive phase breaks; invalid callbacks cannot rearm either bound.
-        const bool freshLearningAttack = m_HitchMissesOnly == 10 && m_Learning &&
+        const bool freshLearningAttack = m_HitchMissesOnly >= 10 && m_Learning &&
             m_ReacquisitionRemaining && observationUs < m_ReacquisitionUntilUs;
         if ((m_HitchMissesOnly < 7 || freshLearningAttack) &&
                 (m_Learning || m_HitchMissesOnly >= 2) &&
@@ -864,7 +873,10 @@ private:
         }
         if (direction < 0 && m_RateDropDrain &&
             m_Stats.currentUs - m_Stats.targetUs > m_Stats.toleranceUs) m_RateDropFastDrain = true;
-        if (direction < 0 && m_HitchMissesOnly == 9 && fastLayerDrain()) {
+        // A rate drop that moves the mapping later leaves the old protection
+        // on top of it. Recorded policy 10 drained that at the release law
+        // for 25-30 s; policy 11 restores policy 9's T-per-frame drain.
+        if (direction < 0 && (m_HitchMissesOnly == 9 || m_HitchMissesOnly >= 11) && fastLayerDrain()) {
             const uint64_t movement = std::min(m_LayerDrainStepRemainingUs,
                 m_Stats.currentUs - m_Stats.targetUs);
             m_LayerDrainStepRemainingUs -= movement;

@@ -1,10 +1,9 @@
 include(pacingworker.pro)
 TARGET = vrrworkerreplay
 DEFINES += VRR_WORKER_REPLAY
-# VRR_WORKER_REPLAY adds members to VrrPacingWorker. The other projects in
-# this directory compile the same worker source without it, so keep these
-# objects apart or a test can link an object built for the other layout.
-CONFIG(debug, debug|release): OBJECTS_DIR = debug/workerreplay
-else: OBJECTS_DIR = release/workerreplay
+# Replay adds members to VrrPacingWorker. Sharing its objects with the normal
+# worker tests links incompatible class layouts in the ordered subdirs build.
+CONFIG(debug, debug|release): OBJECTS_DIR = $$OUT_PWD/workerreplay-obj/debug
+else: OBJECTS_DIR = $$OUT_PWD/workerreplay-obj/release
 SOURCES -= $$PWD/tst_vrrpacingworker.cpp
 SOURCES += $$PWD/vrrworkerreplay.cpp $$PWD/vrrreplayconfig.cpp

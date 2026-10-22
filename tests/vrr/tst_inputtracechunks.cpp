@@ -101,7 +101,9 @@ static std::vector<Sample> run(const QJsonObject& fixture,bool validate) {
 }
 int main(int argc,char** argv) {
  QCoreApplication app(argc,argv);
- const QString path=argc>1?QString::fromLocal8Bit(argv[1]):QStringLiteral(INPUT_TRACE_FIXTURE);
+ // Embed the default recording so shadow builds and relocated executables do
+ // not depend on the compiler's relative __FILE__ path or working directory.
+ const QString path=argc>1?QString::fromLocal8Bit(argv[1]):QStringLiteral(":/inputtracechunks/buffer-drain.json.qz");
  QFile f(path);if(!f.open(QIODevice::ReadOnly)){std::fprintf(stderr,"cannot read fixture: %s\n",qPrintable(f.errorString()));return 2;}
  QJsonParseError error;const auto doc=QJsonDocument::fromJson(qUncompress(f.readAll()),&error);if(error.error!=QJsonParseError::NoError)return 2;
  const auto fixture=doc.object();
