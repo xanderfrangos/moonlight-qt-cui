@@ -11,16 +11,21 @@ using namespace TimestampPacing;
 
 namespace {
 int failures = 0;
+// Which run of a policy contract is checking, for its failures
+const char* context = "";
 
 void check(bool condition, const char* description)
 {
     if (!condition) {
-        std::fprintf(stderr, "FAIL: %s\n", description);
+        std::fprintf(stderr, "FAIL: %s%s\n", context, description);
         ++failures;
     }
 }
 
-TimestampPacingOptions options(int smoothing, int targetPerMille = 990, int minMs = 2, int maxMs = 16)
+// The buffer bounds default to what a new install ships with
+TimestampPacingOptions options(int smoothing, int targetPerMille = TimestampPacingOptions().targetPerMille,
+                               int minMs = TimestampPacingOptions().minBufferMs,
+                               int maxMs = TimestampPacingOptions().maxBufferMs)
 {
     TimestampPacingOptions o;
     o.enabled = true;
@@ -116,11 +121,11 @@ void smoothingRemovesStampNoise()
     }
 }
 
-void bufferCoversArrivalJitter()
+void bufferCoversArrivalJitter(int smoothing)
 {
     std::mt19937 random(1);
     std::uniform_real_distribution<double> jitter(0, 5000);
-    Stream stream(options(2), 60);
+    Stream stream(options(smoothing), 60);
     for (int i = 0; i < 600; i++) {
         stream.next(1000000.0 / 60, 0, jitter(random));
     }
@@ -133,22 +138,22 @@ void bufferCoversArrivalJitter()
     }
     check(onTime * 100 >= (stream.decisions.size() - 300) * 98, "almost every frame is ready by its target");
 
-    Stream wild(options(2, 990, 2, 16), 60);
+    Stream wild(options(smoothing, 990, 2, 16), 60);
     for (int i = 0; i < 600; i++) {
         wild.next(1000000.0 / 60, 0, i % 3 == 0 ? 40000 : 0);
     }
     check(wild.policy.bufferUs() == 16000, "the buffer stops at its maximum");
 
-    Stream clean(options(2, 990, 3, 16), 60);
+    Stream clean(options(smoothing, 990, 3, 16), 60);
     for (int i = 0; i < 600; i++) {
         clean.next(1000000.0 / 60);
     }
     check(clean.policy.bufferUs() == 3000, "a clean stream holds the minimum buffer");
 }
 
-void bufferReleasesSlowly()
+void bufferReleasesSlowly(int smoothing)
 {
-    Stream stream(options(2), 60);
+    Stream stream(options(smoothing), 60);
     for (int i = 0; i < 300; i++) {
         stream.next(1000000.0 / 60, 0, i % 2 ? 8000 : 0);
     }
@@ -165,11 +170,11 @@ void bufferReleasesSlowly()
 
 // The window minimum steps when an early arrival leaves the window. Targets
 // follow it at a bounded rate instead of jumping with it.
-void baselineSlewsInsteadOfStepping()
+void baselineSlewsInsteadOfStepping(int smoothing)
 {
     const double periodUs = 1000000.0 / 60;
     // A fixed 2 ms buffer, so only the baseline moves the targets
-    Stream stream(options(2, 990, 2, 2), 60);
+    Stream stream(options(smoothing, 990, 2, 2), 60);
     for (int i = 0; i < 600; i++) {
         stream.next(periodUs, 0, i % 30 == 0 ? 0 : 3000);
     }
@@ -185,7 +190,7 @@ void baselineSlewsInsteadOfStepping()
     check(std::fabs(stream.policy.baselineUs() - beforeUs - 3000) < 50, "and moves by all of the step");
 
     // At the start, an earlier arrival is adopted at once
-    Stream start(options(2), 60);
+    Stream start(options(smoothing), 60);
     start.next(periodUs, 0, 6000);
     for (int i = 0; i < 10; i++) {
         start.next(periodUs);
@@ -206,12 +211,12 @@ double targetOffsetUs(const Stream& stream, const Policy::Decision& decision)
 // target covers doesn't change, so neither does the target. Measured as a
 // delay above the minimum, the step up overshot the target by most of the
 // step for several seconds.
-void earlyArrivalDoesntMoveTarget()
+void earlyArrivalDoesntMoveTarget(int smoothing)
 {
     const double periodUs = 1000000.0 / 60;
     std::mt19937 random(3);
     std::uniform_real_distribution<double> jitter(3000, 6000);
-    Stream stream(options(0), 60);
+    Stream stream(options(smoothing), 60);
     for (int i = 0; i < 600; i++) {
         stream.next(periodUs, 0, jitter(random));
     }
@@ -234,12 +239,12 @@ void earlyArrivalDoesntMoveTarget()
 // arrivals, so it holds until the later ones leave it, then releases at the
 // buffer's release rate. (Measured from the minimum, it followed the
 // baseline down within about a second and a half instead.)
-void earlierArrivalsAreReleased()
+void earlierArrivalsAreReleased(int smoothing)
 {
     const double periodUs = 1000000.0 / 60;
     std::mt19937 random(4);
     std::uniform_real_distribution<double> jitter(0, 2000);
-    Stream stream(options(0), 60);
+    Stream stream(options(smoothing), 60);
     for (int i = 0; i < 600; i++) {
         stream.next(periodUs, 0, 3000 + jitter(random));
     }
@@ -261,12 +266,12 @@ void earlierArrivalsAreReleased()
 // the buffer covers readiness plus the lead. A steady lead moves every target
 // by itself and leaves the buffer as it was; a lead that varies is buffered
 // like arrival jitter.
-void bufferCoversRenderLead()
+void bufferCoversRenderLead(int smoothing)
 {
     const double periodUs = 1000000.0 / 60;
     std::mt19937 random(5);
     std::uniform_real_distribution<double> jitter(0, 3000);
-    Stream plain(options(0), 60), led(options(0), 60);
+    Stream plain(options(smoothing), 60), led(options(smoothing), 60);
     for (int i = 0; i < 600; i++) {
         const double arrivalUs = jitter(random);
         plain.next(periodUs, 0, arrivalUs);
@@ -276,7 +281,7 @@ void bufferCoversRenderLead()
           "a steady render lead moves the target by itself");
     check(std::fabs(led.policy.bufferUs() - plain.policy.bufferUs()) < 1, "and leaves the buffer as it was");
 
-    Stream varying(options(0), 60);
+    Stream varying(options(smoothing), 60);
     size_t onTime = 0;
     for (int i = 0; i < 600; i++) {
         const uint64_t leadUs = uint64_t(1000 + jitter(random));
@@ -289,10 +294,10 @@ void bufferCoversRenderLead()
 // A delivery stall: 150 ms without frames, then the ones held up arrive
 // together. Without leaving most of them out, this one stall would hold the
 // buffer at its maximum for half a minute.
-void deliveryStallsDontGrowBuffer()
+void deliveryStallsDontGrowBuffer(int smoothing)
 {
     const double periodUs = 1000000.0 / 60;
-    Stream stream(options(2), 60);
+    Stream stream(options(smoothing), 60);
     for (int i = 0; i < 600; i++) {
         check(stream.next(periodUs).admitted || i == 0, "steady frames size the buffer");
     }
@@ -310,11 +315,11 @@ void deliveryStallsDontGrowBuffer()
 // A decoder that can't keep up: every frame waits longer than a period to
 // enter it. The lateness that follows grows the buffer no matter how large
 // it gets, so it is left out, and the buffer releases again.
-void overloadDoesntGrowBuffer()
+void overloadDoesntGrowBuffer(int smoothing)
 {
     const double periodUs = 1000000.0 / 60;
     for (const bool queueReported : { false, true }) {
-        Stream stream(options(2), 60);
+        Stream stream(options(smoothing), 60);
         for (int i = 0; i < 300; i++) {
             stream.next(periodUs);
         }
@@ -330,9 +335,9 @@ void overloadDoesntGrowBuffer()
     }
 }
 
-void repeatsAreShownOnArrival()
+void repeatsAreShownOnArrival(int smoothing)
 {
-    Stream stream(options(2), 60);
+    Stream stream(options(smoothing), 60);
     for (int i = 0; i < 60; i++) {
         stream.next(1000000.0 / 60);
     }
@@ -341,7 +346,7 @@ void repeatsAreShownOnArrival()
     const auto real = stream.next(1000000.0 / 60);
     check(real.paced && !real.repeat, "the next real frame is paced again");
 
-    Stream silent(options(2), 60);
+    Stream silent(options(smoothing), 60);
     for (int i = 0; i < 60; i++) {
         const auto decision = silent.next(1000000.0 / 60, 0, 0, 0);
         check(decision.paced, "a host that never reports latency still has every frame paced");
@@ -406,9 +411,9 @@ void staticScreenDoesntDelayResume()
     check(!brief.next(periodUs).restarted, "a brief unreported run doesn't restart the timeline");
 }
 
-void followsRateChanges()
+void followsRateChanges(int smoothing)
 {
-    Stream stream(options(2), 110);
+    Stream stream(options(smoothing), 110);
     for (int i = 0; i < 300; i++) {
         stream.next(1000000.0 / 110);
     }
@@ -424,9 +429,9 @@ void followsRateChanges()
 // A game that slows down for a moment and recovers: the smoother must pick
 // the usual cadence straight back up rather than re-anchoring frame after
 // frame until its loop catches up, which would show raw timestamp noise.
-void recoversFromSlowdown()
+void recoversFromSlowdown(int smoothing)
 {
-    Stream stream(options(2), 110);
+    Stream stream(options(smoothing), 110);
     for (int i = 0; i < 1500; i++) {
         stream.next(1000000.0 / 110);
     }
@@ -446,15 +451,15 @@ void recoversFromSlowdown()
           "a brief slowdown leaves the period where it was");
 }
 
-void survivesWrapAndRestart()
+void survivesWrapAndRestart(int smoothing)
 {
-    Stream wrap(options(2), 60, UINT32_MAX - 3000);
+    Stream wrap(options(smoothing), 60, UINT32_MAX - 3000);
     for (int i = 0; i < 300; i++) {
         wrap.next(1000000.0 / 60);
     }
     check(percentile(targetJerk(wrap.decisions, 280), 100) < 50, "RTP wrap continues the timeline");
 
-    Stream backwards(options(2), 60);
+    Stream backwards(options(smoothing), 60);
     for (int i = 0; i < 100; i++) {
         backwards.next(1000000.0 / 60);
     }
@@ -845,20 +850,40 @@ void lateShiftNeedsConfirmedMisses()
 
 int main()
 {
+    // Each policy contract runs at the smoothing it was written against, then
+    // again at the one a new install ships with. Most were written before
+    // Light became the default, so the default otherwise had little coverage.
+    const struct {
+        void (*run)(int smoothing);
+        int smoothing;
+    } policyContracts[] = {
+        { bufferCoversArrivalJitter, 2 },
+        { bufferReleasesSlowly, 2 },
+        { baselineSlewsInsteadOfStepping, 2 },
+        { earlyArrivalDoesntMoveTarget, 0 },
+        { earlierArrivalsAreReleased, 0 },
+        { bufferCoversRenderLead, 0 },
+        { deliveryStallsDontGrowBuffer, 2 },
+        { overloadDoesntGrowBuffer, 2 },
+        { repeatsAreShownOnArrival, 2 },
+        { followsRateChanges, 2 },
+        { recoversFromSlowdown, 2 },
+        { survivesWrapAndRestart, 2 },
+    };
+    const int shipping = TimestampPacingOptions().smoothing;
+    for (const auto& contract : policyContracts) {
+        context = "";
+        contract.run(contract.smoothing);
+        if (contract.smoothing != shipping) {
+            context = "(shipping default) ";
+            contract.run(shipping);
+        }
+    }
+    context = "";
+
+    // These already run at every level, or at Light
     smoothingRemovesStampNoise();
-    bufferCoversArrivalJitter();
-    bufferReleasesSlowly();
-    baselineSlewsInsteadOfStepping();
-    earlyArrivalDoesntMoveTarget();
-    earlierArrivalsAreReleased();
-    bufferCoversRenderLead();
-    deliveryStallsDontGrowBuffer();
-    overloadDoesntGrowBuffer();
-    repeatsAreShownOnArrival();
     staticScreenDoesntDelayResume();
-    followsRateChanges();
-    recoversFromSlowdown();
-    survivesWrapAndRestart();
     vblankGridFollowsWakeups();
     phaseLockAvoidsBoundaryFlicker();
     phaseLockDoesntChatterUnderSlowDrift();

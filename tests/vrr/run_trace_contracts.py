@@ -23,6 +23,8 @@ REQUIRED_TESTS = {
     "tst_vrrcacheidentity", "tst_overlay", "tst_performancestats",
     "tst_incomingframetiming", "tst_presentationclock", "tst_dxgipresent",
     "tst_vrrrenderpolicy", "tst_d3d11bindpolicy", "tst_vrrdiagnostics",
+    # Timestamp pacing
+    "tst_timestamppacing", "tst_timestamptrace", "tst_tsreplay",
 }
 QT_TESTS = {"tst_vrrratepolicy", "tst_vrrreplayconfig", "tst_vrrdiagnostics"}
 READINESS_FIXTURES = ("ready", "unverified", "waited", "retried")
