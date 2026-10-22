@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "description": "Frame-limit (FIFO) hold: replacing a frame that lost its refresh (hold 0, the behaviour before 2026-10-22) against holding it a refresh, at each smoothing level's limit (Light 1 s, Standard 2 s).",
+  "scenarios": [
+    {"name": "light-replace", "smoothing": "light", "hold_ms": 0},
+    {"name": "light-hold", "smoothing": "light", "hold_ms": "level"},
+    {"name": "standard-replace", "smoothing": "standard", "hold_ms": 0},
+    {"name": "standard-hold", "smoothing": "standard", "hold_ms": "level"}
+  ]
+}

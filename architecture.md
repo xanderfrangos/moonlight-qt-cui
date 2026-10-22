@@ -6871,8 +6871,18 @@ Gamescope's Xwayland, where there is no V-sync source. Under Gamescope
   only works among frames waiting together, and nearly every frame under
   Gamescope is ready after its target and released at once, so under a
   frame limit `vblankForLocked()` also moves a frame whose V-blank an
-  earlier release already took to the next V-blank. A newer frame due by
-  then replaces it. The phase lock still learns from the V-blank the target
+  earlier release already took to the next V-blank. Until 2026-10-22 a
+  newer frame due by then replaced it. Since then
+  `TimestampPacer::holdsFrontLocked()` keeps it, and the frames behind it
+  follow a refresh late, until the plan leaves a refresh empty, a frame
+  would be two refreshes late, or the hold reaches
+  `TimestampPacingOptions::fifoHoldLimitUs()` (Light 1 s, Standard 2 s,
+  Off 0: always replace); the frame is then replaced as before, which gives
+  the refresh back. Released rows record `postponed_refreshes` and
+  `hold_us`. tsreplay models it (`hold_ms`); on four Deck captures it cut
+  jerks over 2 ms by 11–42% for 0.35–4.3 ms more mean delay (see
+  [the testing notes](docs/gamescope-timestamp-pacing-testing.md), "Frame-limit
+  hold"). The phase lock still learns from the V-blank the target
   falls on. Gamescope doesn't publish the limit itself, so a limit below
   the refresh rate is measured from display intervals and the grid spaced
   to it (see "Frame limit period" below); until then it queues. Entering

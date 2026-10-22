@@ -57,6 +57,9 @@ void printHelp()
         "  buffer_lead_us    render lead given to the policy, or \"recorded\" for each\n"
         "                    frame's recorded lead as the pacer gives it (default);\n"
         "                    0 sizes the buffer from readiness alone\n"
+        "  hold_ms           under a frame limit, how long a refresh of delay may be\n"
+        "                    held instead of replacing a frame, or \"level\" for the\n"
+        "                    smoothing level's (default; 0 replaces, as before)\n"
         "\n"
         "Every run scores \"session-policy\" (the capture's settings),\n"
         "\"pacing-off\" (each frame shown once rendered) and \"pacing-stock\"\n"
@@ -99,7 +102,7 @@ bool writeTimeline(const QString& path, const TsReplay::Trace& trace,
         return false;
     }
     file.write("scenario,sequence,frame,rtp_valid,rtp_timestamp,ready_us,paced,target_us,buffer_us,"
-               "planned_us,shown_us,late,missed_plan,skipped,delay_us\n");
+               "planned_us,shown_us,late,missed_plan,skipped,delay_us,held\n");
     for (const TsReplay::ScenarioResult& result : results) {
         const QByteArray name = result.settings.name.toUtf8();
         for (size_t i = 0; i < trace.scheduled.size(); i++) {
@@ -123,6 +126,7 @@ bool writeTimeline(const QString& path, const TsReplay::Trace& trace,
             line += outcome.missedPlan ? ",1" : ",0";
             line += outcome.skipped ? ",1" : ",0";
             line += ',' + QByteArray::number(outcome.skipped ? 0 : qlonglong(outcome.shownUs) - qlonglong(row.readyUs));
+            line += outcome.held ? ",1" : ",0";
             line += '\n';
             file.write(line);
         }
@@ -139,13 +143,13 @@ double number(const QJsonObject& object, const char* path)
 
 void printTable(const QJsonArray& scenarios)
 {
-    std::printf("\n%-24s %9s %9s %9s %9s %9s %9s %9s %9s %9s\n", "scenario", "jerk>2ms", "jerk p99", "resid>2ms",
-                "late", "missed", "skipped", "delay", "delay p95", "wraps");
-    std::printf("%-24s %9s %9s %9s %9s %9s %9s %9s %9s %9s\n", "", "per mille", "ms", "per mille", "per mille",
-                "per mille", "per mille", "mean ms", "ms", "per phase");
+    std::printf("\n%-24s %9s %9s %9s %9s %9s %9s %9s %9s %9s %9s\n", "scenario", "jerk>2ms", "jerk p99", "resid>2ms",
+                "late", "missed", "skipped", "held", "delay", "delay p95", "wraps");
+    std::printf("%-24s %9s %9s %9s %9s %9s %9s %9s %9s %9s %9s\n", "", "per mille", "ms", "per mille", "per mille",
+                "per mille", "per mille", "per mille", "mean ms", "ms", "per phase");
     for (const QJsonValue& value : scenarios) {
         const QJsonObject scenario = value.toObject();
-        std::printf("%-24s %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f\n",
+        std::printf("%-24s %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f\n",
                     scenario.value(QStringLiteral("name")).toString().toUtf8().constData(),
                     number(scenario, "presented_jerk_over_2ms_per_mille"),
                     number(scenario, "presented_jerk_us/p99") / 1000.0,
@@ -153,6 +157,7 @@ void printTable(const QJsonArray& scenarios)
                     number(scenario, "late_per_mille"),
                     number(scenario, "missed_plan_per_mille"),
                     number(scenario, "skipped_per_mille"),
+                    number(scenario, "held_per_mille"),
                     number(scenario, "delay_us/mean") / 1000.0,
                     number(scenario, "delay_us/p95") / 1000.0,
                     number(scenario, "phase_wraps_per_phase"));

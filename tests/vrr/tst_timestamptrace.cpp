@@ -70,6 +70,130 @@ QByteArray readAll(const QString& path)
     return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
 }
 
+// Sleeps most of the way so the pacer's own thread isn't crowded out
+void spinUntil(uint64_t atUs)
+{
+    while (LiGetMicroseconds() + 2000 < atUs) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    while (LiGetMicroseconds() < atUs) {
+        std::this_thread::yield();
+    }
+}
+
+// What a frame-limited (FIFO) stream's trace says about holds
+struct FifoRun {
+    int released = 0;
+    int superseded = 0;
+    int postponed = 0;
+    uint32_t mostPostponed = 0;
+    uint64_t longestHoldUs = 0;
+};
+
+// Streams sourceFps frames for seconds to a pacer on a 90 Hz Gamescope frame
+// limit, whose display shows one presented frame at each refresh, and reads
+// the released and superseded rows from its trace
+FifoRun runFifoStream(int smoothing, double sourceFps, int seconds, const QString& directory)
+{
+    constexpr uint64_t refreshUs = 11111;
+    constexpr uint64_t latchUs = 4000;
+    constexpr uint64_t renderUs = 1500;
+    qputenv("MOONLIGHT_VRR_TRACE", (directory + QStringLiteral("/Moonlight.vrrtrace")).toUtf8());
+
+    PacerTelemetry telemetry;
+    TimestampPacer* pacer = nullptr;
+    std::mutex fifoLock;
+    std::deque<uint64_t> fifo;
+    TimestampPacer::Callbacks callbacks;
+    callbacks.release = [&](AVFrame* frame) {
+        const uint64_t startUs = LiGetMicroseconds();
+        av_frame_free(&frame);
+        pacer->notePresented(startUs, startUs + renderUs, 0, 0, false, 0);
+        std::lock_guard<std::mutex> lock(fifoLock);
+        fifo.push_back(startUs + renderUs);
+    };
+    callbacks.drop = [](AVFrame* frame, bool) {
+        av_frame_free(&frame);
+    };
+
+    TimestampPacingOptions options;
+    options.enabled = true;
+    options.smoothing = smoothing;
+    options.vsyncMarginUs = TimestampPacingOptions::GamescopeVsyncMarginUs;
+    {
+        TimestampPacer timestampPacer(options, 90, 90, true, false, &telemetry, callbacks);
+        pacer = &timestampPacer;
+        timestampPacer.setDisplayModeProbe([] {
+            return TimestampPacer::CompositorState { TimestampPacer::DisplayMode::FrameLimited, 90 };
+        });
+        if (!timestampPacer.start()) {
+            return {};
+        }
+
+        std::atomic_bool stopDisplay { false };
+        std::thread display([&] {
+            uint64_t vblankUs = LiGetMicroseconds();
+            while (!stopDisplay.load()) {
+                vblankUs += refreshUs;
+                spinUntil(vblankUs);
+                bool show = false;
+                {
+                    std::lock_guard<std::mutex> lock(fifoLock);
+                    if (!fifo.empty() && fifo.front() + latchUs <= vblankUs) {
+                        fifo.pop_front();
+                        show = true;
+                    }
+                }
+                if (show) {
+                    timestampPacer.onDisplayEvent(vblankUs, refreshUs);
+                }
+            }
+        });
+
+        const double periodUs = 1000000.0 / sourceFps;
+        const uint64_t startUs = LiGetMicroseconds();
+        for (int i = 1; i <= int(seconds * sourceFps); i++) {
+            const uint64_t sendUs = startUs + uint64_t(std::llround(i * periodUs));
+            spinUntil(sendUs);
+            AVFrame* frame = av_frame_alloc();
+            PacedFrame paced(frame, i, uint32_t(std::llround(i * periodUs * 9 / 100)), true, LiGetMicroseconds());
+            paced.setHostLatencyUs(3000);
+            timestampPacer.submit(std::move(paced));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        timestampPacer.stop();
+        stopDisplay.store(true);
+        display.join();
+    }
+    qunsetenv("MOONLIGHT_VRR_TRACE");
+
+    FifoRun run;
+    QList<QByteArray> lines = decode(directory + QStringLiteral("/Moonlight.tstrace")).split('\n');
+    if (lines.size() < 3) {
+        return run;
+    }
+    const QList<QByteArray> names = lines.first().split(',');
+    const qsizetype postponed = names.indexOf("postponed_refreshes");
+    const qsizetype hold = names.indexOf("hold_us");
+    for (qsizetype i = 1; i + 1 < lines.size(); i++) {
+        const QList<QByteArray> fields = lines[i].split(',');
+        if (fields.size() != names.size()) {
+            continue;
+        }
+        if (fields[2] == "superseded") {
+            run.superseded++;
+        }
+        else if (fields[2] == "released") {
+            run.released++;
+            const uint32_t refreshes = uint32_t(fields[postponed].toUInt());
+            run.postponed += refreshes != 0;
+            run.mostPostponed = std::max(run.mostPostponed, refreshes);
+            run.longestHoldUs = std::max(run.longestHoldUs, fields[hold].toULongLong());
+        }
+    }
+    return run;
+}
+
 TimestampTrace::Row frameRow(TimestampTrace::Event event, int32_t frame)
 {
     TimestampTrace::Row row;
@@ -612,6 +736,36 @@ private slots:
               (unsigned long long)timestampPacer.decodeDelayUs());
         QVERIFY(presented.load() >= frames * 97 / 100);
         QVERIFY(maxMarginUs <= 1000);
+    }
+
+    // Under a frame limit, a source a little faster than the display keeps
+    // landing two frames on one refresh. Standard holds the extra one a
+    // refresh instead of replacing it, never more than one refresh deep for
+    // long, and gives the refresh back once the hold reaches its 2 s limit.
+    // Off replaces at once and never holds.
+    void frameLimitHoldsAtMostARefresh()
+    {
+#ifdef Q_OS_WIN
+        timeBeginPeriod(1);
+        const auto restoreTimer = qScopeGuard([] { timeEndPeriod(1); });
+#endif
+        QTemporaryDir standardDirectory, offDirectory;
+        const FifoRun standard = runFifoStream(TimestampPacingOptions::SmoothingStandard, 91, 6,
+                                               standardDirectory.path());
+        const FifoRun off = runFifoStream(TimestampPacingOptions::SmoothingOff, 91, 6, offDirectory.path());
+        qInfo("standard: %d released, %d superseded, %d postponed, at most %u refreshes, hold up to %llu us",
+              standard.released, standard.superseded, standard.postponed, standard.mostPostponed,
+              (unsigned long long)standard.longestHoldUs);
+        qInfo("off: %d released, %d superseded, %d postponed, at most %u refreshes, hold up to %llu us",
+              off.released, off.superseded, off.postponed, off.mostPostponed, (unsigned long long)off.longestHoldUs);
+        QVERIFY(standard.released > 400);
+        QVERIFY(off.released > 400);
+        QVERIFY(standard.postponed > 0);
+        QVERIFY(standard.longestHoldUs > 0);
+        QVERIFY(standard.mostPostponed <= 2);
+        // The limit, and a few refreshes for the frame behind to arrive
+        QVERIFY(standard.longestHoldUs <= 2000000 + 100000);
+        QCOMPARE(off.longestHoldUs, uint64_t(0));
     }
 
     void refusesUnwritableDestination()

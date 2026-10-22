@@ -377,6 +377,89 @@ private slots:
         QVERIFY(std::fabs(delay(burst, 350) - delay(burst, 200) - 16667) <= 100);
     }
 
+    // Under a frame limit, a frame that lost its V-blank to a late one is
+    // shown a refresh later instead of replacing it, and the frames behind
+    // it follow, until the smoothing level's hold limit gives the refresh
+    // back with one drop. With no limit, or no frame limit, it is replaced at
+    // once as before.
+    void frameLimitHoldsInsteadOfReplacing()
+    {
+        TsReplay::Trace trace = steadyTrace(400);
+        trace.scheduled[150].readyUs += 14000;
+        TsReplay::Row limited;
+        limited.event = "display_mode";
+        limited.displayMode = TsReplay::FrameLimitedMode;
+        trace.displayModes.push_back(limited);
+        const std::vector<bool> repeats = TsReplay::hostRepeats(trace.scheduled);
+        TsReplay::Settings settings = fixedSettings(trace);
+        settings.phases = 1;
+        const auto firstDrop = [](const TsReplay::ScenarioResult& result) {
+            for (size_t i = 0; i < result.outcomes.size(); i++) {
+                if (result.outcomes[i].skipped) {
+                    return i;
+                }
+            }
+            return size_t(0);
+        };
+
+        // Light: about a second of 60 FPS frames held
+        QCOMPARE(settings.resolvedHoldLimitUs(), uint64_t(1000000));
+        const TsReplay::ScenarioResult light = TsReplay::runScenario(trace, repeats, settings);
+        QVERIFY(!light.outcomes[150].skipped);
+        QVERIFY(light.outcomes[151].held);
+        QCOMPARE(light.outcomes[151].shownUs - light.outcomes[150].shownUs, uint64_t(16667));
+        QCOMPARE(light.metrics.skipped, uint64_t(1));
+        const size_t lightDrop = firstDrop(light);
+        QVERIFY2(lightDrop >= 209 && lightDrop <= 213, qPrintable(QString::number(lightDrop)));
+        QVERIFY(light.outcomes[lightDrop - 1].held);
+        QVERIFY(!light.outcomes[lightDrop + 1].held);
+        QCOMPARE(light.outcomes[lightDrop + 1].shownUs, light.outcomes[lightDrop + 1].plannedUs);
+
+        // Standard: two seconds
+        settings.options.smoothing = TimestampPacingOptions::SmoothingStandard;
+        const TsReplay::ScenarioResult standard = TsReplay::runScenario(trace, repeats, settings);
+        QCOMPARE(standard.metrics.skipped, uint64_t(1));
+        const size_t standardDrop = firstDrop(standard);
+        QVERIFY2(standardDrop >= 269 && standardDrop <= 273, qPrintable(QString::number(standardDrop)));
+
+        // No hold: the late frame is replaced at once
+        settings.holdLimitUs = 0;
+        const TsReplay::ScenarioResult replaced = TsReplay::runScenario(trace, repeats, settings);
+        QVERIFY(replaced.outcomes[150].skipped);
+        QCOMPARE(replaced.metrics.held, uint64_t(0));
+
+        // Nor without a frame limit
+        settings.holdLimitUs = -1;
+        trace.displayModes.clear();
+        const TsReplay::ScenarioResult unlimited = TsReplay::runScenario(trace, repeats, settings);
+        QVERIFY(unlimited.outcomes[150].skipped);
+        QCOMPARE(unlimited.metrics.held, uint64_t(0));
+    }
+
+    // A refresh the plan leaves empty ends the hold without dropping a frame
+    void frameLimitHoldDrainsAtAGap()
+    {
+        TsReplay::Trace trace = steadyTrace(240);
+        trace.scheduled[150].readyUs += 14000;
+        // The host sends nothing for one frame period before frame 170
+        for (size_t i = 170; i < trace.scheduled.size(); i++) {
+            trace.scheduled[i].rtp += 1500;
+            trace.scheduled[i].readyUs += 16667;
+        }
+        TsReplay::Row limited;
+        limited.event = "display_mode";
+        limited.displayMode = TsReplay::FrameLimitedMode;
+        trace.displayModes.push_back(limited);
+        TsReplay::Settings settings = fixedSettings(trace);
+        settings.phases = 1;
+        const TsReplay::ScenarioResult result =
+            TsReplay::runScenario(trace, TsReplay::hostRepeats(trace.scheduled), settings);
+        QCOMPARE(result.metrics.skipped, uint64_t(0));
+        QVERIFY(result.outcomes[169].held);
+        QVERIFY(!result.outcomes[170].held);
+        QCOMPARE(result.outcomes[170].shownUs, result.outcomes[170].plannedUs);
+    }
+
     // VRR shows a frame no sooner than one refresh after the previous one
     void vrrRespectsTheRefreshFloor()
     {
@@ -424,9 +507,14 @@ private slots:
         QVERIFY2(parse(R"({"version": 1, "scenarios": [
             {"name": "standard-95", "smoothing": "standard", "target_per_mille": 950},
             {"name": "vrr-off", "pacing": "off", "display": "vrr", "display_hz": 144, "render_us": 0},
-            {"name": "unled", "buffer_lead_us": 0}]})",
+            {"name": "unled", "buffer_lead_us": 0},
+            {"name": "hold-500", "hold_ms": 500},
+            {"name": "hold-level", "hold_ms": "level"}]})",
                        scenarios, error), qPrintable(error));
-        QCOMPARE(int(scenarios.size()), 3);
+        QCOMPARE(int(scenarios.size()), 5);
+        QCOMPARE(scenarios[3].holdLimitUs, int64_t(500000));
+        QCOMPARE(scenarios[4].holdLimitUs, int64_t(-1));
+        QCOMPARE(scenarios[4].resolvedHoldLimitUs(), uint64_t(1000000));
         QCOMPARE(scenarios[0].bufferLeadUs, int64_t(-1));
         QCOMPARE(scenarios[2].bufferLeadUs, int64_t(0));
         QCOMPARE(scenarios[0].options.smoothing, int(TimestampPacingOptions::SmoothingStandard));
@@ -446,6 +534,7 @@ private slots:
                        scenarios, error));
         QVERIFY(!parse(R"({"version": 1, "scenarios": [{"smoothing": "light"}]})", scenarios, error));
         QVERIFY(!parse(R"({"version": 2, "scenarios": [{"name": "x"}]})", scenarios, error));
+        QVERIFY(!parse(R"({"version": 1, "scenarios": [{"name": "x", "hold_ms": -1}]})", scenarios, error));
     }
 };
 

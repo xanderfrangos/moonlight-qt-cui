@@ -215,6 +215,40 @@ These come from reading Gamescope's source (ValveSoftware/gamescope
 | 18 | Deck, 90 FPS limit, 90 FPS at 90 Hz, then the game at 60 FPS, then Steam's 60 FPS limit (the panel moved to 60 Hz), a brief 59 Hz (6 min) | Same | 60 FPS at 60 Hz: every interval one refresh, no misses, no drops. 60 FPS at 90 Hz again missed in stretches (177 of 600 frames in 10 s), 331 of 342 misses decode-bound, margin to 6 ms; it then cost about 2.7 ms at 60 Hz (latency 14.8 → 12.1 ms as it decayed over two minutes). 7 more misses came in the 0.1 s between the panel switching to 60 Hz and the pacer's poll seeing it. At 59.013 Hz with 60 FPS, about one frame a second dropped and latency rose to about 23 ms, as a rate mismatch must. | A miss whose render waited at least a margin step (0.5 ms) for its decode no longer widens the margin; a new refresh rate resets it |
 | 19 | Deck, 90 FPS limit, a resume at 90 Hz: 77–90 FPS, then the game at 60 FPS, Steam's 60 FPS limit (60 Hz) and back to 90 Hz (3 min) | Capture 18's fix | Fix confirmed. At 60 FPS on 90 Hz, 7–31% of frames still missed in each 10 s (up to 186 of 600), 663 of 671 misses in the capture decode-bound, and the margin stayed at 0–0.5 ms; replayed with the old rule it sits at 6 ms from about 60 s on. The 3 ms it reached in the first 10 s came from the 8 misses that weren't decode-bound, as the host ramped up, and decayed normally. 60 FPS at 60 Hz: every interval one refresh, no misses, 10.1 ms decoder output → display median (12.1–14.8 ms in capture 18, with the margin decaying). 60 FPS at 90 Hz: 15.5–16 ms. Pacer drops 0.21%; stats line "Missed V-blank: 6.15% (margin +0.00 ms)". | None |
 
+### Frame-limit hold (2026-10-22)
+
+Two Deck captures (2026-10-22 03:04 and 03:45, 90 FPS at 90 Hz, frame
+limit on throughout, Light and Standard, two different games) were
+compared with tsreplay's model of Moonlight's own pacer (`pacing-stock`).
+Under FIFO the stock pacer never drops a frame: one that misses its turn
+waits a refresh, and the frames behind it follow. Timestamp pacing instead
+replaced a frame whose V-blank was taken by the frame behind it. That cost
+hitches: 3.3 and 33 jerks over 2 ms per 1000 frames against stock's 1.5
+and 17. Its gain was latency, 10.8 and 12.4 ms mean against 13.0 and
+9.5 ms.
+
+Since then a frame whose V-blank is taken is held a refresh
+(`TimestampPacer::holdsFrontLocked()`), until it would be two refreshes
+late or the hold has lasted `TimestampPacingOptions::fifoHoldLimitUs()`,
+when it is replaced as before. Most holds end on their own where the
+plan leaves a refresh empty. Replayed with the four Deck captures since
+2026-10-18 (all exact baselines, `tests/vrr/configs/tsreplay-fifo-hold.json`):
+
+| Capture | Light, replace → hold 1 s | Standard, replace → hold 2 s | Stock |
+|---|---|---|---|
+| 2026-10-18 23:44 | 2.36 → 2.09 (+0.35 ms) | 2.37 → 1.95 (+0.65 ms) | 21.3 |
+| 2026-10-19 04:36 | 19.6 → 17.2 (+0.88 ms) | 19.3 → 16.7 (+1.36 ms) | 20.5 |
+| 2026-10-22 03:04 | 33.3 → 22.9 (+4.3 ms) | 30.5 → 17.7 (+3.9 ms) | 17.4 |
+| 2026-10-22 03:45 | 3.47 → 2.37 (+0.70 ms) | 3.33 → 2.09 (+1.21 ms) | 1.46 |
+
+Values are jerks over 2 ms per 1000 frames, with the change in mean
+ready-to-shown delay. The model's interval error against the host's
+timestamps stayed within 1 per 1000 on three captures and rose from 16.5
+to 24.6 on 2026-10-19. The noisy 03:04 capture's host timestamps jumped
+over 2 ms on a third of frames that arrived steadily, so its buffer grew
+to about 10 ms, and stock stays 7 ms faster there. Not yet confirmed on a
+new capture.
+
 ### Smoothness and latency by mode (Deck, 90 FPS)
 
 | Mode | Single-refresh intervals | Decoder output → present (median) | Capture |
@@ -288,7 +322,9 @@ extra latency.
   1. VRR in use: no grid; frames go out at their target minus the render
      lead.
   2. Limiter engaged: grid, one frame per V-blank, sub-refresh limits
-     measured from display intervals.
+     measured from display intervals. A frame whose V-blank is taken is
+     held a refresh rather than replaced, up to 1 s at Light and 2 s at
+     Standard (since 2026-10-22; see "Frame-limit hold" below).
   3. Allow Tearing: like VRR.
   4. Otherwise: fixed refresh, on the grid.
 - **Grid period:** Gamescope's output refresh rate. While frame-limited, a

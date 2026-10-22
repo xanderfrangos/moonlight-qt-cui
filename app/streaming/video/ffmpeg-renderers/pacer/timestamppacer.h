@@ -156,6 +156,12 @@ private:
     uint64_t leadUsLocked(bool vblankGrid) const;
     uint64_t releaseTimeLocked(const Entry& entry, bool vblankGrid) const;
     uint64_t vblankForLocked(const Entry& entry) const;
+    // How many refreshes after the V-blank its target falls on a frame is
+    // planned, when a frame limit moved it
+    uint32_t refreshesPostponedLocked(const Entry& entry, uint64_t vblankUs) const;
+    // Whether the front frame keeps its V-blank rather than being replaced by
+    // a frame behind it due by then
+    bool holdsFrontLocked(const Entry& front, uint64_t frontVblankUs) const;
     void releaseDueLocked(std::unique_lock<std::mutex>& lock, bool vblankGrid);
     void learnWakeLead(uint64_t schedulerDelayUs);
     // A miss widens the margin only when releasing earlier could have helped
@@ -210,6 +216,10 @@ private:
     uint64_t m_LastReleaseUs = 0;
     // The V-blank the last grid release was planned for
     uint64_t m_LastVblankUs = 0;
+    // Under a frame limit, the V-blank from which released frames have been
+    // shown a refresh after their own (see holdsFrontLocked()), zero when
+    // they aren't
+    uint64_t m_HoldSinceVblankUs = 0;
     // When the most recently released frame's present should return
     uint64_t m_PlannedPresentUs = 0;
     bool m_Stopping = false;

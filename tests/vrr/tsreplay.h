@@ -464,6 +464,15 @@ struct Settings {
     // Fixed refresh only: grid phases averaged, since the real phase isn't
     // known to the model
     int phases = 8;
+    // Under a frame limit, how long a refresh of delay may be held instead
+    // of replacing a frame; negative: the smoothing level's
+    // (TimestampPacingOptions::fifoHoldLimitUs())
+    int64_t holdLimitUs = -1;
+
+    uint64_t resolvedHoldLimitUs() const
+    {
+        return holdLimitUs >= 0 ? uint64_t(holdLimitUs) : options.fifoHoldLimitUs();
+    }
     // The render lead given to the policy; negative: each frame's recorded
     // one, as the pacer gives it
     int64_t bufferLeadUs = -1;
@@ -617,6 +626,18 @@ inline bool applySetting(Settings& settings, const Settings& session, const QStr
             return false;
         }
         settings.bufferLeadUs = leadUs;
+        return true;
+    }
+    if (key == QLatin1String("hold_ms")) {
+        if (value.isString() && text == QLatin1String("level")) {
+            settings.holdLimitUs = -1;
+            return true;
+        }
+        int holdMs = 0;
+        if (!integer(0, 60000, holdMs)) {
+            return false;
+        }
+        settings.holdLimitUs = int64_t(holdMs) * 1000;
         return true;
     }
     if (key == QLatin1String("phases")) {
@@ -903,6 +924,9 @@ struct Outcome {
     bool missedPlan = false;
     // Replaced before it was shown
     bool skipped = false;
+    // Shown a refresh after the V-blank it was due at, because a frame limit
+    // held it rather than let the frame behind it replace it
+    bool held = false;
 };
 
 // Shows the frames of one scenario, at one grid phase on fixed refresh.
@@ -911,12 +935,19 @@ struct Outcome {
 // the policy's PhaseLock as the pacer uses it; ready too late for it (ready
 // plus render time), it takes the first V-blank after. A frame due no later
 // than the one before it replaces it, as a mailbox swapchain would.
+// Under a frame limit (frameLimited, per frame), a paced frame is held at the
+// next refresh instead, as TimestampPacer::holdsFrontLocked() does, until it
+// would be two refreshes late or the hold has lasted the hold limit; the
+// frame is then dropped, which gives the refresh back.
 // VRR: a frame is shown at its target, or once rendered if later, and no
 // sooner than one refresh at displayHz after the previous frame.
 // Unpaced frames are shown once rendered.
 inline std::vector<Outcome> present(const std::vector<Row>& scheduled, const Replayed* replayed,
-                                    const Settings& settings, double phaseUs, uint64_t* phaseWraps = nullptr)
+                                    const Settings& settings, double phaseUs, uint64_t* phaseWraps = nullptr,
+                                    const std::vector<bool>* frameLimited = nullptr)
 {
+    const uint64_t holdLimitUs = settings.resolvedHoldLimitUs();
+    uint64_t holdSinceUs = 0;
     std::vector<Outcome> outcomes(scheduled.size());
     const double periodUs = settings.displayHz > 0 ? 1000000.0 / settings.displayHz : 0;
     const bool grid = settings.fixedRefresh && periodUs > 0;
@@ -955,9 +986,35 @@ inline std::vector<Outcome> present(const std::vector<Row>& scheduled, const Rep
             else {
                 vblankUs = atOrAfter(double(dueUs));
             }
+            const bool holds = paced && holdLimitUs != 0 && frameLimited != nullptr && (*frameLimited)[i];
             if (previous != SIZE_MAX && vblankUs <= outcomes[previous].shownUs) {
+                if (holds) {
+                    // The next V-blank, on the grid as the pacer's
+                    // vblankForLocked() finds it, so held frames don't drift
+                    // off it by rounding
+                    const uint64_t slotUs = atOrAfter(double(outcomes[previous].shownUs) + periodUs / 2);
+                    const long late = std::lround(double(slotUs - vblankUs) / periodUs);
+                    if (late < 2 && (holdSinceUs == 0 || slotUs < holdSinceUs + holdLimitUs)) {
+                        if (holdSinceUs == 0) {
+                            holdSinceUs = slotUs;
+                        }
+                        outcome.held = true;
+                        outcome.shownUs = slotUs;
+                        previous = i;
+                        continue;
+                    }
+                    // Dropped, and the frame behind it takes the refresh
+                    if (late < 2) {
+                        holdSinceUs = 0;
+                    }
+                    outcome.skipped = true;
+                    continue;
+                }
                 outcomes[previous].skipped = true;
                 vblankUs = outcomes[previous].shownUs;
+            }
+            else {
+                holdSinceUs = 0;
             }
             outcome.shownUs = vblankUs;
         }
@@ -1174,6 +1231,8 @@ struct Metrics {
     uint64_t late = 0;
     uint64_t missedPlan = 0;
     uint64_t skipped = 0;
+    // Shown a refresh late because a frame limit held them
+    uint64_t held = 0;
     uint64_t shown = 0;
     uint64_t restarted = 0;
     uint64_t reanchored = 0;
@@ -1225,6 +1284,7 @@ inline void score(const std::vector<Row>& scheduled, const std::vector<bool>& re
             continue;
         }
         metrics.shown++;
+        metrics.held += outcome.held;
         metrics.delayUs.add(double(outcome.shownUs) - double(row.readyUs));
 
         if (previous != SIZE_MAX) {
@@ -1283,13 +1343,25 @@ inline ScenarioResult runScenario(const Trace& trace, const std::vector<bool>& r
     const int phases = grid ? std::max(1, settings.phases) : 1;
     result.metrics.phases = phases;
     const double periodUs = settings.displayHz > 0 ? 1000000.0 / settings.displayHz : 0;
+    // Which frames became ready under a frame limit, by the display modes the
+    // trace recorded
+    std::vector<bool> frameLimited(trace.scheduled.size());
+    size_t modeIndex = 0;
+    uint32_t mode = 0;
+    for (size_t i = 0; i < trace.scheduled.size(); i++) {
+        while (modeIndex < trace.displayModes.size() && trace.displayModes[modeIndex].eventUs <= trace.scheduled[i].readyUs) {
+            mode = trace.displayModes[modeIndex++].displayMode;
+        }
+        frameLimited[i] = mode == FrameLimitedMode;
+    }
     for (int phase = 0; phase < phases; phase++) {
         // Moonlight's own pacer only differs from showing frames as they
         // come on a fixed grid
         std::vector<Outcome> outcomes =
             settings.stock && grid
                 ? presentStock(trace, settings, periodUs * phase / phases)
-                : present(trace.scheduled, replayed, settings, periodUs * phase / phases, &result.metrics.phaseWraps);
+                : present(trace.scheduled, replayed, settings, periodUs * phase / phases, &result.metrics.phaseWraps,
+                          &frameLimited);
         score(trace.scheduled, repeats, replayed, outcomes, result.metrics);
         if (phase == 0) {
             result.outcomes = std::move(outcomes);
@@ -1319,6 +1391,7 @@ inline QJsonObject settingsJson(const Settings& settings)
     if (settings.pacing) {
         object[QStringLiteral("buffer_lead_us")] = settings.bufferLeadUs >= 0 ? QJsonValue(qint64(settings.bufferLeadUs))
                                                                              : QJsonValue(QStringLiteral("recorded"));
+        object[QStringLiteral("hold_ms")] = qint64(settings.resolvedHoldLimitUs() / 1000);
     }
     return object;
 }
@@ -1332,6 +1405,7 @@ inline QJsonObject metricsJson(Metrics& m)
     object[QStringLiteral("late_per_mille")] = perMilleExact(m.late, m.paced);
     object[QStringLiteral("missed_plan_per_mille")] = perMilleExact(m.missedPlan, m.paced);
     object[QStringLiteral("skipped_per_mille")] = perMilleExact(m.skipped, m.frames);
+    object[QStringLiteral("held_per_mille")] = perMilleExact(m.held, m.frames);
     object[QStringLiteral("restarted")] = qint64(m.restarted);
     object[QStringLiteral("reanchored")] = qint64(m.reanchored);
     object[QStringLiteral("admitted")] = qint64(m.admitted);
@@ -1672,6 +1746,7 @@ inline const QStringList& comparedMetrics()
         QStringLiteral("late_per_mille"),
         QStringLiteral("missed_plan_per_mille"),
         QStringLiteral("skipped_per_mille"),
+        QStringLiteral("held_per_mille"),
         QStringLiteral("delay_us/mean"),
         QStringLiteral("delay_us/p95"),
         QStringLiteral("delay_us/p99"),

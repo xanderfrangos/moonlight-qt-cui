@@ -320,6 +320,10 @@ Compressed and plain CSV traces both work, including those expanded by
     alone, as the policy did before 2026-10-18. The model judges misses by
     the same recorded lead, so the gain from the lead is partly by
     construction; confirm it on the display.
+  - hold_ms (default "level": 1000 at Light, 2000 at Standard, 0 at Off):
+    under a frame limit, how long a refresh of delay may be held instead of
+    replacing a frame. 0 replaces, as before 2026-10-22.
+    `configs/tsreplay-fifo-hold.json` compares both at each level.
   Unknown keys and out-of-range values are errors.
 - **Presentation model.**
   - **Fixed refresh:** a paced frame takes the V-blank its target falls on,
@@ -328,6 +332,13 @@ Compressed and plain CSV traces both work, including those expanded by
     before replaces it (mailbox). The model is averaged over grid phases.
   - **VRR:** a frame is shown at max(target, ready + render), no sooner than
     one refresh after the previous one.
+  - **Frame-limit hold:** in spans the trace recorded as frame limited
+    (FIFO), a paced frame due no later than the one before is shown at the
+    next V-blank instead of replacing it, as
+    `TimestampPacer::holdsFrontLocked()` does, until it would be two
+    refreshes late or the hold has lasted `hold_ms`. The frame is then
+    dropped, which gives the refresh back. Held frames are counted as
+    **held**, and the timeline marks them.
   - **Stock** (`pacing: stock`, fixed refresh only; on VRR it is `off`):
     Moonlight's own pacer, which `off` is not. `off` shows only the newest
     frame at each V-blank, so two frames due at one V-blank always cost a
@@ -357,6 +368,7 @@ Compressed and plain CSV traces both work, including those expanded by
   - **missed_plan:** ready plus render after the planned V-blank, so shown
     later.
   - **skipped:** replaced before shown.
+  - **held:** shown a refresh late by the frame-limit hold.
   - **phase_wraps_per_phase:** fixed refresh only. How often the phase
     lock's trim wrapped, moving every following frame a refresh, per grid
     phase. Drift alone calls for about one wrap per beat (1 / rate

@@ -647,6 +647,7 @@ void TimestampPacer::resetGridLocked()
     m_PhaseLock.reset();
     m_Releases = {};
     m_LastVblankUs = 0;
+    m_HoldSinceVblankUs = 0;
     m_Misses.reset();
 }
 
@@ -672,6 +673,7 @@ void TimestampPacer::applyLimitLocked(uint64_t nowUs)
     m_PhaseLock.reset();
     m_Releases = {};
     m_LastVblankUs = 0;
+    m_HoldSinceVblankUs = 0;
     m_Misses.reset();
 
     TimestampTrace::Row row;
@@ -882,9 +884,10 @@ uint64_t TimestampPacer::releaseTimeLocked(const Entry& entry, bool vblankGrid) 
 // The V-blank a frame is planned for. Under a frame limit Gamescope presents
 // in FIFO, which shows every queued frame at a refresh of its own. A frame
 // whose V-blank an earlier release already took waits for the next one, and
-// a newer frame due by then replaces it, so FIFO never holds a backlog. On a
-// Deck capture (2026-10-08, 90 FPS at 60 Hz), releasing them all queued
-// frames and blocked presents for up to 14 ms.
+// releases stay one per refresh, so FIFO never holds a backlog. On a Deck
+// capture (2026-10-08, 90 FPS at 60 Hz), releasing them all queued frames
+// and blocked presents for up to 14 ms. Whether a newer frame due by then
+// replaces the waiting one is holdsFrontLocked()'s decision.
 uint64_t TimestampPacer::vblankForLocked(const Entry& entry) const
 {
     uint64_t vblankUs = m_PhaseLock.assign(entry.targetUs, m_Grid);
@@ -900,6 +903,42 @@ uint64_t TimestampPacer::vblankForLocked(const Entry& entry) const
         return vblankUs;
     }
     return m_Grid.atOrAfter(double(m_LastVblankUs) + m_Grid.periodUs() / 2);
+}
+
+uint32_t TimestampPacer::refreshesPostponedLocked(const Entry& entry, uint64_t vblankUs) const
+{
+    uint64_t ownUs = m_PhaseLock.assign(entry.targetUs, m_Grid);
+    if (m_LateShift.shifted()) {
+        ownUs = m_Grid.atOrAfter(double(ownUs) + m_Grid.periodUs() / 2);
+    }
+    return vblankUs > ownUs ? uint32_t(std::lround(double(vblankUs - ownUs) / m_Grid.periodUs())) : 0;
+}
+
+// Under a frame limit, a frame planned a refresh late because its V-blank was
+// taken (or due at the same V-blank as the frame ahead) used to be replaced
+// by the next frame due by then, so the stream stayed on its timestamps at
+// the cost of a dropped frame. Holding it instead shows every frame, and the
+// frames behind it follow a refresh late until the plan leaves a refresh
+// empty, which a source a little slower than the display, or the noise in
+// its timestamps, soon does. Moonlight's own pacer queues the same way. Two
+// refreshes late, or once the hold has lasted the smoothing level's limit
+// (TimestampPacingOptions::fifoHoldLimitUs()), the frame is replaced as
+// before, which gives the refresh back. FIFO shows a released frame anyway,
+// so this only changes which of the waiting frames go.
+bool TimestampPacer::holdsFrontLocked(const Entry& front, uint64_t frontVblankUs) const
+{
+    const uint64_t limitUs = m_Options.fifoHoldLimitUs();
+    if (m_DisplayMode != DisplayMode::FrameLimited || limitUs == 0) {
+        return false;
+    }
+    switch (refreshesPostponedLocked(front, frontVblankUs)) {
+    case 0:
+        return true;
+    case 1:
+        return m_HoldSinceVblankUs == 0 || frontVblankUs < m_HoldSinceVblankUs + limitUs;
+    default:
+        return false;
+    }
 }
 
 void TimestampPacer::run()
@@ -965,9 +1004,11 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
     // The front frame is due. Later frames due at the same time join it: on
     // the V-blank grid, those assigned to the same V-blank (or an earlier
     // one), and otherwise those whose release has also come. Only the newest
-    // of them is shown, as a mailbox swapchain would.
+    // of them is shown, as a mailbox swapchain would. Under a frame limit
+    // the front frame may be held instead (holdsFrontLocked()).
     const Entry& front = m_Queue.front();
     const uint64_t frontVblankUs = vblankGrid && front.paced ? vblankForLocked(front) : 0;
+    const bool holdFront = frontVblankUs != 0 && holdsFrontLocked(front, frontVblankUs);
     size_t dueCount = 1;
     for (size_t i = 1; i < m_Queue.size(); i++) {
         const Entry& entry = m_Queue[i];
@@ -976,7 +1017,7 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
             due = true;
         }
         else if (vblankGrid && frontVblankUs != 0) {
-            due = vblankForLocked(entry) <= frontVblankUs;
+            due = !holdFront && vblankForLocked(entry) <= frontVblankUs;
         }
         else {
             due = releaseTimeLocked(entry, vblankGrid) <= nowUs + k_ReleaseSlackUs;
@@ -1003,6 +1044,8 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
 
     bool vblankWaitValid = false;
     int64_t vblankWaitUs = 0;
+    uint32_t postponedRefreshes = 0;
+    uint64_t holdUs = 0;
     if (vblankGrid && shown.paced) {
         // The phase lock learns from the V-blank the target falls on, not
         // one a frame limit postponed it to
@@ -1010,6 +1053,15 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
         const uint64_t vblankUs = vblankForLocked(shown);
         vblankWaitValid = true;
         vblankWaitUs = int64_t(vblankUs) - int64_t(shown.targetUs);
+        // A frame shown at its own V-blank ends a hold
+        postponedRefreshes = m_DisplayMode == DisplayMode::FrameLimited ? refreshesPostponedLocked(shown, vblankUs) : 0;
+        if (postponedRefreshes == 0 || m_Options.fifoHoldLimitUs() == 0) {
+            m_HoldSinceVblankUs = 0;
+        }
+        else if (m_HoldSinceVblankUs == 0) {
+            m_HoldSinceVblankUs = vblankUs;
+        }
+        holdUs = m_HoldSinceVblankUs != 0 ? vblankUs - m_HoldSinceVblankUs : 0;
         m_PhaseLock.update(shown.targetUs, assignedUs, m_Grid.periodUs(), m_SourcePeriodUs);
         noteLateLocked(shown, assignedUs, nowUs);
         m_Releases[m_NextRelease] = { nowUs, vblankUs, false };
@@ -1039,6 +1091,8 @@ void TimestampPacer::releaseDueLocked(std::unique_lock<std::mutex>& lock, bool v
         row.displayMode = uint8_t(m_DisplayMode);
         row.limitRefreshes = m_Limit.refreshes();
         row.lateShift = m_LateShift.shifted();
+        row.postponedRefreshes = postponedRefreshes;
+        row.holdUs = holdUs;
         for (size_t i = 0; i < supersededCount; i++) {
             TimestampTrace::Row supersededRow = frameRow(TimestampTrace::Event::Superseded, superseded[i], nowUs);
             supersededRow.queueDepth = row.queueDepth;

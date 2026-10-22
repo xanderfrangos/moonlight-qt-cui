@@ -29,7 +29,7 @@ GroupBox {
         Label {
             Layout.fillWidth: true
             wrapMode: Text.Wrap
-            text: qsTr("Host timestamps can be a few milliseconds uneven even when the game is steady. Smoothing follows the game's cadence instead, and still follows real changes in frame rate. Standard is slightly steadier for games locked to one frame rate, but slower to follow a frame rate that changes.")
+            text: qsTr("Host timestamps can be a few milliseconds uneven even when the game is steady. Smoothing follows the game's cadence instead, and still follows real changes in frame rate. Standard is slightly steadier for games locked to one frame rate, but slower to follow a frame rate that changes. Under Steam's frame limit, a frame that loses its refresh is shown a refresh late instead of being dropped, for up to 1 second at Light and 2 seconds at Standard.")
         }
 
         Label {

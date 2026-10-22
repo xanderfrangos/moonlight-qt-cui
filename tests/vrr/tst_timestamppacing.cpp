@@ -848,6 +848,16 @@ void lateShiftNeedsConfirmedMisses()
     check(run(predictionOnly, 64, 0, true, nowUs), "with confirmation off, reports don't hold it back");
 }
 
+// Under a frame limit, Light holds a refresh of delay for up to a second and
+// Standard for two; Off replaces frames as it always has
+void holdLimitFollowsSmoothing()
+{
+    check(options(TimestampPacingOptions::SmoothingOff).fifoHoldLimitUs() == 0, "Off never holds");
+    check(options(TimestampPacingOptions::SmoothingLight).fifoHoldLimitUs() == 1000000, "Light holds up to 1 s");
+    check(options(TimestampPacingOptions::SmoothingStandard).fifoHoldLimitUs() == 2000000,
+          "Standard holds up to 2 s");
+}
+
 int main()
 {
     // Each policy contract runs at the smoothing it was written against, then
@@ -891,6 +901,7 @@ int main()
     refreshClassifierTellsFixedFromAdaptive();
     frameLimitIsMeasuredWithoutConfirmingItself();
     lateShiftNeedsConfirmedMisses();
+    holdLimitFollowsSmoothing();
 
     if (failures == 0) {
         std::printf("tst_timestamppacing: all checks passed\n");

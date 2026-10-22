@@ -137,6 +137,11 @@ public:
         uint64_t decodeDelayUs = 0;
         uint32_t limitRefreshes = 0;
         bool lateShift = false;
+        // Released, under a frame limit: refreshes after its own V-blank the
+        // frame was planned for, and how long frames have been held so
+        // (TimestampPacer::holdsFrontLocked())
+        uint32_t postponedRefreshes = 0;
+        uint64_t holdUs = 0;
     };
 
     // The trace path for a VRR trace path: its .vrrtrace (or other) suffix
