@@ -621,7 +621,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
                 Session::get()->activateGamepadMenuSelection();
                 break;
             case SDL_CONTROLLER_BUTTON_B:
-                Session::get()->closeGamepadMenu();
+                Session::get()->gamepadMenuBack();
                 break;
             }
         }

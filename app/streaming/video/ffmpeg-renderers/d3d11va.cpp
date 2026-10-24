@@ -2725,6 +2725,18 @@ int D3D11VARenderer::getDecoderCapabilities()
            CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1;
 }
 
+int D3D11VARenderer::getVideoOptions()
+{
+    // LS1 needs the user's Steam-installed Lossless Scaling, which is looked
+    // for once rather than every time the menu asks
+    static const bool ls1Available = !D3D11Ls1Upscaler::findLosslessScalingDll().isEmpty();
+
+    // Error diffusion is libplacebo's alone
+    return VIDEO_OPTION_DOWNSCALING_FILTER | VIDEO_OPTION_FSR1 |
+           (ls1Available ? VIDEO_OPTION_LS1 : 0) |
+           VIDEO_OPTION_DITHERING | VIDEO_OPTION_DEBANDING;
+}
+
 IFFmpegRenderer::InitFailureReason D3D11VARenderer::getInitFailureReason()
 {
     // In the specific case where we found at least one D3D11 hardware device but none of the

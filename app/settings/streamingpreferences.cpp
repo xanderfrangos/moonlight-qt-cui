@@ -902,6 +902,95 @@ StreamingPreferences* StreamingPreferences::createForHost(const QString& uuid)
     return prefs;
 }
 
+void StreamingPreferences::saveStreamSetting(const QString& hostUuid, StreamSetting setting) const
+{
+    // The override group holding the setting, for those a PC can override
+    const char* group = setting == SS_BITRATE ? "bitrate" :
+                        setting == SS_PACING ? "vsync" : nullptr;
+    if (group != nullptr && !hostUuid.isEmpty()) {
+        QVariantMap overrides = getHostOverrides(hostUuid);
+        if (overrides.contains(group)) {
+            QVariantMap values = overrides.value(group).toMap();
+            if (setting == SS_BITRATE) {
+                values.insert("kbps", bitrateKbps);
+            }
+            else {
+                values.insert("vsync", enableVsync);
+                values.insert("vrr", enableVrr);
+                values.insert("timestampPacing", m_TimestampPacing.enabled);
+            }
+            overrides.insert(group, values);
+            setHostOverrides(hostUuid, overrides);
+            return;
+        }
+    }
+
+    // This may be the global preferences object itself
+    StreamingPreferences* global = get();
+    QSettings settings;
+    switch (setting) {
+    case SS_BITRATE:
+        // A default bitrate follows the global settings' own stream mode, as
+        // the settings page's Use Default does, not this stream's
+        global->autoAdjustBitrate = autoAdjustBitrate;
+        global->bitrateKbps = autoAdjustBitrate ? global->getDefaultBitrateForMode() : bitrateKbps;
+        settings.setValue(SER_BITRATE, global->bitrateKbps);
+        settings.setValue(SER_AUTOADJUSTBITRATE, autoAdjustBitrate);
+        emit global->bitrateChanged();
+        emit global->autoAdjustBitrateChanged();
+        break;
+    case SS_PACING:
+        global->enableVsync = enableVsync;
+        global->enableVrr = enableVrr;
+        global->m_TimestampPacing.enabled = m_TimestampPacing.enabled;
+        settings.setValue(SER_VSYNC, enableVsync);
+        settings.setValue(SER_ENABLEVRR, enableVrr);
+        settings.setValue("timestamppacing", m_TimestampPacing.enabled);
+        emit global->enableVsyncChanged();
+        emit global->enableVrrChanged();
+        emit global->timestampPacingChanged();
+        break;
+    case SS_DOWNSCALING_FILTER:
+        global->downscalingFilter = downscalingFilter;
+        settings.setValue(SER_DOWNSCALINGFILTER, downscalingFilter);
+        emit global->downscalingFilterChanged();
+        break;
+    case SS_UPSCALER:
+        global->fsr1Upscaling = fsr1Upscaling;
+        global->ls1Upscaling = ls1Upscaling;
+        settings.setValue(SER_FSR1UPSCALING, fsr1Upscaling);
+        settings.setValue(SER_LS1UPSCALING, ls1Upscaling);
+        emit global->fsr1UpscalingChanged();
+        emit global->ls1UpscalingChanged();
+        break;
+    case SS_FSR1_SHARPNESS:
+        global->fsr1RcasSharpness = fsr1RcasSharpness;
+        settings.setValue(SER_FSR1RCASSHARPNESS, fsr1RcasSharpness);
+        emit global->fsr1RcasSharpnessChanged();
+        break;
+    case SS_LS1_SHARPNESS:
+        global->ls1Sharpness = ls1Sharpness;
+        settings.setValue(SER_LS1SHARPNESS, ls1Sharpness);
+        emit global->ls1SharpnessChanged();
+        break;
+    case SS_DITHERING:
+        global->ditheringMode = ditheringMode;
+        settings.setValue(SER_DITHERINGMODE, ditheringMode);
+        emit global->ditheringModeChanged();
+        break;
+    case SS_DITHER_GRAIN:
+        global->ditherGrainMode = ditherGrainMode;
+        settings.setValue(SER_DITHERGRAINMODE, ditherGrainMode);
+        emit global->ditherGrainModeChanged();
+        break;
+    case SS_DEBAND:
+        global->debandMode = debandMode;
+        settings.setValue(SER_DEBANDMODE, debandMode);
+        emit global->debandModeChanged();
+        break;
+    }
+}
+
 void StreamingPreferences::applyHostOverrides(const QVariantMap& overrides)
 {
     const QVariantMap resolution = overrides.value("resolution").toMap();
@@ -966,16 +1055,24 @@ void StreamingPreferences::applyHostOverrides(const QVariantMap& overrides)
     const QVariantMap bitrate = overrides.value("bitrate").toMap();
     if (!bitrate.isEmpty()) {
         bitrateKbps = qBound(500, bitrate.value("kbps", bitrateKbps).toInt(), 3000000);
+        // The PC's bitrate was picked by hand, so a native stream mode
+        // mustn't replace it with the default for that mode
+        autoAdjustBitrate = false;
     }
     else if (autoAdjustBitrate &&
              (!resolution.isEmpty() || !frameRate.isEmpty() || !hdr.isEmpty() ||
               !yuv444.isEmpty() || !codec.isEmpty())) {
         // The global bitrate follows the global settings, so follow this
         // PC's settings the same way
-        bitrateKbps = videoCodecConfig == VCC_FORCE_PYROWAVE ?
-                          getDefaultPyroWaveBitrate(width, height, fps, enableYUV444, enableHdr) :
-                          getDefaultBitrate(width, height, fps, enableYUV444);
+        bitrateKbps = getDefaultBitrateForMode();
     }
+}
+
+int StreamingPreferences::getDefaultBitrateForMode() const
+{
+    return videoCodecConfig == VCC_FORCE_PYROWAVE ?
+               getDefaultPyroWaveBitrate(width, height, fps, enableYUV444, enableHdr) :
+               getDefaultBitrate(width, height, fps, enableYUV444);
 }
 
 QVariantMap StreamingPreferences::getVrrPreset(int mode)

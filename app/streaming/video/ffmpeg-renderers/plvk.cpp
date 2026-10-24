@@ -1106,6 +1106,19 @@ const char* PlVkRenderer::getActiveUpscalerName() const
     return m_UpscalerName;
 }
 
+int PlVkRenderer::getVideoOptions()
+{
+    int options = VIDEO_OPTION_DOWNSCALING_FILTER | VIDEO_OPTION_DITHERING |
+                  VIDEO_OPTION_ERROR_DIFFUSION | VIDEO_OPTION_DEBANDING;
+#ifdef Q_OS_LINUX
+    // LS1 needs the user's Steam-installed Lossless Scaling, which is looked
+    // for once rather than every time the menu asks
+    static const bool ls1Available = !findLosslessScalingDll().isEmpty();
+    options |= VIDEO_OPTION_FSR1 | (ls1Available ? VIDEO_OPTION_LS1 : 0);
+#endif
+    return options;
+}
+
 void PlVkRenderer::updateUpscalingNeeded()
 {
     // Scaling preserves the aspect ratio, so the stream is only enlarged when

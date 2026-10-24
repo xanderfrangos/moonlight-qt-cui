@@ -25,16 +25,44 @@ struct ButtonHint {
     QString text;
 };
 
-// Draws the in-stream gamepad menu as a Material card. The layout scales with
-// the viewport height so it reads the same at 720p and 4K. Returns an ARGB8888
-// surface owned by the caller, or nullptr on failure.
-// subtitle names what is being streamed, under the title. It may be empty.
-SDL_Surface* paintGamepadMenu(const QString& title,
-                              const QString& subtitle,
-                              const QStringList& items,
-                              int selectedIndex,
-                              const QList<ButtonHint>& hints,
-                              int viewportHeight);
+// A row of the gamepad menu
+struct MenuItem {
+    QString label;
+    // Shown at the end of the row, such as the current value of a setting
+    QString value;
+    // Opens another page of the menu
+    bool submenu = false;
+    // Marks the choice in effect in a list of choices
+    bool checked = false;
+};
+
+// What a page of the gamepad menu shows
+struct Menu {
+    // A short line in small capitals at the top
+    QString title;
+    // Under the title in a larger face, such as what is being streamed. It
+    // may be empty.
+    QString subtitle;
+    QList<MenuItem> items;
+    int selectedIndex = 0;
+    // When there are more items than maxVisibleItems, the rows shown start
+    // at firstVisibleIndex, with arrows for the rest
+    int firstVisibleIndex = 0;
+    int maxVisibleItems = 1000;
+    // Labels at the start of each row with values at the end, rather than
+    // centered labels
+    bool alignRows = false;
+    // Wrapped under the items, such as what a change will do. It may be empty.
+    QString footnote;
+    QList<ButtonHint> hints;
+};
+
+// Draws a page of the in-stream gamepad menu as a Material card. The layout
+// scales with the viewport height so it reads the same at 720p and 4K. The
+// card is as wide as the widest of all its items, so it keeps its size as it
+// scrolls. Returns an ARGB8888 surface owned by the caller, or nullptr on
+// failure.
+SDL_Surface* paintGamepadMenu(const Menu& menu, int viewportHeight);
 
 // Draws the stats history graphs as a Material card. Points run oldest to
 // newest and are plotted against the right edge, so a history that hasn't

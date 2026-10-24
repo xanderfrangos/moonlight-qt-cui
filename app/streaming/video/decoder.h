@@ -161,6 +161,16 @@ typedef struct _DECODER_PARAMETERS {
     bool testOnly;
 } DECODER_PARAMETERS, *PDECODER_PARAMETERS;
 
+// Optional decoder parameters a renderer may apply, which the in-stream menu
+// only offers where they take effect
+#define VIDEO_OPTION_DOWNSCALING_FILTER 0x01
+#define VIDEO_OPTION_FSR1 0x02
+#define VIDEO_OPTION_LS1 0x04
+#define VIDEO_OPTION_DITHERING 0x08
+// The High Quality and Highest Quality dithering kernels
+#define VIDEO_OPTION_ERROR_DIFFUSION 0x10
+#define VIDEO_OPTION_DEBANDING 0x20
+
 #define WINDOW_STATE_CHANGE_SIZE 0x01
 #define WINDOW_STATE_CHANGE_DISPLAY 0x02
 #define WINDOW_STATE_CHANGE_MINIMIZED 0x04
@@ -194,4 +204,6 @@ public:
     virtual void renderFrameOnMainThread() = 0;
     virtual void setHdrMode(bool enabled) = 0;
     virtual bool notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info) = 0;
+    // The VIDEO_OPTION_* flags this decoder's renderer applies
+    virtual int getVideoOptions() { return 0; }
 };

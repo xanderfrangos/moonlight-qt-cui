@@ -111,6 +111,7 @@ public:
         return m_OutputBitsPerComponent.load(std::memory_order_relaxed);
     }
     virtual const char* getActiveUpscalerName() const override;
+    virtual int getVideoOptions() override;
 #if defined(HAVE_PYROWAVE) && defined(Q_OS_LINUX)
     IPyroWaveVulkanPool* getPyroWaveVulkanPool() override { return m_PyroWavePool.get(); }
 #endif

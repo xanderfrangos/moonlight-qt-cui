@@ -4026,6 +4026,44 @@ compatible caller must explicitly send that disable and implement the response
 extension. Unchanged third-party Artemis clients may ignore it. No client display
 preference or persistent configuration is added by this extension.
 
+### 3.4 Changing settings during a stream (2026-10-24)
+
+The gamepad menu's Advanced > Change Settings pages change V-Sync, VRR Pacing
+Mode, timestamp pacing, bitrate, the downscaling filter, FSR1/LS1 and their
+sharpening, dithering, blue noise grain and debanding. They are the one place
+the presentation snapshot changes after launch. Each change is written to the
+session's preferences object and saved by
+`StreamingPreferences::saveStreamSetting()`: to the PC's override when it
+overrides that group (`bitrate`, `vsync`), otherwise to the global settings,
+writing only that setting's keys so command-line options for one stream are not
+saved with it. A bitrate override now also turns `autoAdjustBitrate` off in the
+PC's copy, so a native stream mode no longer replaces the PC's bitrate.
+
+`Session::applyStreamSetting()` then takes one of two paths:
+
+- The host reads it at launch: the bitrate, and any pacing change after which
+  `resolvePacingSettings()` (the same resolution `snapshotPresentationSettings()`
+  uses, run against the live window) disagrees with the `clientVrrRequested`
+  value sent at launch (`m_HostVrrRequested`). The stream ends without quitting
+  the host app, and `StreamSegue.qml` starts a session from
+  `createRestartSession()`, which always resumes, once the old session's
+  cleanup releases the active-session semaphore.
+- Otherwise the changed fields are copied into `m_PresentationSettings` and an
+  `SDL_RENDER_DEVICE_RESET` rebuilds the decoder and renderer as a display change
+  does: the connection stays up and an IDR is requested. A pacing change on this
+  path never starts or stops VRR Pacing Mode, so the window mode is untouched.
+
+Rows are shown only where they take effect: renderers report the decoder
+parameters they apply through `IFFmpegRenderer::getVideoOptions()` (D3D11VA and
+libplacebo today), the downscaling filter needs a stream drawn smaller than it
+decodes, FSR1/LS1 one drawn larger (LS1 not under host HDR), and VRR Pacing Mode
+needs `canUseVrr()` on the current display. An upscaler that is on stays listed
+so it can be turned off. These pages anchor the card at `OverlayAnchorLeft` and
+leave `OverlayMenuBackground` off, so the stream is undimmed; the first pages
+keep the centered, dimmed card. The menu is the existing painted overlay
+texture, republished only on input, so it adds no per-frame work. Diagnostic
+trace metadata still describes the settings at stream start.
+
 ## 4. Packet ingress, frame assembly, and recovery
 
 The video receive thread reads UDP into staging buffers, optionally decrypts

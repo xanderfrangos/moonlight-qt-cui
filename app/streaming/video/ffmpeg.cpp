@@ -109,6 +109,11 @@ bool FFmpegVideoDecoder::isHdrSupported()
     return m_FrontendRenderer->getRendererAttributes() & RENDERER_ATTRIBUTE_HDR_SUPPORT;
 }
 
+int FFmpegVideoDecoder::getVideoOptions()
+{
+    return m_FrontendRenderer != nullptr ? m_FrontendRenderer->getVideoOptions() : 0;
+}
+
 void FFmpegVideoDecoder::setHdrMode(bool enabled)
 {
     m_FrontendRenderer->setHdrMode(enabled);

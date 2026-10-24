@@ -32,6 +32,9 @@ enum OverlayAnchor {
     OverlayAnchorTopRight,
     OverlayAnchorBottomLeft,
     OverlayAnchorCenter,
+    // Centered vertically, a little in from the left edge, for a menu that
+    // leaves the middle of the stream in view
+    OverlayAnchorLeft,
     // Stretches the overlay over the whole viewport, so a solid fill can be
     // uploaded as a tiny texture instead of a screen-sized one.
     OverlayAnchorFill,

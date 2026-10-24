@@ -65,6 +65,31 @@ public:
     // it, or nullptr if it overrides nothing. The caller owns the result.
     static StreamingPreferences* createForHost(const QString& uuid);
 
+    // Settings the in-stream menu can change, for saveStreamSetting()
+    enum StreamSetting
+    {
+        // The bitrate and whether it follows the stream mode
+        SS_BITRATE,
+        // V-Sync, VRR Pacing Mode and timestamp pacing, which depend on each other
+        SS_PACING,
+        SS_DOWNSCALING_FILTER,
+        // FSR1 and LS1, which exclude each other
+        SS_UPSCALER,
+        SS_FSR1_SHARPNESS,
+        SS_LS1_SHARPNESS,
+        SS_DITHERING,
+        SS_DITHER_GRAIN,
+        SS_DEBAND,
+    };
+
+    // Saves a setting that a stream using these preferences changed, to where
+    // the stream got it: the PC's own settings if it overrides that setting's
+    // group, or else the global settings, which are also updated in memory so
+    // the settings page shows the change. Only that setting is written, so
+    // options the command line applied to this stream alone aren't saved with
+    // it. An empty uuid always saves to the global settings.
+    void saveStreamSetting(const QString& hostUuid, StreamSetting setting) const;
+
     // The four VRR timing values a VrrLatencyMode preset fills in
     Q_INVOKABLE static QVariantMap getVrrPreset(int mode);
 
@@ -647,6 +672,9 @@ private:
     explicit StreamingPreferences(QQmlEngine *qmlEngine);
 
     void applyHostOverrides(const QVariantMap& overrides);
+
+    // The default bitrate for these preferences' resolution, frame rate and codec
+    int getDefaultBitrateForMode() const;
 
     QString getSuffixFromLanguage(Language lang);
 

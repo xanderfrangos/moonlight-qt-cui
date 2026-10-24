@@ -733,6 +733,7 @@ static StreamingPreferences* createHostPreferences(NvComputer* computer)
 
 Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *preferences)
     : m_HostPreferences(preferences ? nullptr : createHostPreferences(computer)),
+      m_CallerPreferences(preferences),
       m_Preferences(preferences ? preferences :
                     m_HostPreferences ? m_HostPreferences.get() : StreamingPreferences::get()),
       m_IsFullScreen(m_Preferences->windowMode != StreamingPreferences::WM_WINDOWED || !WMUtils::isRunningDesktopEnvironment()),
@@ -747,7 +748,6 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_InputHandler(nullptr),
       m_MouseEmulationRefCount(0),
       m_GamepadMenuOpen(false),
-      m_GamepadMenuIndex(0),
       m_GamepadMenuGamepadIndex(0),
       m_GamepadMenuJsId(-1),
       m_FlushingWindowEventsRef(0),
@@ -771,17 +771,113 @@ Session::~Session()
     SDL_DestroyMutex(m_DecoderLock);
 }
 
-void Session::snapshotPresentationSettings(SDL_Window* window)
+bool Session::canUseVrr(SDL_Window* window, bool effectiveVsync, bool log) const
 {
+    bool hasAdaptiveDisplay = true;
+#ifdef Q_OS_DARWIN
+    hasAdaptiveDisplay = queryMacDisplayTiming(window).supportsVariableRefresh();
+    if (!hasAdaptiveDisplay && log) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "VRR disabled: the current Mac display has no variable-refresh range");
+    }
+#endif
+    int strictRefreshRate = 0;
+    const bool hasStrictRefreshRate = StreamUtils::tryGetDisplayRefreshRate(window, strictRefreshRate);
+    const bool hasAdaptiveHeadroom = hasStrictRefreshRate &&
+        VrrRatePolicy::hasAdaptiveHeadroom(m_StreamConfig.fps,
+                                           strictRefreshRate);
+    if (log) {
+        if (!hasStrictRefreshRate) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "VRR disabled: invalid display refresh");
+        }
+        if (!effectiveVsync) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "VRR disabled: ineffective V-sync");
+        }
+        if (hasStrictRefreshRate && effectiveVsync && !hasAdaptiveHeadroom) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "VRR disabled: %d FPS exceeds the display maximum of %d Hz",
+                        m_StreamConfig.fps, strictRefreshRate);
+        }
+    }
+    return hasStrictRefreshRate && effectiveVsync && hasAdaptiveHeadroom && hasAdaptiveDisplay;
+}
+
+Session::PacingSettings Session::resolvePacingSettings(SDL_Window* window, bool log) const
+{
+    PacingSettings pacing;
+
     // Timestamp pacing and VRR are mutually exclusive, and timestamp pacing
-    // makes VRR unavailable. Its options are fixed for the session.
-    m_PresentationSettings.timestampPacing = m_Preferences->timestampPacingOptions().resolved();
-    const bool timestampPacing = m_PresentationSettings.timestampPacing.enabled;
-    if (timestampPacing && m_Preferences->enableVrr) {
+    // makes VRR unavailable.
+    pacing.timestampPacing = m_Preferences->timestampPacingOptions().resolved();
+    const bool timestampPacing = pacing.timestampPacing.enabled;
+    if (timestampPacing && m_Preferences->enableVrr && log) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "VRR unavailable: timestamp pacing is enabled");
     }
     const bool requestedVrr = m_Preferences->enableVrr && !timestampPacing;
+
+    int strictRefreshRate = 0;
+    const bool hasStrictRefreshRate = StreamUtils::tryGetDisplayRefreshRate(window, strictRefreshRate);
+    pacing.refreshRate = hasStrictRefreshRate ? strictRefreshRate : 0;
+
+    // Retain the legacy V-sync behavior when display information is incomplete,
+    // but do not use its 60 Hz fallback to qualify VRR.
+    const int vsyncRefreshRate = hasStrictRefreshRate ? strictRefreshRate : 60;
+    if (!hasStrictRefreshRate && log) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Refresh rate unavailable; assuming 60 Hz for legacy pacing");
+    }
+    // Gamescope owns V-Sync: renderers hand it each frame without blocking,
+    // and its Allow Tearing setting decides whether frames tear. A stream
+    // faster than the display then costs only dropped frames, never a queue.
+    // There is no V-sync source for Gamescope's Xwayland, so fixed frame
+    // pacing would render frames on arrival anyway.
+    const bool gamescope = GamescopeDisplayState::runningUnderGamescope();
+    pacing.effectiveVsync = m_Preferences->effectiveVsync();
+    if (gamescope) {
+        if (log) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Gamescope controls V-Sync; V-Sync preference %s, frame pacing unused",
+                        m_Preferences->enableVsync ? "on" : "off");
+        }
+    }
+    else if (pacing.effectiveVsync && vsyncRefreshRate + 5 < m_StreamConfig.fps) {
+        if (log) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Disabling V-sync because refresh rate limit exceeded");
+        }
+        pacing.effectiveVsync = false;
+    }
+
+    // Timestamp pacing replaces fixed frame pacing, with or without V-Sync
+    pacing.enableFramePacing = pacing.effectiveVsync &&
+                               m_Preferences->framePacing &&
+                               !timestampPacing && !gamescope;
+    pacing.enableVrr = requestedVrr && canUseVrr(window, pacing.effectiveVsync, log);
+
+    // A rejected VRR request still uses the seamless fixed-V-sync fallback.
+    // Keep that fallback paced even when the separate frame-pacing preference
+    // is off, matching renderer-level VRR rejection later in initialization.
+    if (requestedVrr &&
+            !pacing.enableVrr &&
+            pacing.effectiveVsync &&
+            !gamescope) {
+        pacing.enableFramePacing = true;
+    }
+
+    return pacing;
+}
+
+void Session::snapshotPresentationSettings(SDL_Window* window)
+{
+    const PacingSettings pacing = resolvePacingSettings(window, true);
+    m_PresentationSettings.timestampPacing = pacing.timestampPacing;
+    m_PresentationSettings.effectiveVsync = pacing.effectiveVsync;
+    m_PresentationSettings.enableFramePacing = pacing.enableFramePacing;
+    m_PresentationSettings.enableVrr = pacing.enableVrr;
+    m_PresentationSettings.refreshRate = pacing.refreshRate;
     m_PresentationSettings.decoderSelection = m_Preferences->videoDecoderSelection;
     m_PresentationSettings.rendererSelection = m_Preferences->rendererSelection;
     m_PresentationSettings.effectiveWindowMode = m_Preferences->windowMode;
@@ -794,40 +890,6 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
                     "Controller UI active; using borderless desktop fullscreen for this session");
     }
 
-    int strictRefreshRate = 0;
-    const bool hasStrictRefreshRate = StreamUtils::tryGetDisplayRefreshRate(window, strictRefreshRate);
-    m_PresentationSettings.refreshRate = hasStrictRefreshRate ? strictRefreshRate : 0;
-
-    // Retain the legacy V-sync behavior when display information is incomplete,
-    // but do not use its 60 Hz fallback to qualify VRR.
-    const int vsyncRefreshRate = hasStrictRefreshRate ? strictRefreshRate : 60;
-    if (!hasStrictRefreshRate) {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "Refresh rate unavailable; assuming 60 Hz for legacy pacing");
-    }
-    // Gamescope owns V-Sync: renderers hand it each frame without blocking,
-    // and its Allow Tearing setting decides whether frames tear. A stream
-    // faster than the display then costs only dropped frames, never a queue.
-    // There is no V-sync source for Gamescope's Xwayland, so fixed frame
-    // pacing would render frames on arrival anyway.
-    const bool gamescope = GamescopeDisplayState::runningUnderGamescope();
-    m_PresentationSettings.effectiveVsync = m_Preferences->effectiveVsync();
-    if (gamescope) {
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Gamescope controls V-Sync; V-Sync preference %s, frame pacing unused",
-                    m_Preferences->enableVsync ? "on" : "off");
-    }
-    else if (m_PresentationSettings.effectiveVsync && vsyncRefreshRate + 5 < m_StreamConfig.fps) {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "Disabling V-sync because refresh rate limit exceeded");
-        m_PresentationSettings.effectiveVsync = false;
-    }
-
-    // Timestamp pacing replaces fixed frame pacing, with or without V-Sync
-    m_PresentationSettings.enableFramePacing = m_PresentationSettings.effectiveVsync &&
-                                               m_Preferences->framePacing &&
-                                               !timestampPacing && !gamescope;
-    m_PresentationSettings.enableVrr = false;
     m_PresentationSettings.vrrLatencyMode = m_Preferences->vrrLatencyMode;
     m_PresentationSettings.vrrTimingOptions = m_Preferences->vrrTimingOptions();
     m_PresentationSettings.gamescopeRepaint = false; // Retired repaint experiment.
@@ -844,50 +906,11 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     m_PresentationSettings.ls1Upscaling = m_Preferences->ls1Upscaling;
     m_PresentationSettings.ls1Sharpness = m_Preferences->ls1Sharpness;
 
-    if (requestedVrr) {
-        bool hasAdaptiveDisplay = true;
-#ifdef Q_OS_DARWIN
-        hasAdaptiveDisplay = queryMacDisplayTiming(window).supportsVariableRefresh();
-        if (!hasAdaptiveDisplay) {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "VRR disabled: the current Mac display has no variable-refresh range");
-        }
-#endif
-        const bool hasAdaptiveHeadroom = hasStrictRefreshRate &&
-            VrrRatePolicy::hasAdaptiveHeadroom(m_StreamConfig.fps,
-                                               strictRefreshRate);
-        if (!hasStrictRefreshRate) {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "VRR disabled: invalid display refresh");
-        }
-        if (!m_PresentationSettings.effectiveVsync) {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "VRR disabled: ineffective V-sync");
-        }
-        if (hasStrictRefreshRate && m_PresentationSettings.effectiveVsync &&
-                !hasAdaptiveHeadroom) {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "VRR disabled: %d FPS exceeds the display maximum of %d Hz",
-                        m_StreamConfig.fps, strictRefreshRate);
-        }
-        if (hasStrictRefreshRate && m_PresentationSettings.effectiveVsync &&
-                hasAdaptiveHeadroom && hasAdaptiveDisplay) {
-            m_PresentationSettings.enableVrr = true;
-            m_PresentationSettings.effectiveWindowMode = StreamingPreferences::WM_FULLSCREEN_DESKTOP;
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "VRR requested at %d Hz; forcing borderless desktop fullscreen for this session",
-                        strictRefreshRate);
-        }
-    }
-
-    // A rejected VRR request still uses the seamless fixed-V-sync fallback.
-    // Keep that fallback paced even when the separate frame-pacing preference
-    // is off, matching renderer-level VRR rejection later in initialization.
-    if (requestedVrr &&
-            !m_PresentationSettings.enableVrr &&
-            m_PresentationSettings.effectiveVsync &&
-            !gamescope) {
-        m_PresentationSettings.enableFramePacing = true;
+    if (m_PresentationSettings.enableVrr) {
+        m_PresentationSettings.effectiveWindowMode = StreamingPreferences::WM_FULLSCREEN_DESKTOP;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "VRR requested at %d Hz; forcing borderless desktop fullscreen for this session",
+                    m_PresentationSettings.refreshRate);
     }
 
     // This is session-local state.  The stored window preference remains
@@ -898,8 +921,8 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "Presentation snapshot: V-sync %s, timestamp pacing %s, VRR requested %s, VRR enabled %s, refresh %d Hz, window mode %d",
                 m_PresentationSettings.effectiveVsync ? "enabled" : "disabled",
-                timestampPacing ? "enabled" : "disabled",
-                requestedVrr ? "yes" : "no",
+                m_PresentationSettings.timestampPacing.enabled ? "enabled" : "disabled",
+                m_Preferences->enableVrr && !m_PresentationSettings.timestampPacing.enabled ? "yes" : "no",
                 m_PresentationSettings.enableVrr ? "yes" : "no",
                 m_PresentationSettings.refreshRate,
                 static_cast<int>(m_PresentationSettings.effectiveWindowMode));
@@ -1732,9 +1755,11 @@ private:
 
     void run() override
     {
-        // Only quit the running app if our session terminated gracefully
+        // Only quit the running app if our session terminated gracefully,
+        // and never when the stream is about to resume it
         bool shouldQuit =
                 !m_Session->m_UnexpectedTermination &&
+                !m_Session->m_RestartRequested &&
                 (m_Session->m_Preferences->quitAppAfter ||
                  m_Session->m_QuitHostAppRequested);
 
@@ -2056,15 +2081,159 @@ void Session::setStatsOverlayEnabled(bool enabled)
                                      enabled && mode != StreamingPreferences::POM_TEXT_ONLY);
 }
 
+// Settings pages show this many rows before they scroll
+static const int k_GamepadMenuMaxRows = 8;
+
+static QString onOffText(bool on)
+{
+    return on ? Session::tr("On") : Session::tr("Off");
+}
+
+static QString bitrateText(int kbps)
+{
+    return kbps % 1000 == 0 ? Session::tr("%1 Mbps").arg(kbps / 1000) :
+                              Session::tr("%1 Mbps").arg(kbps / 1000.0, 0, 'f', 1);
+}
+
+static QString downscalingFilterText(int filter)
+{
+    switch (filter) {
+    case StreamingPreferences::DF_BICUBIC:
+        return Session::tr("Bicubic");
+    case StreamingPreferences::DF_MITCHELL:
+        return Session::tr("Mitchell");
+    case StreamingPreferences::DF_LANCZOS:
+        return Session::tr("Lanczos");
+    case StreamingPreferences::DF_BILINEAR:
+    default:
+        return Session::tr("Bilinear");
+    }
+}
+
+// The names the settings page uses
+static QString ditheringModeText(int mode)
+{
+    switch (mode) {
+    case StreamingPreferences::DM_ORDERED:
+        return Session::tr("Fast");
+    case StreamingPreferences::DM_BLUE_NOISE:
+        return Session::tr("Balanced");
+    case StreamingPreferences::DM_ERROR_DIFFUSION:
+        return Session::tr("High Quality");
+    case StreamingPreferences::DM_ERROR_DIFFUSION_HQ:
+        return Session::tr("Highest Quality");
+    case StreamingPreferences::DM_OFF:
+    default:
+        return Session::tr("Off");
+    }
+}
+
+static QString ditherGrainText(int mode)
+{
+    switch (mode) {
+    case StreamingPreferences::DG_LIGHT:
+        return Session::tr("Light");
+    case StreamingPreferences::DG_MEDIUM:
+        return Session::tr("Medium");
+    case StreamingPreferences::DG_STRONG:
+        return Session::tr("Strong");
+    case StreamingPreferences::DG_OFF:
+    default:
+        return Session::tr("Off");
+    }
+}
+
+static QString debandText(int mode)
+{
+    switch (mode) {
+    case StreamingPreferences::DB_GRAIN_ONLY:
+        return Session::tr("Grain Only");
+    case StreamingPreferences::DB_LIGHT:
+        return Session::tr("Light");
+    case StreamingPreferences::DB_MEDIUM:
+        return Session::tr("Medium");
+    case StreamingPreferences::DB_STRONG:
+        return Session::tr("Strong");
+    case StreamingPreferences::DB_OFF:
+    default:
+        return Session::tr("Off");
+    }
+}
+
+// The dithering kernel a renderer runs. Without error diffusion, its two
+// modes are Balanced, as the settings page shows them.
+static int effectiveDitheringMode(int mode, int videoOptions)
+{
+    if (!(videoOptions & VIDEO_OPTION_ERROR_DIFFUSION) &&
+            (mode == StreamingPreferences::DM_ERROR_DIFFUSION ||
+             mode == StreamingPreferences::DM_ERROR_DIFFUSION_HQ)) {
+        return StreamingPreferences::DM_BLUE_NOISE;
+    }
+    return mode;
+}
+
 void Session::refreshStatusOverlay()
 {
     // The status update overlay is shared between the gamepad menu, gamepad mouse
     // mode, and connection warnings. The menu takes priority while it's up.
     if (m_GamepadMenuOpen) {
-        QStringList items;
-        for (GamepadMenuItem item : gamepadMenuItems()) {
-            items.append(gamepadMenuItemLabel(item));
+        GamepadMenuLevel& level = m_GamepadMenuStack.last();
+        const QVector<GamepadMenuRow> rows = gamepadMenuRows(level);
+
+        // Rows come and go as settings change, so keep the selection on one
+        // and scrolled into view
+        level.index = qBound(0, level.index, qMax(0, (int)rows.size() - 1));
+        if (level.index < level.firstVisible) {
+            level.firstVisible = level.index;
         }
+        else if (level.index >= level.firstVisible + k_GamepadMenuMaxRows) {
+            level.firstVisible = level.index - k_GamepadMenuMaxRows + 1;
+        }
+        level.firstVisible = qBound(0, level.firstVisible, qMax(0, (int)rows.size() - k_GamepadMenuMaxRows));
+
+        const bool settingsPage = level.page >= GamepadMenuPageSettings;
+
+        Overlay::Painter::Menu menu;
+        switch (level.page) {
+        case GamepadMenuPageMain:
+            menu.title = QStringLiteral("Moonlight");
+            menu.subtitle = m_App.name;
+            break;
+        case GamepadMenuPageAdvanced:
+            menu.title = QStringLiteral("Moonlight");
+            menu.subtitle = gamepadMenuItemLabel(GamepadMenuAdvanced);
+            break;
+        case GamepadMenuPageSettings:
+            menu.title = gamepadMenuItemLabel(GamepadMenuAdvanced);
+            menu.subtitle = gamepadMenuItemLabel(GamepadMenuChangeSettings);
+            menu.footnote = tr("Changes apply now and are saved for later streams.");
+            break;
+        case GamepadMenuPageVsync:
+            menu.title = gamepadMenuItemLabel(GamepadMenuChangeSettings);
+            menu.subtitle = gamepadMenuItemLabel(GamepadMenuVsyncSettings);
+            // Only where a change here can start or stop it
+            if (m_HostVrrRequested ||
+                    std::any_of(rows.cbegin(), rows.cend(),
+                                [](const GamepadMenuRow& row) { return row.item == GamepadMenuVrr; })) {
+                menu.footnote = tr("Starting or stopping VRR Pacing Mode reconnects the stream.");
+            }
+            break;
+        case GamepadMenuPageChoices:
+            menu.title = gamepadMenuItemLabel(GamepadMenuChangeSettings);
+            menu.subtitle = gamepadMenuItemLabel(level.setting);
+            if (level.setting == GamepadMenuBitrate) {
+                menu.footnote = tr("Changing the bitrate reconnects the stream.");
+            }
+            break;
+        }
+
+        for (const GamepadMenuRow& row : rows) {
+            menu.items.append(row.display);
+        }
+        menu.selectedIndex = level.index;
+        menu.firstVisibleIndex = level.firstVisible;
+        menu.maxVisibleItems = k_GamepadMenuMaxRows;
+        menu.alignRows = settingsPage;
 
         // Prompts for the buttons that gamepad.cpp handles while the menu is
         // up, labeled the way the gamepad that opened the menu labels them.
@@ -2075,33 +2244,33 @@ void Session::refreshStatusOverlay()
         const bool swapped = m_Preferences->swapFaceButtons;
         const ControllerButtonStyle::FacePosition selectPosition = swapped ? ControllerButtonStyle::East : ControllerButtonStyle::South;
         const ControllerButtonStyle::FacePosition backPosition = swapped ? ControllerButtonStyle::South : ControllerButtonStyle::East;
-        QList<Overlay::Painter::ButtonHint> hints;
-        hints.append({ ControllerButtonStyle::glyph(style, selectPosition),
-                       ControllerButtonStyle::color(style, selectPosition),
-                       tr("Select") });
-        hints.append({ ControllerButtonStyle::glyph(style, backPosition),
-                       ControllerButtonStyle::color(style, backPosition),
-                       tr("Back") });
+        menu.hints.append({ ControllerButtonStyle::glyph(style, selectPosition),
+                            ControllerButtonStyle::color(style, selectPosition),
+                            tr("Select") });
+        menu.hints.append({ ControllerButtonStyle::glyph(style, backPosition),
+                            ControllerButtonStyle::color(style, backPosition),
+                            tr("Back") });
 
         int windowWidth, windowHeight;
         getWindowPixelSize(m_Window, windowWidth, windowHeight);
 
-        // The card brings its own colors, so only the anchor matters here
-        m_OverlayManager.setOverlayStyle(Overlay::OverlayStatusUpdate, Overlay::OverlayAnchorCenter,
+        // The card brings its own colors, so only the anchor matters here.
+        // Settings pages keep to the side, clear of the middle of the stream.
+        m_OverlayManager.setOverlayStyle(Overlay::OverlayStatusUpdate,
+                                         settingsPage ? Overlay::OverlayAnchorLeft : Overlay::OverlayAnchorCenter,
                                          k_MenuColor, k_NoBackground);
         m_OverlayManager.setOverlaySurface(Overlay::OverlayStatusUpdate,
-                                           Overlay::Painter::paintGamepadMenu(QStringLiteral("Moonlight"),
-                                                                              m_App.name,
-                                                                              items,
-                                                                              m_GamepadMenuIndex,
-                                                                              hints,
-                                                                              windowHeight));
+                                           Overlay::Painter::paintGamepadMenu(menu, windowHeight));
         m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
 
+        if (settingsPage) {
+            // Undimmed, so the effect of a change can be seen
+            m_OverlayManager.setOverlayState(Overlay::OverlayMenuBackground, false);
+        }
         // The dimmer is stretched to fill the viewport, so it only has to be
-        // published when the menu opens. Republishing it as the selection moves
+        // published when it appears. Republishing it as the selection moves
         // would make every renderer rebuild the texture for no visible change.
-        if (!m_OverlayManager.isOverlayEnabled(Overlay::OverlayMenuBackground)) {
+        else if (!m_OverlayManager.isOverlayEnabled(Overlay::OverlayMenuBackground)) {
             m_OverlayManager.setOverlaySurface(Overlay::OverlayMenuBackground,
                                                Overlay::Painter::paintFill(k_MenuDimColor));
             m_OverlayManager.setOverlayState(Overlay::OverlayMenuBackground, true);
@@ -2126,22 +2295,197 @@ void Session::refreshStatusOverlay()
     }
 }
 
-QVector<Session::GamepadMenuItem> Session::gamepadMenuItems() const
+QVector<Session::GamepadMenuRow> Session::gamepadMenuRows(const GamepadMenuLevel& level) const
 {
-    QVector<GamepadMenuItem> items = {
-        GamepadMenuDisconnect,
-        GamepadMenuEndSession,
-        GamepadMenuToggleStats,
+    QVector<GamepadMenuRow> rows;
+    auto addRow = [&](GamepadMenuItem item, const QString& value = QString(), bool submenu = false) {
+        GamepadMenuRow row;
+        row.item = item;
+        row.display.label = gamepadMenuItemLabel(item);
+        row.display.value = value;
+        row.display.submenu = submenu;
+        rows.append(row);
     };
 
-    // Mouse mode is normally toggled by holding Start, but holding Start may
-    // open this menu instead, so offer it here too
-    if (m_Preferences->gamepadMouse) {
-        items.append(GamepadMenuToggleMouse);
+    switch (level.page) {
+    case GamepadMenuPageMain:
+        addRow(GamepadMenuDisconnect);
+        addRow(GamepadMenuEndSession);
+
+        // Mouse mode is normally toggled by holding Start, but holding Start may
+        // open this menu instead, so offer it here too
+        if (m_Preferences->gamepadMouse) {
+            addRow(GamepadMenuToggleMouse);
+        }
+
+        addRow(GamepadMenuPressGuide);
+        addRow(GamepadMenuAdvanced, QString(), true);
+        break;
+
+    case GamepadMenuPageAdvanced:
+        addRow(GamepadMenuToggleStats);
+        addRow(GamepadMenuChangeSettings, QString(), true);
+        break;
+
+    case GamepadMenuPageSettings: {
+        const bool vsync = m_Preferences->effectiveVsync();
+        QString pacing = onOffText(vsync);
+        if (m_Preferences->timestampPacing()) {
+            pacing = tr("%1, Timestamp").arg(pacing);
+        }
+        else if (m_Preferences->enableVrr && canUseVrr(m_Window, vsync, false)) {
+            pacing = tr("%1, VRR Pacing").arg(pacing);
+        }
+        addRow(GamepadMenuVsyncSettings, pacing, true);
+        addRow(GamepadMenuBitrate, bitrateText(m_StreamConfig.bitrate), true);
+
+        // Each filter is listed only where the renderer runs it, and the
+        // scaling ones only when the stream is scaled that way
+        if ((m_VideoOptions & VIDEO_OPTION_DOWNSCALING_FILTER) && isStreamDownscaled()) {
+            addRow(GamepadMenuDownscalingFilter, downscalingFilterText(m_Preferences->downscalingFilter), true);
+        }
+
+        // An upscaler that's on stays listed, so it can always be turned off
+        const bool upscaled = isStreamUpscaled();
+        if ((m_VideoOptions & VIDEO_OPTION_FSR1) && (upscaled || m_Preferences->fsr1Upscaling)) {
+            addRow(GamepadMenuFsr1, onOffText(m_Preferences->fsr1Upscaling));
+            if (m_Preferences->fsr1Upscaling) {
+                addRow(GamepadMenuFsr1Sharpness, QString::number(qRound(m_Preferences->fsr1RcasSharpness)), true);
+            }
+        }
+
+        // LS1 passes HDR through unscaled
+        if ((m_VideoOptions & VIDEO_OPTION_LS1) &&
+                ((upscaled && !LiGetCurrentHostDisplayHdrMode()) || m_Preferences->ls1Upscaling)) {
+            addRow(GamepadMenuLs1, onOffText(m_Preferences->ls1Upscaling));
+            if (m_Preferences->ls1Upscaling) {
+                addRow(GamepadMenuLs1Sharpness, QString::number(m_Preferences->ls1Sharpness), true);
+            }
+        }
+
+        if (m_VideoOptions & VIDEO_OPTION_DITHERING) {
+            addRow(GamepadMenuDithering,
+                   ditheringModeText(effectiveDitheringMode(m_Preferences->ditheringMode, m_VideoOptions)),
+                   true);
+
+            // Grain is added ahead of dithering and never replaces it
+            if (m_Preferences->ditheringMode != StreamingPreferences::DM_OFF) {
+                addRow(GamepadMenuDitherGrain, ditherGrainText(m_Preferences->ditherGrainMode), true);
+            }
+        }
+
+        if (m_VideoOptions & VIDEO_OPTION_DEBANDING) {
+            addRow(GamepadMenuDeband, debandText(m_Preferences->debandMode), true);
+        }
+        break;
     }
 
-    items.append(GamepadMenuPressGuide);
-    return items;
+    case GamepadMenuPageVsync:
+        // Gamescope owns V-Sync
+        if (!GamescopeDisplayState::runningUnderGamescope()) {
+            addRow(GamepadMenuVsync, onOffText(m_Preferences->enableVsync));
+        }
+
+        // VRR Pacing Mode needs V-Sync and a display that can keep up with
+        // the stream's frame rate
+        if (canUseVrr(m_Window, m_Preferences->effectiveVsync(), false)) {
+            addRow(GamepadMenuVrr, onOffText(m_Preferences->enableVrr && !m_Preferences->timestampPacing()));
+        }
+
+        addRow(GamepadMenuTimestampPacing, onOffText(m_Preferences->timestampPacing()));
+        break;
+
+    case GamepadMenuPageChoices:
+        rows = gamepadMenuChoices(level.setting);
+        break;
+    }
+
+    return rows;
+}
+
+QVector<Session::GamepadMenuRow> Session::gamepadMenuChoices(GamepadMenuItem setting) const
+{
+    QVector<GamepadMenuRow> rows;
+    auto addChoice = [&](const QString& label, int value, const QString& note = QString()) {
+        GamepadMenuRow row;
+        row.item = GamepadMenuChoice;
+        row.value = value;
+        row.display.label = label;
+        row.display.value = note;
+        rows.append(row);
+    };
+
+    int current = 0;
+    switch (setting) {
+    case GamepadMenuBitrate: {
+        const int defaultKbps = getDefaultStreamBitrate();
+        for (int kbps : getBitrateChoices()) {
+            addChoice(bitrateText(kbps), kbps, kbps == defaultKbps ? tr("Default") : QString());
+        }
+        current = m_StreamConfig.bitrate;
+        break;
+    }
+
+    case GamepadMenuDownscalingFilter:
+        for (int filter : { StreamingPreferences::DF_BILINEAR, StreamingPreferences::DF_BICUBIC,
+                            StreamingPreferences::DF_MITCHELL, StreamingPreferences::DF_LANCZOS }) {
+            addChoice(downscalingFilterText(filter), filter);
+        }
+        current = m_Preferences->downscalingFilter;
+        break;
+
+    case GamepadMenuFsr1Sharpness:
+        // The settings page's slider steps
+        for (int sharpness = 0; sharpness <= 100; sharpness += 10) {
+            addChoice(QString::number(sharpness), sharpness, sharpness == 20 ? tr("Default") : QString());
+        }
+        current = qRound(m_Preferences->fsr1RcasSharpness);
+        break;
+
+    case GamepadMenuLs1Sharpness:
+        for (int sharpness = 0; sharpness <= 100; sharpness += 25) {
+            addChoice(QString::number(sharpness), sharpness);
+        }
+        current = m_Preferences->ls1Sharpness;
+        break;
+
+    case GamepadMenuDithering:
+        addChoice(ditheringModeText(StreamingPreferences::DM_OFF), StreamingPreferences::DM_OFF);
+        addChoice(ditheringModeText(StreamingPreferences::DM_ORDERED), StreamingPreferences::DM_ORDERED);
+        addChoice(ditheringModeText(StreamingPreferences::DM_BLUE_NOISE), StreamingPreferences::DM_BLUE_NOISE);
+        if (m_VideoOptions & VIDEO_OPTION_ERROR_DIFFUSION) {
+            addChoice(ditheringModeText(StreamingPreferences::DM_ERROR_DIFFUSION), StreamingPreferences::DM_ERROR_DIFFUSION);
+            addChoice(ditheringModeText(StreamingPreferences::DM_ERROR_DIFFUSION_HQ), StreamingPreferences::DM_ERROR_DIFFUSION_HQ);
+        }
+        current = effectiveDitheringMode(m_Preferences->ditheringMode, m_VideoOptions);
+        break;
+
+    case GamepadMenuDitherGrain:
+        for (int mode : { StreamingPreferences::DG_OFF, StreamingPreferences::DG_LIGHT,
+                          StreamingPreferences::DG_MEDIUM, StreamingPreferences::DG_STRONG }) {
+            addChoice(ditherGrainText(mode), mode);
+        }
+        current = m_Preferences->ditherGrainMode;
+        break;
+
+    case GamepadMenuDeband:
+        for (int mode : { StreamingPreferences::DB_OFF, StreamingPreferences::DB_GRAIN_ONLY,
+                          StreamingPreferences::DB_LIGHT, StreamingPreferences::DB_MEDIUM,
+                          StreamingPreferences::DB_STRONG }) {
+            addChoice(debandText(mode), mode);
+        }
+        current = m_Preferences->debandMode;
+        break;
+
+    default:
+        SDL_assert(false);
+        break;
+    }
+
+    for (GamepadMenuRow& row : rows) {
+        row.display.checked = row.value == current;
+    }
+    return rows;
 }
 
 QString Session::gamepadMenuItemLabel(GamepadMenuItem item) const
@@ -2158,6 +2502,37 @@ QString Session::gamepadMenuItemLabel(GamepadMenuItem item) const
                    tr("Turn Off Gamepad Mouse Mode") : tr("Turn On Gamepad Mouse Mode");
     case GamepadMenuPressGuide:
         return tr("Press Guide Button");
+    case GamepadMenuAdvanced:
+        return tr("Advanced");
+    case GamepadMenuChangeSettings:
+        return tr("Change Settings");
+    case GamepadMenuVsyncSettings:
+    case GamepadMenuVsync:
+        return tr("V-Sync");
+    case GamepadMenuBitrate:
+        return tr("Bitrate");
+    case GamepadMenuDownscalingFilter:
+        return tr("Downscaling filter");
+    case GamepadMenuFsr1:
+        return tr("FSR1 upscaling");
+    case GamepadMenuFsr1Sharpness:
+        return tr("FSR1 sharpening");
+    case GamepadMenuLs1:
+        return tr("LS1 upscaling");
+    case GamepadMenuLs1Sharpness:
+        return tr("LS1 sharpening");
+    case GamepadMenuDithering:
+        return tr("Dither video");
+    case GamepadMenuDitherGrain:
+        return tr("Blue noise grain");
+    case GamepadMenuDeband:
+        return tr("Reduce banding");
+    case GamepadMenuVrr:
+        return tr("VRR Pacing Mode");
+    case GamepadMenuTimestampPacing:
+        return tr("Timestamp pacing");
+    case GamepadMenuChoice:
+        break;
     }
 
     SDL_assert(false);
@@ -2174,7 +2549,7 @@ void Session::openGamepadMenu(short gamepadIndex, SDL_JoystickID jsId)
     m_GamepadMenuGamepadIndex = gamepadIndex;
     m_GamepadMenuJsId = jsId;
     m_GamepadMenuOpen = true;
-    m_GamepadMenuIndex = 0;
+    m_GamepadMenuStack = { { GamepadMenuPageMain, GamepadMenuChoice, 0, 0 } };
     refreshStatusOverlay();
 }
 
@@ -2185,6 +2560,10 @@ void Session::closeGamepadMenu()
     }
 
     m_GamepadMenuOpen = false;
+    m_GamepadMenuStack.clear();
+
+    // Status messages take the overlay back where the menu's first page was
+    m_OverlayManager.setOverlayAnchor(Overlay::OverlayStatusUpdate, Overlay::OverlayAnchorCenter);
     refreshStatusOverlay();
 
     // Hide the buttons that worked the menu from the host and resynchronize it
@@ -2194,12 +2573,49 @@ void Session::closeGamepadMenu()
     }
 }
 
+void Session::gamepadMenuBack()
+{
+    SDL_assert(m_GamepadMenuOpen);
+
+    if (m_GamepadMenuStack.size() <= 1) {
+        closeGamepadMenu();
+        return;
+    }
+
+    m_GamepadMenuStack.removeLast();
+    refreshStatusOverlay();
+}
+
+void Session::pushGamepadMenuPage(GamepadMenuPage page, GamepadMenuItem setting)
+{
+    GamepadMenuLevel level = { page, setting, 0, 0 };
+
+    // A list of values opens on the one in effect
+    if (page == GamepadMenuPageChoices) {
+        const QVector<GamepadMenuRow> rows = gamepadMenuChoices(setting);
+        for (int i = 0; i < rows.size(); i++) {
+            if (rows.at(i).display.checked) {
+                level.index = i;
+                break;
+            }
+        }
+    }
+
+    m_GamepadMenuStack.append(level);
+    refreshStatusOverlay();
+}
+
 void Session::moveGamepadMenuSelection(int delta)
 {
     SDL_assert(m_GamepadMenuOpen);
 
-    const int itemCount = gamepadMenuItems().size();
-    m_GamepadMenuIndex = (m_GamepadMenuIndex + delta + itemCount) % itemCount;
+    GamepadMenuLevel& level = m_GamepadMenuStack.last();
+    const int itemCount = gamepadMenuRows(level).size();
+    if (itemCount == 0) {
+        return;
+    }
+
+    level.index = (level.index + delta + itemCount) % itemCount;
     refreshStatusOverlay();
 }
 
@@ -2207,12 +2623,57 @@ void Session::activateGamepadMenuSelection()
 {
     SDL_assert(m_GamepadMenuOpen);
 
-    const QVector<GamepadMenuItem> items = gamepadMenuItems();
-    SDL_assert(m_GamepadMenuIndex >= 0 && m_GamepadMenuIndex < items.size());
-    GamepadMenuItem selection = items.value(m_GamepadMenuIndex, GamepadMenuDisconnect);
+    const GamepadMenuLevel level = m_GamepadMenuStack.last();
+    const QVector<GamepadMenuRow> rows = gamepadMenuRows(level);
+    if (level.index < 0 || level.index >= rows.size()) {
+        return;
+    }
+
+    const GamepadMenuRow selection = rows.at(level.index);
+    switch (selection.item) {
+    case GamepadMenuAdvanced:
+        pushGamepadMenuPage(GamepadMenuPageAdvanced);
+        return;
+
+    case GamepadMenuChangeSettings:
+        pushGamepadMenuPage(GamepadMenuPageSettings);
+        return;
+
+    case GamepadMenuVsyncSettings:
+        pushGamepadMenuPage(GamepadMenuPageVsync);
+        return;
+
+    case GamepadMenuBitrate:
+    case GamepadMenuDownscalingFilter:
+    case GamepadMenuFsr1Sharpness:
+    case GamepadMenuLs1Sharpness:
+    case GamepadMenuDithering:
+    case GamepadMenuDitherGrain:
+    case GamepadMenuDeband:
+        pushGamepadMenuPage(GamepadMenuPageChoices, selection.item);
+        return;
+
+    case GamepadMenuFsr1:
+    case GamepadMenuLs1:
+    case GamepadMenuVsync:
+    case GamepadMenuVrr:
+    case GamepadMenuTimestampPacing:
+        activateGamepadMenuSetting(selection.item, 0);
+        return;
+
+    case GamepadMenuChoice:
+        // Back to the setting's row, which shows the new value
+        m_GamepadMenuStack.removeLast();
+        activateGamepadMenuSetting(level.setting, selection.value);
+        return;
+
+    default:
+        break;
+    }
+
     closeGamepadMenu();
 
-    switch (selection) {
+    switch (selection.item) {
     case GamepadMenuPressGuide:
         // closeGamepadMenu() has already resynced the host, with the A button
         // that got us here suppressed. The Guide press is sent on its own so
@@ -2251,6 +2712,269 @@ void Session::activateGamepadMenuSelection()
     event.type = SDL_QUIT;
     event.quit.timestamp = SDL_GetTicks();
     SDL_PushEvent(&event);
+}
+
+void Session::activateGamepadMenuSetting(GamepadMenuItem item, int value)
+{
+    StreamingPreferences::StreamSetting setting;
+    bool changed = true;
+
+    switch (item) {
+    case GamepadMenuBitrate:
+        changed = value != m_StreamConfig.bitrate;
+        m_Preferences->bitrateKbps = value;
+        // The default follows the stream mode from now on, like the settings
+        // page's Use Default
+        m_Preferences->autoAdjustBitrate = value == getDefaultStreamBitrate();
+        setting = StreamingPreferences::SS_BITRATE;
+        break;
+
+    case GamepadMenuVsync:
+        m_Preferences->enableVsync = !m_Preferences->enableVsync;
+        setting = StreamingPreferences::SS_PACING;
+        break;
+
+    case GamepadMenuVrr: {
+        const bool enable = !m_Preferences->enableVrr || m_Preferences->timestampPacing();
+        m_Preferences->enableVrr = enable;
+        // The two never run together, so this one takes over
+        if (enable) {
+            m_Preferences->setTimestampPacing(false);
+        }
+        setting = StreamingPreferences::SS_PACING;
+        break;
+    }
+
+    case GamepadMenuTimestampPacing:
+        // Turning it on turns VRR Pacing Mode off
+        m_Preferences->setTimestampPacing(!m_Preferences->timestampPacing());
+        setting = StreamingPreferences::SS_PACING;
+        break;
+
+    case GamepadMenuDownscalingFilter:
+        changed = value != m_Preferences->downscalingFilter;
+        m_Preferences->downscalingFilter = value;
+        setting = StreamingPreferences::SS_DOWNSCALING_FILTER;
+        break;
+
+    case GamepadMenuFsr1:
+        // The two upscalers exclude each other
+        m_Preferences->fsr1Upscaling = !m_Preferences->fsr1Upscaling;
+        if (m_Preferences->fsr1Upscaling) {
+            m_Preferences->ls1Upscaling = false;
+        }
+        setting = StreamingPreferences::SS_UPSCALER;
+        break;
+
+    case GamepadMenuLs1:
+        m_Preferences->ls1Upscaling = !m_Preferences->ls1Upscaling;
+        if (m_Preferences->ls1Upscaling) {
+            m_Preferences->fsr1Upscaling = false;
+        }
+        setting = StreamingPreferences::SS_UPSCALER;
+        break;
+
+    case GamepadMenuFsr1Sharpness:
+        changed = value != qRound(m_Preferences->fsr1RcasSharpness);
+        m_Preferences->fsr1RcasSharpness = value;
+        setting = StreamingPreferences::SS_FSR1_SHARPNESS;
+        break;
+
+    case GamepadMenuLs1Sharpness:
+        changed = value != m_Preferences->ls1Sharpness;
+        m_Preferences->ls1Sharpness = value;
+        setting = StreamingPreferences::SS_LS1_SHARPNESS;
+        break;
+
+    case GamepadMenuDithering:
+        changed = value != effectiveDitheringMode(m_Preferences->ditheringMode, m_VideoOptions);
+        m_Preferences->ditheringMode = value;
+        setting = StreamingPreferences::SS_DITHERING;
+        break;
+
+    case GamepadMenuDitherGrain:
+        changed = value != m_Preferences->ditherGrainMode;
+        m_Preferences->ditherGrainMode = value;
+        setting = StreamingPreferences::SS_DITHER_GRAIN;
+        break;
+
+    case GamepadMenuDeband:
+        changed = value != m_Preferences->debandMode;
+        m_Preferences->debandMode = value;
+        setting = StreamingPreferences::SS_DEBAND;
+        break;
+
+    default:
+        SDL_assert(false);
+        return;
+    }
+
+    if (changed) {
+        applyStreamSetting(setting);
+    }
+    else {
+        refreshStatusOverlay();
+    }
+}
+
+void Session::applyStreamSetting(StreamingPreferences::StreamSetting setting)
+{
+    // Saved where the stream got it: the PC's own settings if they have it
+    QString hostUuid;
+    if (m_HostPreferences) {
+        QReadLocker lock(&m_Computer->lock);
+        hostUuid = m_Computer->uuid;
+    }
+    m_Preferences->saveStreamSetting(hostUuid, setting);
+
+    // The host reads the bitrate when the stream starts
+    if (setting == StreamingPreferences::SS_BITRATE) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Restarting the stream at %d kbps",
+                    m_Preferences->bitrateKbps);
+        restartStream();
+        return;
+    }
+
+    if (setting == StreamingPreferences::SS_PACING) {
+        const PacingSettings pacing = resolvePacingSettings(m_Window, true);
+
+        // The host also sets up its capture for VRR Pacing Mode when the
+        // stream starts
+        if (pacing.enableVrr != m_HostVrrRequested) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Restarting the stream to %s VRR Pacing Mode",
+                        pacing.enableVrr ? "start" : "stop");
+            restartStream();
+            return;
+        }
+
+        m_PresentationSettings.timestampPacing = pacing.timestampPacing;
+        m_PresentationSettings.effectiveVsync = pacing.effectiveVsync;
+        m_PresentationSettings.enableFramePacing = pacing.enableFramePacing;
+        m_PresentationSettings.enableVrr = pacing.enableVrr;
+        m_PresentationSettings.refreshRate = pacing.refreshRate;
+    }
+    else {
+        m_PresentationSettings.downscalingFilter = m_Preferences->downscalingFilter;
+        m_PresentationSettings.fsr1Upscaling = m_Preferences->fsr1Upscaling;
+        m_PresentationSettings.fsr1RcasSharpness = m_Preferences->fsr1RcasSharpness;
+        m_PresentationSettings.ls1Upscaling = m_Preferences->ls1Upscaling;
+        m_PresentationSettings.ls1Sharpness = m_Preferences->ls1Sharpness;
+        m_PresentationSettings.ditheringMode = m_Preferences->ditheringMode;
+        m_PresentationSettings.ditherGrainMode = m_Preferences->ditherGrainMode;
+        m_PresentationSettings.debandMode = m_Preferences->debandMode;
+    }
+
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Rebuilding the renderer for a setting changed in the gamepad menu");
+
+    // Renderers take these settings when they're created, so make a new one.
+    // The connection stays up, and the host sends a new keyframe for it.
+    SDL_Event event = {};
+    event.type = SDL_RENDER_DEVICE_RESET;
+    SDL_PushEvent(&event);
+
+    refreshStatusOverlay();
+}
+
+void Session::restartStream()
+{
+    m_RestartRequested = true;
+    closeGamepadMenu();
+
+    // The main loop ends the stream, and the UI starts it again once it's gone
+    SDL_Event event;
+    event.type = SDL_QUIT;
+    event.quit.timestamp = SDL_GetTicks();
+    SDL_PushEvent(&event);
+}
+
+Session* Session::createRestartSession()
+{
+    // Command line preferences carry the change in memory. Otherwise the new
+    // session reads the saved settings the change went to.
+    auto session = new Session(m_Computer, m_App, m_CallerPreferences);
+
+    // The PC may not have reported the app running yet if it launched moments ago
+    session->m_ResumeApp = true;
+    return session;
+}
+
+bool Session::isStreamUpscaled() const
+{
+    if (m_ActiveVideoWidth <= 0 || m_ActiveVideoHeight <= 0) {
+        return false;
+    }
+
+    int windowWidth, windowHeight;
+    getWindowPixelSize(m_Window, windowWidth, windowHeight);
+    SDL_Rect src = { 0, 0, m_ActiveVideoWidth, m_ActiveVideoHeight };
+    SDL_Rect dst = { 0, 0, windowWidth, windowHeight };
+    StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
+
+    // As the upscalers decide it: the picture covers more pixels than it has
+    return (int64_t)dst.w * dst.h > (int64_t)src.w * src.h;
+}
+
+bool Session::isStreamDownscaled() const
+{
+    if (m_ActiveVideoWidth <= 0 || m_ActiveVideoHeight <= 0) {
+        return false;
+    }
+
+    int windowWidth, windowHeight;
+    getWindowPixelSize(m_Window, windowWidth, windowHeight);
+    SDL_Rect src = { 0, 0, m_ActiveVideoWidth, m_ActiveVideoHeight };
+    SDL_Rect dst = { 0, 0, windowWidth, windowHeight };
+    StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
+
+    // As the downscaling filters decide it
+    return dst.w <= src.w && dst.h <= src.h && (dst.w < src.w || dst.h < src.h);
+}
+
+int Session::getDefaultStreamBitrate() const
+{
+    const bool yuv444 = m_ActiveVideoFormat & VIDEO_FORMAT_MASK_YUV444;
+    if (m_ActiveVideoFormat & VIDEO_FORMAT_MASK_PYROWAVE) {
+        return StreamingPreferences::getDefaultPyroWaveBitrate(m_StreamConfig.width, m_StreamConfig.height,
+                                                               m_StreamConfig.fps, yuv444,
+                                                               m_ActiveVideoFormat & VIDEO_FORMAT_MASK_10BIT);
+    }
+    return StreamingPreferences::getDefaultBitrate(m_StreamConfig.width, m_StreamConfig.height,
+                                                   m_StreamConfig.fps, yuv444);
+}
+
+QVector<int> Session::getBitrateChoices() const
+{
+    // The settings page's slider limits
+    const bool pyroWave = m_ActiveVideoFormat & VIDEO_FORMAT_MASK_PYROWAVE;
+    const int minKbps = pyroWave ? 5000 : 500;
+    const int maxKbps = pyroWave ? 3000000 : (m_Preferences->unlockBitrate ? 500000 : 150000);
+    const int defaultKbps = getDefaultStreamBitrate();
+
+    QVector<int> choices;
+    auto addChoice = [&](int kbps) {
+        if (!choices.contains(kbps)) {
+            choices.append(kbps);
+        }
+    };
+
+    // Steps either side of the default, rounded to numbers that read well
+    for (double factor : { 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0 }) {
+        int kbps = qRound(defaultKbps * factor);
+        if (factor != 1.0) {
+            const int step = kbps < 10000 ? 500 : kbps < 50000 ? 1000 : kbps < 200000 ? 5000 : 10000;
+            kbps = qMax(step, (kbps + (step / 2)) / step * step);
+        }
+        addChoice(qBound(minKbps, kbps, maxKbps));
+    }
+
+    // The bitrate in use is always there to go back to
+    addChoice(m_StreamConfig.bitrate);
+
+    std::sort(choices.begin(), choices.end());
+    return choices;
 }
 
 class AsyncConnectionStartThread : public QThread
@@ -2306,9 +3030,11 @@ bool Session::startConnectionAsync()
     QString rtspSessionUrl;
     LaunchWarning::Code launchWarning = LaunchWarning::Code::None;
 
+    m_HostVrrRequested = m_PresentationSettings.enableVrr;
+
     try {
         NvHTTP http(m_Computer);
-        http.startApp(m_Computer->currentGameId != 0 ? "resume" : "launch",
+        http.startApp(m_Computer->currentGameId != 0 || m_ResumeApp ? "resume" : "launch",
                       m_Computer->isNvidiaServerSoftware,
                       m_App.id, &m_StreamConfig,
                       enableGameOptimizations,
@@ -3112,6 +3838,7 @@ void Session::exec()
             // if a GPU was removed).  Reset paths intentionally reuse the
             // presentation snapshot from Session::initialize() rather than
             // observing a mutable settings object midway through a stream.
+            // Only applyStreamSetting() changes the snapshot, on purpose.
             if (!chooseDecoder(m_PresentationSettings.decoderSelection,
                                m_PresentationSettings.rendererSelection,
                                m_Window, m_ActiveVideoFormat, m_ActiveVideoWidth,
@@ -3165,6 +3892,12 @@ void Session::exec()
 
             // After a window resize, we need to reset the pointer lock region
             m_InputHandler->updatePointerRegionLock();
+
+            // The gamepad menu offers the video options this renderer runs
+            m_VideoOptions = m_VideoDecoder->getVideoOptions();
+            if (m_GamepadMenuOpen) {
+                refreshStatusOverlay();
+            }
 
             SDL_UnlockMutex(m_DecoderLock);
             break;

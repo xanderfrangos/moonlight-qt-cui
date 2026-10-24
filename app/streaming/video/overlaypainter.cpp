@@ -156,6 +156,8 @@ struct MenuPalette {
     QColor title;
     QColor item;
     QColor selectedItem;
+    // A value at the end of a row that isn't selected
+    QColor itemValue;
     // Drawn around items that aren't selected, if valid
     QColor itemOutline;
     // The selected item's fill
@@ -183,7 +185,7 @@ const MenuPalette& menuPalette()
 {
     static const MenuPalette k_TvPalette = {
         QColor(0x1E, 0x23, 0x31, 0xF5), QColor(0xFF, 0xFF, 0xFF, 0x0F),
-        k_TvAccent, k_TvTextPrimary, k_TvAccentText,
+        k_TvAccent, k_TvTextPrimary, k_TvAccentText, k_TvTextSecondary,
         k_TvStroke, k_TvAccent,
         24, 14, 14, true,
         k_TvSurfaceRaised, k_TvTextPrimary
@@ -191,6 +193,7 @@ const MenuPalette& menuPalette()
     static const MenuPalette k_DesktopPalette = {
         QColor(0x42, 0x42, 0x42, 0xF2), QColor(0xFF, 0xFF, 0xFF, 0x14),
         QColor(0xFF, 0xFF, 0xFF, 0xB3), QColor(0xFF, 0xFF, 0xFF), QColor(0xFF, 0xFF, 0xFF),
+        QColor(0xFF, 0xFF, 0xFF, 0xB3),
         QColor(), QColor(0xFF, 0xFF, 0xFF, 0x1F),
         4, 2, 6, false,
         Qt::transparent, QColor(0xFF, 0xFF, 0xFF, 0xB3)
@@ -217,15 +220,44 @@ void drawFocusRing(QPainter& painter, const QRectF& itemRect, qreal radius, qrea
                             radius + ringOffset, radius + ringOffset);
 }
 
+// The marks drawn in the menu, as strokes rather than glyphs so they look the
+// same whatever font is installed
+enum class MenuMark { ChevronRight, ChevronUp, ChevronDown, Check };
+
+void drawMenuMark(QPainter& painter, MenuMark mark, const QPointF& center, qreal size,
+                  const QColor& color, qreal strokeWidth)
+{
+    const qreal h = size / 2;
+    QPolygonF points;
+    switch (mark) {
+    case MenuMark::ChevronRight:
+        points << QPointF(-h / 2, -h) << QPointF(h / 2, 0) << QPointF(-h / 2, h);
+        break;
+    case MenuMark::ChevronUp:
+        points << QPointF(-h, h / 2) << QPointF(0, -h / 2) << QPointF(h, h / 2);
+        break;
+    case MenuMark::ChevronDown:
+        points << QPointF(-h, -h / 2) << QPointF(0, h / 2) << QPointF(h, -h / 2);
+        break;
+    case MenuMark::Check:
+        points << QPointF(-h, 0) << QPointF(-h / 3, h * 2 / 3) << QPointF(h, -h * 2 / 3);
+        break;
+    }
+    points.translate(center);
+
+    QPen pen(color, strokeWidth);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPolyline(points);
 }
 
-SDL_Surface* Painter::paintGamepadMenu(const QString& title,
-                                       const QString& subtitle,
-                                       const QStringList& items,
-                                       int selectedIndex,
-                                       const QList<ButtonHint>& hints,
-                                       int viewportHeight)
+}
+
+SDL_Surface* Painter::paintGamepadMenu(const Menu& menu, int viewportHeight)
 {
+    const QList<MenuItem>& items = menu.items;
     if (items.isEmpty()) {
         return nullptr;
     }
@@ -245,6 +277,14 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
     const qreal subtitleGap = 6 * scale;
     // Long game names are elided rather than widening the card without limit
     const qreal maxSubtitleWidth = 560 * scale;
+    // Between a row's label and its value, and before its chevron or check
+    const qreal valueGap = 32 * scale;
+    const qreal markSize = 14 * scale;
+    const qreal markGap = 14 * scale;
+    const qreal markStroke = qMax(1.0, 2.5 * scale);
+    // Above and below the rows of a menu that scrolls, for its arrows
+    const qreal scrollArrowHeight = 24 * scale;
+    const qreal footnoteGap = 18 * scale;
     const qreal hintGap = 22 * scale;
     const qreal hintSpacing = 28 * scale;
     const qreal glyphGap = 10 * scale;
@@ -263,20 +303,34 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
         subtitleFont.setFamily(QStringLiteral("Sora"));
     }
     QFont itemFont = menuFont(21 * scale, QFont::Medium);
+    QFont valueFont = menuFont(19 * scale, QFont::Normal);
     QFont hintFont = menuFont(14 * scale, QFont::Normal);
     QFont glyphFont = menuFont(13 * scale, QFont::Bold);
 
     QFontMetricsF titleMetrics(titleFont);
     QFontMetricsF subtitleMetrics(subtitleFont);
     QFontMetricsF itemMetrics(itemFont);
+    QFontMetricsF valueMetrics(valueFont);
     QFontMetricsF hintMetrics(hintFont);
+
+    const int firstVisible = qBound(0, menu.firstVisibleIndex, (int)items.size() - 1);
+    const int visibleCount = qMin((int)items.size() - firstVisible, qMax(1, menu.maxVisibleItems));
+    const bool scrolls = visibleCount < items.size();
+
+    // Every row keeps a column for a chevron or check if any row has one,
+    // so labels and values line up
+    bool markColumn = false;
+    for (const MenuItem& item : items) {
+        markColumn = markColumn || item.submenu || item.checked;
+    }
+    const qreal markReserve = markColumn ? markSize + markGap : 0;
 
     // Each hint's glyph sits in a circle a little taller than the hint text
     const qreal glyphDiameter = qRound(hintMetrics.height() * 1.5);
     const qreal hintRowHeight = qMax(glyphDiameter, hintMetrics.height());
     qreal hintsWidth = 0;
-    for (int i = 0; i < hints.size(); i++) {
-        hintsWidth += glyphDiameter + glyphGap + hintMetrics.horizontalAdvance(hints.at(i).text);
+    for (int i = 0; i < menu.hints.size(); i++) {
+        hintsWidth += glyphDiameter + glyphGap + hintMetrics.horizontalAdvance(menu.hints.at(i).text);
         if (i > 0) {
             hintsWidth += hintSpacing;
         }
@@ -286,22 +340,47 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
     // far enough inside the card to leave room for it and its glow.
     const qreal selectionMargin = (palette.focusRing ? 10 : 0) * scale;
 
-    qreal contentWidth = qMax(titleMetrics.horizontalAdvance(title), hintsWidth);
-    contentWidth = qMax(contentWidth, qMin(subtitleMetrics.horizontalAdvance(subtitle), maxSubtitleWidth));
-    for (const QString& item : items) {
-        contentWidth = qMax(contentWidth, itemMetrics.horizontalAdvance(item) + (itemPaddingX * 2));
+    qreal contentWidth = qMax(titleMetrics.horizontalAdvance(menu.title), hintsWidth);
+    contentWidth = qMax(contentWidth, qMin(subtitleMetrics.horizontalAdvance(menu.subtitle), maxSubtitleWidth));
+    for (const MenuItem& item : items) {
+        qreal rowWidth = itemMetrics.horizontalAdvance(item.label) + (itemPaddingX * 2);
+        if (menu.alignRows) {
+            if (!item.value.isEmpty()) {
+                rowWidth += valueGap + valueMetrics.horizontalAdvance(item.value);
+            }
+            rowWidth += markReserve;
+        }
+        else {
+            // Centered labels keep clear of the mark on both sides
+            rowWidth += markReserve * 2;
+        }
+        contentWidth = qMax(contentWidth, rowWidth);
     }
 
     const qreal cardWidth = qMax(contentWidth + (cardPadding * 2) + (selectionMargin * 2),
-                                 420 * scale);
+                                 (menu.alignRows ? 480 : 420) * scale);
+    const qreal textWidth = cardWidth - (cardPadding * 2);
+
+    qreal footnoteHeight = 0;
+    if (!menu.footnote.isEmpty()) {
+        footnoteHeight = hintMetrics.boundingRect(QRectF(0, 0, textWidth, 100000),
+                                                  Qt::AlignHCenter | Qt::TextWordWrap,
+                                                  menu.footnote).height();
+    }
 
     qreal cardHeight = (cardPadding * 2) + selectionMargin +
                        titleMetrics.height() + titleGap +
-                       (itemHeight * items.size()) + (itemSpacing * (items.size() - 1));
-    if (!subtitle.isEmpty()) {
+                       (itemHeight * visibleCount) + (itemSpacing * (visibleCount - 1));
+    if (!menu.subtitle.isEmpty()) {
         cardHeight += subtitleGap + subtitleMetrics.height();
     }
-    if (!hints.isEmpty()) {
+    if (scrolls) {
+        cardHeight += scrollArrowHeight * 2;
+    }
+    if (footnoteHeight > 0) {
+        cardHeight += footnoteGap + footnoteHeight;
+    }
+    if (!menu.hints.isEmpty()) {
         cardHeight += hintGap + hintRowHeight;
     }
 
@@ -336,26 +415,36 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
     painter.setFont(titleFont);
     painter.setPen(palette.title);
     painter.drawText(QRectF(contentLeft, y, contentRight - contentLeft, titleMetrics.height()),
-                     Qt::AlignHCenter | Qt::AlignVCenter, title);
+                     Qt::AlignHCenter | Qt::AlignVCenter, menu.title);
     y += titleMetrics.height();
 
-    if (!subtitle.isEmpty()) {
+    if (!menu.subtitle.isEmpty()) {
         y += subtitleGap;
         painter.setFont(subtitleFont);
         painter.setPen(palette.item);
         painter.drawText(QRectF(contentLeft, y, contentRight - contentLeft, subtitleMetrics.height()),
                          Qt::AlignHCenter | Qt::AlignVCenter,
-                         subtitleMetrics.elidedText(subtitle, Qt::ElideRight, contentRight - contentLeft));
+                         subtitleMetrics.elidedText(menu.subtitle, Qt::ElideRight, contentRight - contentLeft));
         y += subtitleMetrics.height();
     }
     y += titleGap;
 
-    painter.setFont(itemFont);
-    for (int i = 0; i < items.size(); i++) {
+    const qreal centerX = (contentLeft + contentRight) / 2;
+    if (scrolls) {
+        if (firstVisible > 0) {
+            drawMenuMark(painter, MenuMark::ChevronUp, QPointF(centerX, y + scrollArrowHeight / 2),
+                         markSize, palette.itemValue, markStroke);
+        }
+        y += scrollArrowHeight;
+    }
+
+    for (int i = firstVisible; i < firstVisible + visibleCount; i++) {
+        const MenuItem& item = items.at(i);
+        const bool selected = i == menu.selectedIndex;
         const QRectF itemRect(contentLeft + selectionMargin, y,
                               contentRight - contentLeft - (selectionMargin * 2), itemHeight);
 
-        if (i == selectedIndex) {
+        if (selected) {
             painter.setPen(Qt::NoPen);
             painter.setBrush(palette.highlight);
             painter.drawRoundedRect(itemRect, itemRadius, itemRadius);
@@ -372,18 +461,66 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
                                     itemRadius, itemRadius);
         }
 
-        painter.setPen(i == selectedIndex ? palette.selectedItem : palette.item);
-        painter.drawText(itemRect.adjusted(itemPaddingX, 0, -itemPaddingX, 0),
-                         Qt::AlignHCenter | Qt::AlignVCenter, items.at(i));
+        const QColor textColor = selected ? palette.selectedItem : palette.item;
+        const QRectF textRect = itemRect.adjusted(itemPaddingX, 0, -itemPaddingX, 0);
+        const QPointF markCenter(textRect.right() - markSize / 2, itemRect.center().y());
+        if (item.submenu) {
+            drawMenuMark(painter, MenuMark::ChevronRight, markCenter, markSize, textColor, markStroke);
+        }
+        else if (item.checked) {
+            drawMenuMark(painter, MenuMark::Check, markCenter, markSize, textColor, markStroke);
+        }
+
+        if (menu.alignRows) {
+            const QRectF rowRect = textRect.adjusted(0, 0, -markReserve, 0);
+            qreal labelWidth = rowRect.width();
+            if (!item.value.isEmpty()) {
+                const qreal valueWidth = valueMetrics.horizontalAdvance(item.value);
+                painter.setFont(valueFont);
+                painter.setPen(selected ? palette.selectedItem : palette.itemValue);
+                painter.drawText(rowRect, Qt::AlignRight | Qt::AlignVCenter, item.value);
+                labelWidth -= valueWidth + valueGap;
+            }
+
+            painter.setFont(itemFont);
+            painter.setPen(textColor);
+            painter.drawText(QRectF(rowRect.left(), rowRect.top(), labelWidth, rowRect.height()),
+                             Qt::AlignLeft | Qt::AlignVCenter,
+                             itemMetrics.elidedText(item.label, Qt::ElideRight, labelWidth));
+        }
+        else {
+            painter.setFont(itemFont);
+            painter.setPen(textColor);
+            painter.drawText(textRect.adjusted(markReserve, 0, -markReserve, 0),
+                             Qt::AlignHCenter | Qt::AlignVCenter, item.label);
+        }
 
         y += itemHeight + itemSpacing;
     }
+    y -= itemSpacing;
 
-    if (!hints.isEmpty()) {
-        y += hintGap - itemSpacing;
+    if (scrolls) {
+        if (firstVisible + visibleCount < items.size()) {
+            drawMenuMark(painter, MenuMark::ChevronDown, QPointF(centerX, y + scrollArrowHeight / 2),
+                         markSize, palette.itemValue, markStroke);
+        }
+        y += scrollArrowHeight;
+    }
+
+    if (footnoteHeight > 0) {
+        y += footnoteGap;
+        painter.setFont(hintFont);
+        painter.setPen(palette.hintText);
+        painter.drawText(QRectF(contentLeft, y, textWidth, footnoteHeight),
+                         Qt::AlignHCenter | Qt::TextWordWrap, menu.footnote);
+        y += footnoteHeight;
+    }
+
+    if (!menu.hints.isEmpty()) {
+        y += hintGap;
 
         qreal x = contentLeft + ((contentRight - contentLeft) - hintsWidth) / 2;
-        for (const ButtonHint& hint : hints) {
+        for (const ButtonHint& hint : menu.hints) {
             const QRectF glyphRect(x, y + (hintRowHeight - glyphDiameter) / 2, glyphDiameter, glyphDiameter);
             const qreal borderWidth = qMax(1.0, 2 * scale);
 
@@ -396,12 +533,12 @@ SDL_Surface* Painter::paintGamepadMenu(const QString& title,
             painter.drawText(glyphRect, Qt::AlignCenter, hint.glyph);
             x += glyphDiameter + glyphGap;
 
-            const qreal textWidth = hintMetrics.horizontalAdvance(hint.text);
+            const qreal hintTextWidth = hintMetrics.horizontalAdvance(hint.text);
             painter.setFont(hintFont);
             painter.setPen(palette.hintText);
-            painter.drawText(QRectF(x, y, textWidth + 1, hintRowHeight),
+            painter.drawText(QRectF(x, y, hintTextWidth + 1, hintRowHeight),
                              Qt::AlignLeft | Qt::AlignVCenter, hint.text);
-            x += textWidth + hintSpacing;
+            x += hintTextWidth + hintSpacing;
         }
     }
 

@@ -694,6 +694,10 @@ void OverlayManager::getOverlayRect(OverlayAnchor anchor,
         x = (viewportWidth - overlayWidth) / 2;
         y = (viewportHeight - overlayHeight) / 2;
         break;
+    case OverlayAnchorLeft:
+        x = viewportWidth / 32;
+        y = (viewportHeight - overlayHeight) / 2;
+        break;
     case OverlayAnchorTopRight:
         x = viewportWidth - overlayWidth;
         y = originAtBottom ? viewportHeight - overlayHeight : 0;

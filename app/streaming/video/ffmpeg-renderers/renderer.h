@@ -270,6 +270,12 @@ public:
         return nullptr;
     }
 
+    // The VIDEO_OPTION_* flags for the decoder parameters this renderer
+    // applies. The rest are ignored.
+    virtual int getVideoOptions() {
+        return 0;
+    }
+
     virtual int getDecoderColorspace() {
         // Rec 601 is default
         return COLORSPACE_REC_601;

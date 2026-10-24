@@ -20,6 +20,10 @@ Item {
     readonly property url tvBackdropSource: boxArt
     property bool quitAfter : false
 
+    // Set when the stream ended to start again with settings changed from the
+    // gamepad menu. It starts once the old session has finished cleaning up.
+    property bool restarting : false
+
     function stageStarting(stage)
     {
         // Update the spinner text
@@ -67,6 +71,17 @@ Item {
 
     function sessionFinished(portTestResult)
     {
+        if (session.isRestartRequested() && !streamSegueErrorDialog.text) {
+            // Show progress until the new stream takes over. Gamepad input
+            // stays with the stream.
+            restarting = true
+            stageText = qsTr("Resuming %1...").arg(appName)
+            stageSpinner.visible = true
+            stageLabel.visible = true
+            window.visible = true
+            return
+        }
+
         if (portTestResult !== 0 && portTestResult !== -1 && streamSegueErrorDialog.text) {
             streamSegueErrorDialog.text += "\n\n" + qsTr("This PC's Internet connection is blocking Moonlight. Streaming over the Internet may not work while connected to this network.")
         }
@@ -100,6 +115,19 @@ Item {
 
     function sessionReadyForDeletion()
     {
+        if (restarting) {
+            // The old connection is gone, so the new one can start
+            var component = Qt.createComponent("StreamSegue.qml")
+            var segue = component.createObject(stackView, {
+                                                   "appName": appName,
+                                                   "session": session.createRestartSession(),
+                                                   "isResume": true,
+                                                   "boxArt": boxArt,
+                                                   "quitAfter": quitAfter
+                                               })
+            stackView.replace(stackView.currentItem, segue, StackView.Immediate)
+        }
+
         // Garbage collect the Session object since it's pretty heavyweight
         // and keeps other libraries (like SDL_TTF) around until it is deleted.
         session = null

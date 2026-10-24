@@ -96,6 +96,7 @@ public:
     virtual const char* getActiveUpscalerName() const override {
         return m_UpscalerRunning.load(std::memory_order_relaxed) ? m_Upscaler->name() : nullptr;
     }
+    virtual int getVideoOptions() override;
     virtual InitFailureReason getInitFailureReason() override;
     virtual IPyroWaveSurfacePool* getPyroWaveSurfacePool() override;
 

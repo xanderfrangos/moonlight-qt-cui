@@ -118,6 +118,17 @@ public:
     Q_INVOKABLE void interrupt();
     Q_PROPERTY(QStringList launchWarnings MEMBER m_LaunchWarnings NOTIFY launchWarningsChanged);
 
+    // Whether the stream ended to start again with settings changed from the
+    // gamepad menu that the host only reads when a stream starts
+    Q_INVOKABLE bool isRestartRequested() const
+    {
+        return m_RestartRequested;
+    }
+
+    // A session that resumes this one's app with the saved settings, for a
+    // restart. The caller owns it.
+    Q_INVOKABLE Session* createRestartSession();
+
     static
     void getDecoderInfo(SDL_Window* window,
                         bool& isHardwareAccelerated, bool& isFullScreenOnly,
@@ -192,6 +203,24 @@ private:
 
     bool populateDecoderProperties(SDL_Window* window);
 
+    struct PacingSettings {
+        bool effectiveVsync = false;
+        bool enableFramePacing = false;
+        bool enableVrr = false;
+        TimestampPacingOptions timestampPacing;
+        int refreshRate = 0;
+    };
+
+    // How the preferences' V-Sync, VRR Pacing Mode and timestamp pacing work
+    // out on the window's display: the stream's start takes them, and the
+    // gamepad menu takes them again when one changes. log reports why VRR
+    // isn't used.
+    PacingSettings resolvePacingSettings(SDL_Window* window, bool log) const;
+
+    // Whether VRR Pacing Mode could run on the window's display at the
+    // stream's frame rate, if it were on
+    bool canUseVrr(SDL_Window* window, bool effectiveVsync, bool log) const;
+
     void snapshotPresentationSettings(SDL_Window* window);
 
     // Replaces the stream's resolution and frame rate with the target
@@ -215,16 +244,65 @@ private:
 
     void refreshStatusOverlay();
 
+    enum GamepadMenuPage {
+        GamepadMenuPageMain,
+        GamepadMenuPageAdvanced,
+        // Settings that can change during the stream. These pages sit to one
+        // side and leave the stream undimmed, so changes can be judged.
+        GamepadMenuPageSettings,
+        GamepadMenuPageVsync,
+        // The values to choose from for one setting
+        GamepadMenuPageChoices,
+    };
+
     enum GamepadMenuItem {
         GamepadMenuDisconnect,
         GamepadMenuEndSession,
         GamepadMenuToggleStats,
         GamepadMenuToggleMouse,
         GamepadMenuPressGuide,
+        GamepadMenuAdvanced,
+        GamepadMenuChangeSettings,
+        GamepadMenuVsyncSettings,
+        GamepadMenuBitrate,
+        GamepadMenuDownscalingFilter,
+        GamepadMenuFsr1,
+        GamepadMenuFsr1Sharpness,
+        GamepadMenuLs1,
+        GamepadMenuLs1Sharpness,
+        GamepadMenuDithering,
+        GamepadMenuDitherGrain,
+        GamepadMenuDeband,
+        GamepadMenuVsync,
+        GamepadMenuVrr,
+        GamepadMenuTimestampPacing,
+        // A value on a choices page
+        GamepadMenuChoice,
     };
 
-    // The items the gamepad menu shows, in order
-    QVector<GamepadMenuItem> gamepadMenuItems() const;
+    struct GamepadMenuRow {
+        GamepadMenuItem item;
+        Overlay::Painter::MenuItem display;
+        // What a GamepadMenuChoice row picks
+        int value = 0;
+    };
+
+    // An open page of the gamepad menu and what's selected on it
+    struct GamepadMenuLevel {
+        GamepadMenuPage page;
+        // The setting a choices page picks a value for
+        GamepadMenuItem setting;
+        // Selected row
+        int index;
+        // First row shown, on a page with more rows than fit
+        int firstVisible;
+    };
+
+    // The rows a page of the gamepad menu shows, in order. Settings that
+    // would make no difference to this stream are left out.
+    QVector<GamepadMenuRow> gamepadMenuRows(const GamepadMenuLevel& level) const;
+
+    QVector<GamepadMenuRow> gamepadMenuChoices(GamepadMenuItem setting) const;
 
     QString gamepadMenuItemLabel(GamepadMenuItem item) const;
 
@@ -238,9 +316,35 @@ private:
 
     void closeGamepadMenu();
 
+    // Returns to the previous page, or closes the menu from the first one
+    void gamepadMenuBack();
+
+    void pushGamepadMenuPage(GamepadMenuPage page, GamepadMenuItem setting = GamepadMenuChoice);
+
     void moveGamepadMenuSelection(int delta);
 
     void activateGamepadMenuSelection();
+
+    // Changes a setting from the settings pages of the gamepad menu
+    void activateGamepadMenuSetting(GamepadMenuItem item, int value);
+
+    // Saves a setting changed in m_Preferences and applies it to the stream:
+    // the renderer is rebuilt with it, or the stream restarts if the host
+    // needs to know (the bitrate, and whether VRR Pacing Mode runs).
+    void applyStreamSetting(StreamingPreferences::StreamSetting setting);
+
+    // Ends the stream for the UI to start it again
+    void restartStream();
+
+    // Whether the stream is drawn larger or smaller than it's decoded, which
+    // decides whether the upscalers or the downscaling filter do anything
+    bool isStreamUpscaled() const;
+    bool isStreamDownscaled() const;
+
+    // The bitrate the settings page would pick for this stream's mode
+    int getDefaultStreamBitrate() const;
+
+    QVector<int> getBitrateChoices() const;
 
     void updateOptimalWindowDisplayMode();
 
@@ -364,6 +468,8 @@ private:
     // The PC's own settings, when it has any and the caller didn't pass
     // preferences. Must be declared before m_Preferences, which points to it.
     std::unique_ptr<StreamingPreferences> m_HostPreferences;
+    // Preferences the caller passed in (the command line's), if any
+    StreamingPreferences* m_CallerPreferences;
     StreamingPreferences* m_Preferences;
     ClientPacingWarning m_ClientPacingWarning;
     PresentationSettings m_PresentationSettings;
@@ -391,9 +497,19 @@ private:
     SdlInputHandler* m_InputHandler;
     int m_MouseEmulationRefCount;
     bool m_GamepadMenuOpen;
-    int m_GamepadMenuIndex;
+    // The open pages, the one showing last
+    QVector<GamepadMenuLevel> m_GamepadMenuStack;
     short m_GamepadMenuGamepadIndex;
     SDL_JoystickID m_GamepadMenuJsId;
+    // The VIDEO_OPTION_* flags of the current renderer
+    int m_VideoOptions = 0;
+    // Whether the host was told this client runs VRR Pacing Mode, which it
+    // reads when the stream starts
+    bool m_HostVrrRequested = false;
+    bool m_RestartRequested = false;
+    // Resume the app even if the PC hasn't reported it running yet, as on a
+    // restart soon after it launched
+    bool m_ResumeApp = false;
     int m_FlushingWindowEventsRef;
     QStringList m_LaunchWarnings;
     QString m_HostLaunchWarning;
