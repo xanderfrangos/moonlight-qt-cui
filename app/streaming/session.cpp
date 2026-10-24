@@ -719,8 +719,22 @@ bool Session::populateDecoderProperties(SDL_Window* window)
     return true;
 }
 
+// The global preferences with the PC's own settings applied, or nullptr if
+// it has none
+static StreamingPreferences* createHostPreferences(NvComputer* computer)
+{
+    QString uuid;
+    {
+        QReadLocker lock(&computer->lock);
+        uuid = computer->uuid;
+    }
+    return StreamingPreferences::createForHost(uuid);
+}
+
 Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *preferences)
-    : m_Preferences(preferences ? preferences : StreamingPreferences::get()),
+    : m_HostPreferences(preferences ? nullptr : createHostPreferences(computer)),
+      m_Preferences(preferences ? preferences :
+                    m_HostPreferences ? m_HostPreferences.get() : StreamingPreferences::get()),
       m_IsFullScreen(m_Preferences->windowMode != StreamingPreferences::WM_WINDOWED || !WMUtils::isRunningDesktopEnvironment()),
       m_Computer(computer),
       m_App(app),
@@ -2507,12 +2521,13 @@ void Session::start()
         QString error;
         m_DiagnosticCapture = DiagnosticCapture::begin(DiagnosticCapture::rootDirectory(), metadata, error);
         if (m_DiagnosticCapture) {
-            m_Preferences->setDiagnosticsStatus(tr("Recording folder: %1. Disconnect before exporting.")
+            // The settings page shows the global preferences' status
+            StreamingPreferences::get()->setDiagnosticsStatus(tr("Recording folder: %1. Disconnect before exporting.")
                 .arg(QDir::toNativeSeparators(m_DiagnosticCapture->directory())));
             qInfo() << "VRR diagnostic capture:" << m_DiagnosticCapture->directory();
         }
         else {
-            m_Preferences->setDiagnosticsStatus(error);
+            StreamingPreferences::get()->setDiagnosticsStatus(error);
             qWarning() << "Settings diagnostics not enabled:" << error;
         }
     }

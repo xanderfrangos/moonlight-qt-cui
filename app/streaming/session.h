@@ -361,6 +361,9 @@ private:
         StreamingPreferences::RendererSelection rendererSelection = StreamingPreferences::RS_AUTO;
     };
 
+    // The PC's own settings, when it has any and the caller didn't pass
+    // preferences. Must be declared before m_Preferences, which points to it.
+    std::unique_ptr<StreamingPreferences> m_HostPreferences;
     StreamingPreferences* m_Preferences;
     ClientPacingWarning m_ClientPacingWarning;
     PresentationSettings m_PresentationSettings;

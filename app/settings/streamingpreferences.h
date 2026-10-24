@@ -53,6 +53,21 @@ public:
     // settings file, so they can be changed there for testing
     TimestampPacingOptions timestampPacingOptions() const { return m_TimestampPacing; }
 
+    // Settings a PC can use in place of the global ones. The map has an entry
+    // for each group of settings the PC overrides (resolution, fps, bitrate,
+    // hdr, vsync, codec, yuv444), holding that group's values; a group that
+    // is missing uses the global settings.
+    Q_INVOKABLE static QVariantMap getHostOverrides(const QString& uuid);
+    Q_INVOKABLE static void setHostOverrides(const QString& uuid, const QVariantMap& overrides);
+    static void removeHostOverrides(const QString& uuid);
+
+    // The saved preferences with a PC's overrides applied, for a stream from
+    // it, or nullptr if it overrides nothing. The caller owns the result.
+    static StreamingPreferences* createForHost(const QString& uuid);
+
+    // The four VRR timing values a VrrLatencyMode preset fills in
+    Q_INVOKABLE static QVariantMap getVrrPreset(int mode);
+
     // These preferences must be applied before the QGuiApplication is created,
     // so they can be read directly from storage without a preferences instance.
     static bool isValidUiScale(int scale);
@@ -421,6 +436,8 @@ public:
     // Rate choices are advisory; toggling VRR never rewrites the saved FPS
     // preference.
     Q_INVOKABLE QVariantList getFpsChoices(const QVariantList& refreshRates) const;
+    // The same, for a saved FPS and VRR choice other than the global ones
+    Q_INVOKABLE static QVariantList getFpsChoicesFor(const QVariantList& refreshRates, int savedFps, bool vrr);
 
     // The frame rate to stream at on a display: its refresh rate, or on a
     // VRR display a little below it, R - R*R/3600 rounded down (116 FPS at
@@ -431,6 +448,8 @@ public:
     // about once a minute, while 116 FPS was smooth. VRR Pacing Mode counts
     // as a VRR display. Zero when the refresh rate is unknown.
     Q_INVOKABLE int getRecommendedFps(int refreshHz, bool vrrDisplay) const;
+    // What getRecommendedFps() picks on a VRR display
+    Q_INVOKABLE static int getVrrFps(int refreshHz);
 
     // Directly accessible members for preferences
     int width;
@@ -626,6 +645,8 @@ signals:
 
 private:
     explicit StreamingPreferences(QQmlEngine *qmlEngine);
+
+    void applyHostOverrides(const QVariantMap& overrides);
 
     QString getSuffixFromLanguage(Language lang);
 

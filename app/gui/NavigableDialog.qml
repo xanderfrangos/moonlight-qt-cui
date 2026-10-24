@@ -214,11 +214,15 @@ Dialog {
         when: SystemProperties.tvMode
     }
 
+    // TV mode: the content width. Dialogs with more than a message or a field
+    // in them can be wider.
+    property int tvContentWidth: TvTheme.dialogContentWidth
+
     // A fixed width, so dialogs don't change size with their text
     Binding {
         target: navigableDialog
         property: "contentWidth"
-        value: TvTheme.dialogContentWidth
+        value: navigableDialog.tvContentWidth
         when: SystemProperties.tvMode
     }
 

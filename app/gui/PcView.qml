@@ -419,6 +419,14 @@ CenteredGridView {
                 }
 
                 NavigableMenuItem {
+                    text: qsTr("Stream Settings")
+                    onTriggered: {
+                        hostSettingsDialog.uuid = computerModel.uuidAt(index)
+                        hostSettingsDialog.pcName = model.name
+                        hostSettingsDialog.open()
+                    }
+                }
+                NavigableMenuItem {
                     text: qsTr("Rename PC")
                     onTriggered: {
                         renamePcDialog.pcIndex = index
@@ -691,6 +699,10 @@ CenteredGridView {
                 }
             }
         }
+    }
+
+    HostSettingsDialog {
+        id: hostSettingsDialog
     }
 
     NavigableMessageDialog {

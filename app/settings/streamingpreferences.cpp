@@ -102,11 +102,44 @@
 #define SER_KEEPAWAKE "keepawake"
 #define SER_LANGUAGE "language"
 #define SER_RENDERER "renderer"
+#define SER_HOSTOVERRIDES "hostoverrides"
 
 #define CURRENT_DEFAULT_VER 2
 #define CURRENT_VRR_TIMING_PRESET_REVISION 3
 
 static StreamingPreferences* s_GlobalPrefs;
+
+// Every value a PC can override, saved as hostoverrides/<uuid>/<group>/<key>.
+// Values are converted to these types when read back, since some settings
+// backends (the Windows registry) return them all as strings.
+static const struct HostOverrideKey {
+    const char* group;
+    const char* key;
+    bool isBool;
+} k_HostOverrideKeys[] = {
+    { "resolution", "width", false },
+    { "resolution", "height", false },
+    { "resolution", "native", true },
+    { "fps", "fps", false },
+    { "fps", "native", true },
+    { "fps", "recommended", true },
+    { "bitrate", "kbps", false },
+    { "hdr", "enabled", true },
+    { "vsync", "vsync", true },
+    { "vsync", "framePacing", true },
+    { "vsync", "vrr", true },
+    { "vsync", "timestampPacing", true },
+    { "vsync", "timestampSmoothing", false },
+    { "vsync", "vrrLatencyMode", false },
+    { "vsync", "vrrBufferPerMille", false },
+    { "vsync", "vrrTargetHundredths", false },
+    { "vsync", "vrrHistorySeconds", false },
+    { "vsync", "vrrToleranceUs", false },
+    { "vsync", "smoothVrrFrameTiming", true },
+    { "vsync", "absorbVrrMicrostutter", true },
+    { "codec", "value", false },
+    { "yuv444", "enabled", true },
+};
 
 Q_GLOBAL_STATIC(QReadWriteLock, s_GlobalPrefsLock)
 
@@ -798,12 +831,175 @@ void StreamingPreferences::exportLatestDiagnostics()
     thread->start();
 }
 
+QVariantMap StreamingPreferences::getHostOverrides(const QString& uuid)
+{
+    QVariantMap overrides;
+    if (uuid.isEmpty()) {
+        return overrides;
+    }
+
+    QSettings settings;
+    settings.beginGroup(SER_HOSTOVERRIDES);
+    settings.beginGroup(uuid);
+    for (const HostOverrideKey& entry : k_HostOverrideKeys) {
+        const QString key = QString("%1/%2").arg(entry.group, entry.key);
+        if (!settings.contains(key)) {
+            continue;
+        }
+
+        const QVariant saved = settings.value(key);
+        QVariantMap group = overrides.value(entry.group).toMap();
+        group.insert(entry.key, entry.isBool ? QVariant(saved.toBool()) : QVariant(saved.toInt()));
+        overrides.insert(entry.group, group);
+    }
+    return overrides;
+}
+
+void StreamingPreferences::setHostOverrides(const QString& uuid, const QVariantMap& overrides)
+{
+    if (uuid.isEmpty()) {
+        return;
+    }
+
+    QSettings settings;
+    settings.beginGroup(SER_HOSTOVERRIDES);
+    settings.remove(uuid);
+    settings.beginGroup(uuid);
+    for (const HostOverrideKey& entry : k_HostOverrideKeys) {
+        const QVariantMap group = overrides.value(entry.group).toMap();
+        if (group.contains(entry.key)) {
+            const QVariant value = group.value(entry.key);
+            settings.setValue(QString("%1/%2").arg(entry.group, entry.key),
+                              entry.isBool ? QVariant(value.toBool()) : QVariant(value.toInt()));
+        }
+    }
+}
+
+void StreamingPreferences::removeHostOverrides(const QString& uuid)
+{
+    if (uuid.isEmpty()) {
+        return;
+    }
+
+    QSettings settings;
+    settings.beginGroup(SER_HOSTOVERRIDES);
+    settings.remove(uuid);
+}
+
+StreamingPreferences* StreamingPreferences::createForHost(const QString& uuid)
+{
+    const QVariantMap overrides = getHostOverrides(uuid);
+    if (overrides.isEmpty()) {
+        return nullptr;
+    }
+
+    qInfo() << "Using this PC's own settings for:" << overrides.keys();
+
+    // The settings page saves before a stream can start, so the saved
+    // preferences are the global ones in effect
+    auto prefs = new StreamingPreferences(nullptr);
+    prefs->applyHostOverrides(overrides);
+    return prefs;
+}
+
+void StreamingPreferences::applyHostOverrides(const QVariantMap& overrides)
+{
+    const QVariantMap resolution = overrides.value("resolution").toMap();
+    if (!resolution.isEmpty()) {
+        width = qBound(256, resolution.value("width", width).toInt(), 8192);
+        height = qBound(256, resolution.value("height", height).toInt(), 8192);
+        nativeResolution = resolution.value("native", nativeResolution).toBool();
+    }
+
+    const QVariantMap frameRate = overrides.value("fps").toMap();
+    if (!frameRate.isEmpty()) {
+        fps = qBound(10, frameRate.value("fps", fps).toInt(), 9999);
+        nativeFps = frameRate.value("native", nativeFps).toBool();
+        recommendedFps = !nativeFps && frameRate.value("recommended", recommendedFps).toBool();
+    }
+
+    const QVariantMap hdr = overrides.value("hdr").toMap();
+    if (!hdr.isEmpty()) {
+        enableHdr = hdr.value("enabled", enableHdr).toBool();
+    }
+
+    const QVariantMap yuv444 = overrides.value("yuv444").toMap();
+    if (!yuv444.isEmpty()) {
+        enableYUV444 = yuv444.value("enabled", enableYUV444).toBool();
+    }
+
+    const QVariantMap codec = overrides.value("codec").toMap();
+    if (!codec.isEmpty()) {
+        const int value = codec.value("value", static_cast<int>(videoCodecConfig)).toInt();
+        if (value >= VCC_AUTO && value <= VCC_FORCE_PYROWAVE && value != VCC_FORCE_HEVC_HDR_DEPRECATED) {
+            videoCodecConfig = static_cast<VideoCodecConfig>(value);
+        }
+    }
+
+    const QVariantMap vsync = overrides.value("vsync").toMap();
+    if (!vsync.isEmpty()) {
+        enableVsync = vsync.value("vsync", enableVsync).toBool();
+        framePacing = vsync.value("framePacing", framePacing).toBool();
+        enableVrr = vsync.value("vrr", enableVrr).toBool();
+        m_TimestampPacing.enabled = vsync.value("timestampPacing", m_TimestampPacing.enabled).toBool();
+        m_TimestampPacing.smoothing = vsync.value("timestampSmoothing", m_TimestampPacing.smoothing).toInt();
+        m_TimestampPacing = m_TimestampPacing.resolved();
+        const int mode = vsync.value("vrrLatencyMode", vrrLatencyMode).toInt();
+        if (mode >= VLM_SMOOTH && mode <= VLM_LOW_LATENCY) {
+            vrrLatencyMode = mode;
+        }
+        m_VrrTimingOptions = VrrTimingOptions{
+            vsync.value("vrrBufferPerMille", vrrBufferPerMille()).toInt(),
+            vsync.value("vrrTargetHundredths", vrrTargetHundredths()).toInt(),
+            vsync.value("vrrHistorySeconds", vrrHistorySeconds()).toInt(),
+            vsync.value("vrrToleranceUs", vrrToleranceUs()).toInt()
+        }.resolved(vrrLatencyMode);
+        smoothVrrFrameTiming = vsync.value("smoothVrrFrameTiming", smoothVrrFrameTiming).toBool();
+        absorbVrrMicrostutter = vsync.value("absorbVrrMicrostutter", absorbVrrMicrostutter).toBool();
+
+        // The two never run together, as on the settings page
+        if (m_TimestampPacing.enabled) {
+            enableVrr = false;
+        }
+    }
+
+    const QVariantMap bitrate = overrides.value("bitrate").toMap();
+    if (!bitrate.isEmpty()) {
+        bitrateKbps = qBound(500, bitrate.value("kbps", bitrateKbps).toInt(), 3000000);
+    }
+    else if (autoAdjustBitrate &&
+             (!resolution.isEmpty() || !frameRate.isEmpty() || !hdr.isEmpty() ||
+              !yuv444.isEmpty() || !codec.isEmpty())) {
+        // The global bitrate follows the global settings, so follow this
+        // PC's settings the same way
+        bitrateKbps = videoCodecConfig == VCC_FORCE_PYROWAVE ?
+                          getDefaultPyroWaveBitrate(width, height, fps, enableYUV444, enableHdr) :
+                          getDefaultBitrate(width, height, fps, enableYUV444);
+    }
+}
+
+QVariantMap StreamingPreferences::getVrrPreset(int mode)
+{
+    const VrrTimingOptions preset = VrrTimingOptions::preset(mode);
+    QVariantMap result;
+    result.insert("bufferPerMille", preset.bufferPerMille);
+    result.insert("targetHundredths", preset.targetHundredths);
+    result.insert("historySeconds", preset.historySeconds);
+    result.insert("toleranceUs", preset.toleranceUs);
+    return result;
+}
+
 bool StreamingPreferences::effectiveVsync() const
 {
     return enableVsync || GamescopeDisplayState::runningUnderGamescope();
 }
 
 QVariantList StreamingPreferences::getFpsChoices(const QVariantList& refreshRates) const
+{
+    return getFpsChoicesFor(refreshRates, fps, effectiveVsync() && enableVrr);
+}
+
+QVariantList StreamingPreferences::getFpsChoicesFor(const QVariantList& refreshRates, int savedFps, bool vrr)
 {
     std::vector<int> rates;
     rates.reserve(refreshRates.size());
@@ -816,7 +1012,7 @@ QVariantList StreamingPreferences::getFpsChoices(const QVariantList& refreshRate
     }
 
     const std::vector<VrrFpsChoice> choices = VrrRatePolicy::buildChoices(
-        rates, fps, effectiveVsync() && enableVrr);
+        rates, savedFps, vrr);
     QVariantList result;
     for (const VrrFpsChoice& choice : choices) {
         QVariantMap item;
@@ -851,6 +1047,11 @@ int StreamingPreferences::getRecommendedFps(int refreshHz, bool vrrDisplay) cons
     }
     const bool vrr = vrrDisplay || (effectiveVsync() && enableVrr);
     return vrr ? VrrRatePolicy::vrrRateForRefresh(refreshHz) : refreshHz;
+}
+
+int StreamingPreferences::getVrrFps(int refreshHz)
+{
+    return refreshHz > 0 ? VrrRatePolicy::vrrRateForRefresh(refreshHz) : 0;
 }
 
 int StreamingPreferences::getDefaultBitrate(int width, int height, int fps, bool yuv444)

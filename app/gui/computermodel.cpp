@@ -171,6 +171,9 @@ void ComputerModel::deleteComputer(int computerIndex)
         m_PairingComputer = nullptr;
     }
 
+    // The PC's own settings go with it
+    StreamingPreferences::removeHostOverrides(uuidAt(computerIndex));
+
     // m_Computer[computerIndex] will be deleted by this call
     m_ComputerManager->deleteHost(m_Computers[computerIndex]);
 
