@@ -49,17 +49,20 @@ QImage RoundedImageProvider::requestImage(const QString& id, QSize* size, const 
     QImage result(source.size(), QImage::Format_ARGB32_Premultiplied);
     result.fill(Qt::transparent);
 
-    // The radius is given at the drawn size, so scale it to the image in each
-    // direction separately. That way the corners look round once the image is
-    // stretched to the drawn size.
-    const qreal radiusX = radius * source.width() / drawnWidth;
-    const qreal radiusY = radius * source.height() / drawnHeight;
+    // The image is shown cropped to the drawn shape from its center, so only
+    // that part gets rounded. The rest stays transparent and is never shown.
+    const qreal scale = qMin(source.width() / drawnWidth, source.height() / drawnHeight);
+    const qreal cropWidth = drawnWidth * scale;
+    const qreal cropHeight = drawnHeight * scale;
+    const QRectF crop((source.width() - cropWidth) / 2, (source.height() - cropHeight) / 2,
+                      cropWidth, cropHeight);
 
     QPainter painter(&result);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setPen(Qt::NoPen);
     painter.setBrush(QBrush(source));
-    painter.drawRoundedRect(QRectF(result.rect()), radiusX, radiusY);
+    // The radius is given at the drawn size
+    painter.drawRoundedRect(crop, radius * scale, radius * scale);
     painter.end();
 
     if (size != nullptr) {

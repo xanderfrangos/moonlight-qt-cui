@@ -8,8 +8,8 @@
 // the image is drawn at and the corner radius at that size, each after a dot.
 //
 // The image keeps its original size so callers can still recognize it by its
-// dimensions. The corners are scaled to match, so they come out round even
-// when the image is stretched to a different aspect ratio.
+// dimensions. Art of a different shape than the drawn size is rounded on its
+// center crop, to be shown with Image.PreserveAspectCrop.
 //
 // Like BlurredImageProvider, this runs on the CPU so it works without shader
 // effects on every Qt version we support.

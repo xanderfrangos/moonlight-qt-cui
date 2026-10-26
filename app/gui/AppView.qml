@@ -32,7 +32,7 @@ CenteredGridView {
     // The card is as wide as its box art, so the art lines up with the bars
     readonly property int tvCardWidth: 240
     cellWidth: SystemProperties.tvMode ? tvCellWidth : 230
-    cellHeight: SystemProperties.tvMode ? 425 * tvScale : 297
+    cellHeight: SystemProperties.tvMode ? 465 * tvScale : 330
 
     // Shown blurred behind the page in TV mode
     readonly property url tvBackdropSource: currentItem ? currentItem.backdropArt : ""
@@ -90,7 +90,7 @@ import AppModel 1.0; AppModel {}', parent, '')
 
     delegate: NavigableItemDelegate {
         width: SystemProperties.tvMode ? appGrid.tvCardWidth : 220
-        height: SystemProperties.tvMode ? 390 : 287
+        height: SystemProperties.tvMode ? 430 : 320
         grid: appGrid
         tvCardStyle: true
         tvGridScale: appGrid.tvScale
@@ -103,8 +103,9 @@ import AppModel 1.0; AppModel {}', parent, '')
         // A running game opens its menu to resume or quit (see Keys.onReturnPressed)
         tvHintSelect: model.running ? qsTr("Resume or quit") : qsTr("Play")
 
+        // 2:3 box art, the shape of Steam's library covers
         readonly property int artWidth: SystemProperties.tvMode ? 240 : 200
-        readonly property int artHeight: SystemProperties.tvMode ? 320 : 267
+        readonly property int artHeight: SystemProperties.tvMode ? 360 : 300
 
         // Placeholder art is a plain gray box, which makes a poor backdrop
         readonly property url backdropArt: appIcon.isPlaceholder ? "" : model.boxart
@@ -171,6 +172,8 @@ import AppModel 1.0; AppModel {}', parent, '')
             anchors.horizontalCenter: parent.horizontalCenter
             y: 10
             source: SystemProperties.tvMode ? roundedUrl(model.boxart) : model.boxart
+            // Art of a different shape fills the card from its center
+            fillMode: Image.PreserveAspectCrop
 
             // TV mode rounds the art's corners with RoundedImageProvider. The
             // art keeps its own size so the placeholder checks below still work.
