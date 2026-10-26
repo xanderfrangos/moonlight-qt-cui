@@ -2021,6 +2021,9 @@ static const SDL_Color k_NoBackground = {0x00, 0x00, 0x00, 0x00};
 // Darkens the stream behind the menu so the menu is the only thing in focus
 static const QColor k_MenuDimColor(0x00, 0x00, 0x00, 0xA8);
 
+// Keys in the menu's prompts, in the same neutral as a gamepad's unlettered buttons
+static const QColor k_MenuKeyHintColor(0xE6, 0xE8, 0xEE);
+
 // Returns the size of the stream window in the same pixel units the renderers
 // use for their viewports, which is what the menu scales itself against.
 void Session::getWindowPixelSize(SDL_Window* window, int& width, int& height)
@@ -2235,21 +2238,29 @@ void Session::refreshStatusOverlay()
         menu.maxVisibleItems = k_GamepadMenuMaxRows;
         menu.alignRows = settingsPage;
 
-        // Prompts for the buttons that gamepad.cpp handles while the menu is
-        // up, labeled the way the gamepad that opened the menu labels them.
-        // Swapped face buttons are swapped before the menu sees them.
-        const auto style = (ControllerButtonStyle::Style)(m_InputHandler != nullptr ?
-                                                              m_InputHandler->getButtonStyle(m_GamepadMenuJsId) :
-                                                              ControllerButtonStyle::Xbox);
-        const bool swapped = m_Preferences->swapFaceButtons;
-        const ControllerButtonStyle::FacePosition selectPosition = swapped ? ControllerButtonStyle::East : ControllerButtonStyle::South;
-        const ControllerButtonStyle::FacePosition backPosition = swapped ? ControllerButtonStyle::South : ControllerButtonStyle::East;
-        menu.hints.append({ ControllerButtonStyle::glyph(style, selectPosition),
-                            ControllerButtonStyle::color(style, selectPosition),
-                            tr("Select") });
-        menu.hints.append({ ControllerButtonStyle::glyph(style, backPosition),
-                            ControllerButtonStyle::color(style, backPosition),
-                            tr("Back") });
+        if (m_GamepadMenuJsId == -1) {
+            // Opened from the keyboard, so prompt for the keys keyboard.cpp
+            // handles while the menu is up
+            menu.hints.append({ tr("Enter"), k_MenuKeyHintColor, tr("Select") });
+            menu.hints.append({ tr("Backspace"), k_MenuKeyHintColor, tr("Back") });
+        }
+        else {
+            // Prompts for the buttons that gamepad.cpp handles while the menu is
+            // up, labeled the way the gamepad that opened the menu labels them.
+            // Swapped face buttons are swapped before the menu sees them.
+            const auto style = (ControllerButtonStyle::Style)(m_InputHandler != nullptr ?
+                                                                  m_InputHandler->getButtonStyle(m_GamepadMenuJsId) :
+                                                                  ControllerButtonStyle::Xbox);
+            const bool swapped = m_Preferences->swapFaceButtons;
+            const ControllerButtonStyle::FacePosition selectPosition = swapped ? ControllerButtonStyle::East : ControllerButtonStyle::South;
+            const ControllerButtonStyle::FacePosition backPosition = swapped ? ControllerButtonStyle::South : ControllerButtonStyle::East;
+            menu.hints.append({ ControllerButtonStyle::glyph(style, selectPosition),
+                                ControllerButtonStyle::color(style, selectPosition),
+                                tr("Select") });
+            menu.hints.append({ ControllerButtonStyle::glyph(style, backPosition),
+                                ControllerButtonStyle::color(style, backPosition),
+                                tr("Back") });
+        }
 
         int windowWidth, windowHeight;
         getWindowPixelSize(m_Window, windowWidth, windowHeight);
@@ -2313,12 +2324,16 @@ QVector<Session::GamepadMenuRow> Session::gamepadMenuRows(const GamepadMenuLevel
         addRow(GamepadMenuEndSession);
 
         // Mouse mode is normally toggled by holding Start, but holding Start may
-        // open this menu instead, so offer it here too
-        if (m_Preferences->gamepadMouse) {
+        // open this menu instead, so offer it here too. It belongs to the
+        // gamepad that opened the menu, so not when the keyboard did.
+        if (m_Preferences->gamepadMouse && m_GamepadMenuJsId != -1) {
             addRow(GamepadMenuToggleMouse);
         }
 
-        addRow(GamepadMenuPressGuide);
+        // Opened from the keyboard, there may be no gamepad to press it on
+        if (m_InputHandler != nullptr && m_InputHandler->getGamepadMask() != 0) {
+            addRow(GamepadMenuPressGuide);
+        }
         addRow(GamepadMenuAdvanced, QString(), true);
         break;
 
@@ -2551,6 +2566,12 @@ void Session::openGamepadMenu(short gamepadIndex, SDL_JoystickID jsId)
     m_GamepadMenuOpen = true;
     m_GamepadMenuStack = { { GamepadMenuPageMain, GamepadMenuChoice, 0, 0 } };
     refreshStatusOverlay();
+
+    // The keyboard drives the menu too while it's up, so let go of any keys
+    // the host thinks are held, such as the shortcut that opened it
+    if (m_InputHandler != nullptr) {
+        m_InputHandler->raiseAllKeys();
+    }
 }
 
 void Session::closeGamepadMenu()

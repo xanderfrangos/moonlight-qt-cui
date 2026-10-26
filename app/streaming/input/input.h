@@ -150,6 +150,12 @@ public:
     void toggleMouseEmulation(SDL_JoystickID jsId);
 
     void sendGuideButtonPress(short gamepadIndex);
+
+    // The gamepads the host currently knows about, one bit per gamepad index
+    int getGamepadMask() const
+    {
+        return m_GamepadMask;
+    }
     int getAttachedPlayStationGamepadMask();
 
     void raiseAllKeys();
@@ -189,6 +195,7 @@ private:
         KeyComboQuitAndExit,
         KeyComboToggleKeyboardGrab,
         KeyComboToggleTimingGraph,
+        KeyComboOpenMenu,
         KeyComboMax
     };
 
@@ -231,6 +238,9 @@ private:
 
     void performSpecialKeyCombo(KeyCombo combo);
 
+    // Returns true if the key event was consumed by the gamepad menu
+    bool handleGamepadMenuKeyEvent(SDL_KeyboardEvent* event);
+
     static
     Uint32 longPressTimerCallback(Uint32 interval, void* param);
 
@@ -271,6 +281,9 @@ private:
     int m_GamepadMask;
     GamepadState m_GamepadState[MAX_GAMEPADS];
     QSet<uint32_t> m_KeysDown;
+    // Keys pressed while the gamepad menu was up, hidden from the host until
+    // they're released
+    QSet<int> m_MenuKeysDown;
     bool m_FakeMouseCaptureActive;
     bool m_KeyboardCaptureActive;
     QString m_OldIgnoreDevices;

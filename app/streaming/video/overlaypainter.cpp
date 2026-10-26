@@ -312,6 +312,7 @@ SDL_Surface* Painter::paintGamepadMenu(const Menu& menu, int viewportHeight)
     QFontMetricsF itemMetrics(itemFont);
     QFontMetricsF valueMetrics(valueFont);
     QFontMetricsF hintMetrics(hintFont);
+    QFontMetricsF glyphMetrics(glyphFont);
 
     const int firstVisible = qBound(0, menu.firstVisibleIndex, (int)items.size() - 1);
     const int visibleCount = qMin((int)items.size() - firstVisible, qMax(1, menu.maxVisibleItems));
@@ -325,12 +326,16 @@ SDL_Surface* Painter::paintGamepadMenu(const Menu& menu, int viewportHeight)
     }
     const qreal markReserve = markColumn ? markSize + markGap : 0;
 
-    // Each hint's glyph sits in a circle a little taller than the hint text
+    // Each hint's glyph sits in a circle a little taller than the hint text,
+    // stretched into a pill for a key name too wide to fit
     const qreal glyphDiameter = qRound(hintMetrics.height() * 1.5);
     const qreal hintRowHeight = qMax(glyphDiameter, hintMetrics.height());
+    auto glyphWidth = [&](const ButtonHint& hint) {
+        return qMax(glyphDiameter, qreal(qRound(glyphMetrics.horizontalAdvance(hint.glyph) + glyphDiameter * 0.8)));
+    };
     qreal hintsWidth = 0;
     for (int i = 0; i < menu.hints.size(); i++) {
-        hintsWidth += glyphDiameter + glyphGap + hintMetrics.horizontalAdvance(menu.hints.at(i).text);
+        hintsWidth += glyphWidth(menu.hints.at(i)) + glyphGap + hintMetrics.horizontalAdvance(menu.hints.at(i).text);
         if (i > 0) {
             hintsWidth += hintSpacing;
         }
@@ -521,17 +526,19 @@ SDL_Surface* Painter::paintGamepadMenu(const Menu& menu, int viewportHeight)
 
         qreal x = contentLeft + ((contentRight - contentLeft) - hintsWidth) / 2;
         for (const ButtonHint& hint : menu.hints) {
-            const QRectF glyphRect(x, y + (hintRowHeight - glyphDiameter) / 2, glyphDiameter, glyphDiameter);
+            const QRectF glyphRect(x, y + (hintRowHeight - glyphDiameter) / 2, glyphWidth(hint), glyphDiameter);
             const qreal borderWidth = qMax(1.0, 2 * scale);
+            const qreal glyphRadius = (glyphDiameter - borderWidth) / 2;
 
             painter.setPen(QPen(hint.color, borderWidth));
             painter.setBrush(palette.hintGlyphFill);
-            painter.drawEllipse(glyphRect.adjusted(borderWidth / 2, borderWidth / 2,
-                                                   -borderWidth / 2, -borderWidth / 2));
+            painter.drawRoundedRect(glyphRect.adjusted(borderWidth / 2, borderWidth / 2,
+                                                       -borderWidth / 2, -borderWidth / 2),
+                                    glyphRadius, glyphRadius);
 
             painter.setFont(glyphFont);
             painter.drawText(glyphRect, Qt::AlignCenter, hint.glyph);
-            x += glyphDiameter + glyphGap;
+            x += glyphRect.width() + glyphGap;
 
             const qreal hintTextWidth = hintMetrics.horizontalAdvance(hint.text);
             painter.setFont(hintFont);

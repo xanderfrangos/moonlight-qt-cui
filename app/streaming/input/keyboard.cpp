@@ -184,8 +184,107 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
         updateKeyboardGrabState();
         break;
 
+    case KeyComboOpenMenu:
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Detected menu key combo");
+
+        if (Session::get()->isGamepadMenuOpen()) {
+            Session::get()->closeGamepadMenu();
+        }
+        else {
+            // No gamepad opened it, so a Guide press from the menu goes to
+            // the first gamepad the host knows about
+            short gamepadIndex = 0;
+            while (gamepadIndex < MAX_GAMEPADS - 1 && !(m_GamepadMask & (1 << gamepadIndex))) {
+                gamepadIndex++;
+            }
+            Session::get()->openGamepadMenu(m_GamepadMask != 0 ? gamepadIndex : 0, -1);
+        }
+        break;
+
     default:
         Q_UNREACHABLE();
+    }
+}
+
+bool SdlInputHandler::handleGamepadMenuKeyEvent(SDL_KeyboardEvent* event)
+{
+    if (!Session::get()->isGamepadMenuOpen()) {
+        // A key that worked the menu stays hidden from the host until it's
+        // released, so the game never sees half a key press. A fresh press
+        // means we missed the release, so that one goes through.
+        if (event->repeat) {
+            return false;
+        }
+        const bool workedMenu = m_MenuKeysDown.remove(event->keysym.scancode);
+        return workedMenu && event->state == SDL_RELEASED;
+    }
+
+    // While the menu is up, no keys reach the host. Anything held when it
+    // opened was already released there.
+    if (event->state == SDL_RELEASED) {
+        m_MenuKeysDown.remove(event->keysym.scancode);
+        return true;
+    }
+
+    // Holding up or down keeps moving, as it would in any other menu
+    if (event->repeat) {
+        switch (event->keysym.scancode) {
+        case SDL_SCANCODE_UP:
+        case SDL_SCANCODE_W:
+            Session::get()->moveGamepadMenuSelection(-1);
+            break;
+        case SDL_SCANCODE_DOWN:
+        case SDL_SCANCODE_S:
+            Session::get()->moveGamepadMenuSelection(1);
+            break;
+        default:
+            break;
+        }
+        return true;
+    }
+
+    m_MenuKeysDown.insert(event->keysym.scancode);
+
+    // The menu's own shortcut closes it again, and the other shortcuts still
+    // work unless their key is one the menu uses
+    const bool keyCombo = (event->keysym.mod & KMOD_CTRL) &&
+                          (event->keysym.mod & KMOD_ALT) &&
+                          (event->keysym.mod & KMOD_SHIFT);
+    if (keyCombo && (event->keysym.sym == SDLK_o || event->keysym.scancode == SDL_SCANCODE_O)) {
+        return false;
+    }
+
+    // Arrows or WASD move, Enter or E selects, and Backspace, Q or Escape go
+    // back, the way the D-pad, A and B do on a gamepad. Left and right do
+    // nothing, as on the D-pad, but are kept from the shortcuts too.
+    switch (event->keysym.scancode) {
+    case SDL_SCANCODE_UP:
+    case SDL_SCANCODE_W:
+        Session::get()->moveGamepadMenuSelection(-1);
+        return true;
+    case SDL_SCANCODE_DOWN:
+    case SDL_SCANCODE_S:
+        Session::get()->moveGamepadMenuSelection(1);
+        return true;
+    case SDL_SCANCODE_RETURN:
+    case SDL_SCANCODE_KP_ENTER:
+    case SDL_SCANCODE_E:
+        Session::get()->activateGamepadMenuSelection();
+        return true;
+    case SDL_SCANCODE_BACKSPACE:
+    case SDL_SCANCODE_ESCAPE:
+    case SDL_SCANCODE_Q:
+        Session::get()->gamepadMenuBack();
+        return true;
+    case SDL_SCANCODE_LEFT:
+    case SDL_SCANCODE_RIGHT:
+    case SDL_SCANCODE_A:
+    case SDL_SCANCODE_D:
+        return true;
+    default:
+        // Let the other shortcuts run
+        return !keyCombo;
     }
 }
 
@@ -195,6 +294,10 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
     char modifiers;
     char flags;
     bool shouldNotConvertToScanCodeOnServer = false;
+
+    if (handleGamepadMenuKeyEvent(event)) {
+        return;
+    }
 
     if (event->repeat) {
         // Ignore repeat key down events
@@ -230,6 +333,11 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
                 performSpecialKeyCombo(m_SpecialKeyCombos[i].keyCombo);
                 return;
             }
+        }
+
+        // The gamepad menu only passes shortcuts on, never keys for the host
+        if (Session::get()->isGamepadMenuOpen()) {
+            return;
         }
     }
 

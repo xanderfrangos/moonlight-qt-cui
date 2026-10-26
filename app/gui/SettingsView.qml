@@ -3587,7 +3587,7 @@ Flickable {
                     ToolTip.timeout: 10000
                     ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                     ToolTip.text: qsTr("The Moonlight menu lets you disconnect, end the session, show stream statistics, and more.") + "\n\n" +
-                                  qsTr("Start+Select+L1+R1 always opens it too.") + " " +
+                                  qsTr("Start+Select+L1+R1 always opens it too, and so does Ctrl+Alt+Shift+O on a keyboard.") + " " +
                                   qsTr("With the other choices, Start and Select still reach the game when tapped or pressed together with other buttons.") + "\n\n" +
                                   qsTr("Hold Start replaces holding Start for gamepad mouse mode, which can then be turned on from the menu instead.")
                 }

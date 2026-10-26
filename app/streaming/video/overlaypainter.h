@@ -18,7 +18,8 @@ namespace Overlay {
 namespace Painter {
 
 // A button prompt along the bottom of the gamepad menu: the button's label
-// drawn in a circle, followed by what the button does
+// drawn in a circle (a pill for a longer key name), followed by what the
+// button does
 struct ButtonHint {
     QString glyph;
     QColor color;
