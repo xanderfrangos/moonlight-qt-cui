@@ -10,9 +10,11 @@ Rectangle {
     // An SDL_JoystickPowerLevel: -1 unknown, 0 empty, 1 low, 2 medium,
     // 3 full, 4 wired. Only 0 to 3 are drawn.
     property int level: -1
+    property color normalColor: TvTheme.textSecondary
+    property color lowColor: TvTheme.statusError
 
     readonly property bool known: level >= 0 && level <= 3
-    readonly property color levelColor: level <= 1 ? TvTheme.statusError : TvTheme.textSecondary
+    readonly property color levelColor: level <= 1 ? lowColor : normalColor
 
     visible: known
     width: 30

@@ -4,10 +4,11 @@ import QtQuick.Controls 2.2
 import SdlGamepadKeyNavigation 1.0
 import TvTheme 1.0
 
-// The controllers in the TV mode top bar: one chip with how many there are and
-// the lowest battery among them. The Controllers page lists each one.
-TvControllerChip {
+// The count and lowest battery shown inside the Controllers button.
+Row {
     id: status
+
+    property bool focused: false
 
     readonly property var controllers: SdlGamepadKeyNavigation.controllerStatus
     readonly property int count: controllers.length
@@ -25,7 +26,7 @@ TvControllerChip {
     }
 
     // Controllers that aren't passed to the host are dimmed on the
-    // Controllers page, so dim the chip when none of them are
+    // Controllers page, so dim the status when none of them are.
     readonly property bool anyEnabled: {
         for (var i = 0; i < controllers.length; i++) {
             if (controllers[i].enabled) {
@@ -35,20 +36,28 @@ TvControllerChip {
         return false
     }
 
-    // How wide the chip will be, worked out from the sizes rather than from
-    // the laid out chip, so the top bar can plan its layout without depending
-    // on the result
-    readonly property real chipWidth: horizontalPadding * 2 + iconSize +
-                                      contentSpacing * 2 + labelMetrics.width + batteryWidth
+    // The toolbar measures this independently of its current layout.
+    readonly property real statusWidth: Math.ceil(countLabel.implicitWidth) +
+                                        (batteryIcon.known ? spacing + batteryIcon.width : 0)
 
-    text: count
-    battery: lowestBattery
-    dimmed: !anyEnabled
+    width: statusWidth
+    spacing: 12
+    opacity: anyEnabled ? 1.0 : 0.5
 
-    TextMetrics {
-        id: labelMetrics
+    Label {
+        id: countLabel
+        anchors.verticalCenter: parent.verticalCenter
+        text: status.count
+        color: status.focused ? TvTheme.accentText : TvTheme.textPrimary
         font.pixelSize: TvTheme.fontLabel
         font.weight: Font.DemiBold
-        text: status.text
+    }
+
+    TvBatteryIcon {
+        id: batteryIcon
+        anchors.verticalCenter: parent.verticalCenter
+        level: status.lowestBattery
+        normalColor: status.focused ? TvTheme.accentText : TvTheme.textSecondary
+        lowColor: status.focused ? TvTheme.accentText : TvTheme.statusError
     }
 }

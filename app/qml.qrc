@@ -33,7 +33,6 @@
         <file>gui/TvGradient.qml</file>
         <file>gui/TvHintBar.qml</file>
         <file>gui/TvButtonHint.qml</file>
-        <file>gui/TvControllerChip.qml</file>
         <file>gui/TvControllerStatus.qml</file>
         <file>gui/TvDialogButton.qml</file>
         <file>gui/TvPillButton.qml</file>

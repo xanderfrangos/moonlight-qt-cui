@@ -401,7 +401,7 @@ ApplicationWindow {
         // TV mode: how far the top bar is condensed to fit beside the page
         // title when the window is narrow. 0 shows everything. 1 shows only
         // the icons in the buttons, except for the focused one. 2 also hides
-        // the clock. 3 also hides the controllers.
+        // the clock. The controller count stays inside its button.
         readonly property int tvBarLevel: {
             if (!SystemProperties.tvMode) {
                 return 0
@@ -413,12 +413,12 @@ ApplicationWindow {
                 available -= TvTheme.pillHeight + barRow.spacing
             }
 
-            for (var level = 0; level < 3; level++) {
+            for (var level = 0; level < 2; level++) {
                 if (tvBarWidth(level) <= available) {
                     return level
                 }
             }
-            return 3
+            return 2
         }
 
         // The width of everything right of the title at a condensing level.
@@ -430,22 +430,25 @@ ApplicationWindow {
             var iconOnly = [discordButton, updateButton, helpButton]
             var width = 0
             var items = 0
-            var widestLabel = 0
+            var widestExpansion = 0
 
             for (var i = 0; i < labelled.length; i++) {
                 if (!labelled[i][0].visible) {
                     continue
                 }
                 var labelWidth = labelled[i][1].width
-                widestLabel = Math.max(widestLabel, labelWidth)
-                width += level === 0 ? TvTheme.pillPadding * 2 + TvTheme.pillIconSize + 12 + labelWidth
-                                     : TvTheme.pillHeight
+                var trailingWidth = labelled[i][0].tvTrailingWidth
+                var fullWidth = TvTheme.pillPadding * 2 + TvTheme.pillIconSize + 12 + labelWidth + trailingWidth
+                var compactWidth = trailingWidth > 0 ? TvTheme.pillPadding * 2 + TvTheme.pillIconSize + trailingWidth
+                                                    : TvTheme.pillHeight
+                widestExpansion = Math.max(widestExpansion, fullWidth - compactWidth)
+                width += level === 0 ? fullWidth : compactWidth
                 items++
             }
 
             // Condensed buttons still show the focused one's label
-            if (level >= 1 && widestLabel > 0) {
-                width += TvTheme.pillPadding * 2 + TvTheme.pillIconSize + 12 + widestLabel - TvTheme.pillHeight
+            if (level >= 1) {
+                width += widestExpansion
             }
 
             for (i = 0; i < iconOnly.length; i++) {
@@ -458,11 +461,6 @@ ApplicationWindow {
             if (versionLabel.visible) {
                 width += versionLabel.implicitWidth
                 items++
-            }
-
-            if (level < 3 && controllerStatus.count > 0) {
-                width += barDivider.Layout.preferredWidth + barDivider.Layout.leftMargin + barDivider.Layout.rightMargin + controllerStatus.chipWidth
-                items += 2
             }
 
             if (level < 2) {
@@ -776,6 +774,16 @@ ApplicationWindow {
                 iconSource: SystemProperties.tvMode ? "qrc:/res/gamepad.svg" : "qrc:/res/ic_videogame_asset_white_48px.svg"
                 tvLabel: qsTr("Controllers")
                 tvShowLabel: toolBar.tvBarLevel < 1
+                tvTrailingWidth: SystemProperties.tvMode && controllerStatus.count > 0 ? 12 + controllerStatus.statusWidth : 0
+
+                TvControllerStatus {
+                    id: controllerStatus
+                    anchors.right: parent.right
+                    anchors.rightMargin: TvTheme.pillPadding
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: SystemProperties.tvMode && count > 0
+                    focused: controllersButton.visualFocus
+                }
 
                 onClicked: navigateTo("qrc:/gui/ControllerView.qml", ControllerView)
 
@@ -812,23 +820,6 @@ ApplicationWindow {
                 ToolTip.timeout: 3000
                 ToolTip.visible: InputModeTracker.gamepadActive ? visualFocus : hovered
                 ToolTip.text: qsTr("Settings") + (settingsShortcut.nativeText ? (" ("+settingsShortcut.nativeText+")") : "")
-            }
-
-            // TV mode: how many controllers are connected, and the lowest
-            // battery among them
-            Rectangle {
-                id: barDivider
-                visible: controllerStatus.visible
-                Layout.preferredWidth: 2
-                Layout.preferredHeight: 36
-                Layout.leftMargin: 4
-                Layout.rightMargin: 4
-                color: TvTheme.stroke
-            }
-
-            TvControllerStatus {
-                id: controllerStatus
-                visible: SystemProperties.tvMode && count > 0 && toolBar.tvBarLevel < 3
             }
 
             // TV mode: a clock, since the app usually runs fullscreen

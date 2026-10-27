@@ -19,6 +19,10 @@ ToolButton {
     // button still shows its label, so it's clear what A will do.
     property bool tvShowLabel: true
 
+    // Space for optional content at the end of a TV button, including the
+    // gap between that content and the icon or label.
+    property real tvTrailingWidth: 0
+
     readonly property bool tvLabelVisible: tvLabel !== "" && (tvShowLabel || visualFocus)
     // In TV mode, both labelled and icon-only toolbar buttons are capsules.
     readonly property bool focusRingPill: SystemProperties.tvMode
@@ -32,7 +36,7 @@ ToolButton {
     // This determines the size of the Material highlight. We increase it
     // from the default because we use larger than normal icons for TV readability.
     Layout.preferredHeight: SystemProperties.tvMode ? TvTheme.pillHeight : parent.height
-    Layout.preferredWidth: SystemProperties.tvMode && !tvLabelVisible ? TvTheme.pillHeight : -1
+    Layout.preferredWidth: SystemProperties.tvMode && !tvLabelVisible && tvTrailingWidth === 0 ? TvTheme.pillHeight : -1
 
     Binding {
         target: button
@@ -79,9 +83,13 @@ ToolButton {
             // Older Material styles capitalize button labels
             font.capitalization = Font.MixedCase
             spacing = 12
-            // Without its label, a button is round and its icon needs all the room
-            leftPadding = Qt.binding(function() { return button.tvLabelVisible ? TvTheme.pillPadding : 0 })
-            rightPadding = Qt.binding(function() { return button.tvLabelVisible ? TvTheme.pillPadding : 0 })
+            // Icon-only buttons are round unless they have trailing content.
+            leftPadding = Qt.binding(function() {
+                return button.tvLabelVisible || button.tvTrailingWidth > 0 ? TvTheme.pillPadding : 0
+            })
+            rightPadding = Qt.binding(function() {
+                return (button.tvLabelVisible || button.tvTrailingWidth > 0 ? TvTheme.pillPadding : 0) + button.tvTrailingWidth
+            })
             topPadding = bottomPadding = 0
         }
     }
