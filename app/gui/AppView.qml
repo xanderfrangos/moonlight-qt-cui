@@ -17,6 +17,8 @@ CenteredGridView {
     property bool showHiddenGames
     property bool showGames
     property bool sleepPending: false
+    // The PC's uuid, which its apps' stream settings are saved under
+    readonly property string hostUuid: appModel ? appModel.getHostUuid() : ""
     Connections {
         target: appModel
         function onHostSleepCompleted(error) {
@@ -325,6 +327,16 @@ import AppModel 1.0; AppModel {}', parent, '')
             Behavior on opacity { NumberAnimation { duration: TvTheme.animationNormal } }
         }
 
+        // Over the box art's corner, which is the card's in TV mode
+        StreamSettingsBadge {
+            anchors.right: appIcon.right
+            anchors.top: appIcon.top
+            anchors.margins: 8
+            // The sleep tile has no settings of its own
+            uuid: model.sleepAction ? "" : appGrid.hostUuid
+            appId: model.appid
+        }
+
         Loader {
             id: appNameTextLoader
             active: appIcon.isPlaceholder
@@ -466,6 +478,14 @@ import AppModel 1.0; AppModel {}', parent, '')
                     visible: model.running
                 }
                 NavigableMenuItem {
+                    text: qsTr("Stream Settings")
+                    onTriggered: {
+                        appSettingsDialog.appId = model.appid
+                        appSettingsDialog.appName = model.name
+                        appSettingsDialog.open()
+                    }
+                }
+                NavigableMenuItem {
                     checkable: true
                     checked: model.directLaunch
                     text: qsTr("Direct Launch")
@@ -544,6 +564,13 @@ import AppModel 1.0; AppModel {}', parent, '')
         }
 
         onAccepted: quitApp()
+    }
+
+    HostSettingsDialog {
+        id: appSettingsDialog
+        uuid: appGrid.hostUuid
+        // The app view is named after its PC
+        pcName: appGrid.objectName
     }
 
     NavigableMessageDialog {

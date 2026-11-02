@@ -67,6 +67,16 @@ QString AppModel::getRunningAppName()
     return nullptr;
 }
 
+QString AppModel::getHostUuid()
+{
+    if (m_Computer == nullptr) {
+        return QString();
+    }
+
+    QReadLocker lock(&m_Computer->lock);
+    return m_Computer->uuid;
+}
+
 Session* AppModel::createSessionForApp(int appIndex)
 {
     // The synthetic power row must never construct a streaming Session.

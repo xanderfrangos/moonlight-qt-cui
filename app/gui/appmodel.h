@@ -44,6 +44,9 @@ public:
 
     Q_INVOKABLE QString getRunningAppName();
 
+    // The PC's uuid, which its apps' stream settings are saved under
+    Q_INVOKABLE QString getHostUuid();
+
     Q_INVOKABLE void quitRunningApp();
 
     Q_INVOKABLE void requestHostSleep();

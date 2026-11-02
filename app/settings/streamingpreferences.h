@@ -59,11 +59,29 @@ public:
     // is missing uses the global settings.
     Q_INVOKABLE static QVariantMap getHostOverrides(const QString& uuid);
     Q_INVOKABLE static void setHostOverrides(const QString& uuid, const QVariantMap& overrides);
+    // Removes the PC's overrides and those of all its apps
     static void removeHostOverrides(const QString& uuid);
 
-    // The saved preferences with a PC's overrides applied, for a stream from
-    // it, or nullptr if it overrides nothing. The caller owns the result.
-    static StreamingPreferences* createForHost(const QString& uuid);
+    // Settings an app on a PC can use in place of the PC's, in the same form.
+    // A group the app overrides replaces the PC's whole group; a group it
+    // doesn't uses the PC's, or else the global settings.
+    Q_INVOKABLE static QVariantMap getAppOverrides(const QString& uuid, int appId);
+    Q_INVOKABLE static void setAppOverrides(const QString& uuid, int appId, const QVariantMap& overrides);
+
+    // Whether one of the PC's apps overrides anything, or if appId is 0,
+    // whether the PC or any of its apps does
+    Q_INVOKABLE static bool hasOverrides(const QString& uuid, int appId = 0);
+
+    // Changes each time any PC's or app's overrides are saved, so QML can
+    // check hasOverrides() again
+    Q_PROPERTY(int overridesRevision READ overridesRevision NOTIFY overridesChanged)
+    int overridesRevision() const;
+
+    // The saved preferences with a PC's overrides applied, and then the
+    // app's if appId isn't 0, for a stream from it, or nullptr if neither
+    // overrides anything. The caller owns the result; in QML it is garbage
+    // collected.
+    Q_INVOKABLE static StreamingPreferences* createForHost(const QString& uuid, int appId = 0);
 
     // Settings the in-stream menu can change, for saveStreamSetting()
     enum StreamSetting
@@ -87,8 +105,9 @@ public:
     // group, or else the global settings, which are also updated in memory so
     // the settings page shows the change. Only that setting is written, so
     // options the command line applied to this stream alone aren't saved with
-    // it. An empty uuid always saves to the global settings.
-    void saveStreamSetting(const QString& hostUuid, StreamSetting setting) const;
+    // it. An app's own settings come before its PC's. An empty uuid always
+    // saves to the global settings.
+    void saveStreamSetting(const QString& hostUuid, int appId, StreamSetting setting) const;
 
     // The four VRR timing values a VrrLatencyMode preset fills in
     Q_INVOKABLE static QVariantMap getVrrPreset(int mode);
@@ -696,6 +715,7 @@ signals:
     void keepAwakeChanged();
     void languageChanged();
     void rendererSelectionChanged();
+    void overridesChanged();
 
 private:
     explicit StreamingPreferences(QQmlEngine *qmlEngine);

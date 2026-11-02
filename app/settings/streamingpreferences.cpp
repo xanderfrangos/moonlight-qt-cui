@@ -9,6 +9,7 @@
 #include <QTranslator>
 #include <QCoreApplication>
 #include <QLocale>
+#include <QAtomicInt>
 #include <QReadWriteLock>
 #include <QVariantMap>
 #include <QtMath>
@@ -112,13 +113,16 @@
 #define SER_LANGUAGE "language"
 #define SER_RENDERER "renderer"
 #define SER_HOSTOVERRIDES "hostoverrides"
+#define SER_APPOVERRIDES "appoverrides"
 
 #define CURRENT_DEFAULT_VER 2
 #define CURRENT_VRR_TIMING_PRESET_REVISION 4
 
 static StreamingPreferences* s_GlobalPrefs;
+static QAtomicInt s_OverridesRevision;
 
-// Every value a PC can override, saved as hostoverrides/<uuid>/<group>/<key>.
+// Every value a PC can override, saved as hostoverrides/<uuid>/<group>/<key>,
+// and an app as appoverrides/<uuid>/<app id>/<group>/<key>.
 // Values are converted to these types when read back, since some settings
 // backends (the Windows registry) return them all as strings.
 static const struct HostOverrideKey {
@@ -863,16 +867,10 @@ void StreamingPreferences::exportLatestDiagnostics()
     thread->start();
 }
 
-QVariantMap StreamingPreferences::getHostOverrides(const QString& uuid)
+// Reads the overrides in the settings' current group
+static QVariantMap readOverrides(QSettings& settings)
 {
     QVariantMap overrides;
-    if (uuid.isEmpty()) {
-        return overrides;
-    }
-
-    QSettings settings;
-    settings.beginGroup(SER_HOSTOVERRIDES);
-    settings.beginGroup(uuid);
     for (const HostOverrideKey& entry : k_HostOverrideKeys) {
         const QString key = QString("%1/%2").arg(entry.group, entry.key);
         if (!settings.contains(key)) {
@@ -887,16 +885,11 @@ QVariantMap StreamingPreferences::getHostOverrides(const QString& uuid)
     return overrides;
 }
 
-void StreamingPreferences::setHostOverrides(const QString& uuid, const QVariantMap& overrides)
+// Replaces the overrides in the named subgroup of the settings' current group
+static void writeOverrides(QSettings& settings, const QString& name, const QVariantMap& overrides)
 {
-    if (uuid.isEmpty()) {
-        return;
-    }
-
-    QSettings settings;
-    settings.beginGroup(SER_HOSTOVERRIDES);
-    settings.remove(uuid);
-    settings.beginGroup(uuid);
+    settings.remove(name);
+    settings.beginGroup(name);
     for (const HostOverrideKey& entry : k_HostOverrideKeys) {
         const QVariantMap group = overrides.value(entry.group).toMap();
         if (group.contains(entry.key)) {
@@ -905,6 +898,84 @@ void StreamingPreferences::setHostOverrides(const QString& uuid, const QVariantM
                               entry.isBool ? QVariant(value.toBool()) : QVariant(value.toInt()));
         }
     }
+    settings.endGroup();
+
+    s_OverridesRevision.fetchAndAddOrdered(1);
+    if (s_GlobalPrefs != nullptr) {
+        emit s_GlobalPrefs->overridesChanged();
+    }
+}
+
+QVariantMap StreamingPreferences::getHostOverrides(const QString& uuid)
+{
+    if (uuid.isEmpty()) {
+        return QVariantMap();
+    }
+
+    QSettings settings;
+    settings.beginGroup(SER_HOSTOVERRIDES);
+    settings.beginGroup(uuid);
+    return readOverrides(settings);
+}
+
+void StreamingPreferences::setHostOverrides(const QString& uuid, const QVariantMap& overrides)
+{
+    if (uuid.isEmpty()) {
+        return;
+    }
+
+    QSettings settings;
+    settings.beginGroup(SER_HOSTOVERRIDES);
+    writeOverrides(settings, uuid, overrides);
+}
+
+QVariantMap StreamingPreferences::getAppOverrides(const QString& uuid, int appId)
+{
+    if (uuid.isEmpty() || appId == 0) {
+        return QVariantMap();
+    }
+
+    QSettings settings;
+    settings.beginGroup(SER_APPOVERRIDES);
+    settings.beginGroup(uuid);
+    settings.beginGroup(QString::number(appId));
+    return readOverrides(settings);
+}
+
+void StreamingPreferences::setAppOverrides(const QString& uuid, int appId, const QVariantMap& overrides)
+{
+    if (uuid.isEmpty() || appId == 0) {
+        return;
+    }
+
+    QSettings settings;
+    settings.beginGroup(SER_APPOVERRIDES);
+    settings.beginGroup(uuid);
+    writeOverrides(settings, QString::number(appId), overrides);
+}
+
+bool StreamingPreferences::hasOverrides(const QString& uuid, int appId)
+{
+    if (appId != 0) {
+        return !getAppOverrides(uuid, appId).isEmpty();
+    }
+    if (uuid.isEmpty()) {
+        return false;
+    }
+    if (!getHostOverrides(uuid).isEmpty()) {
+        return true;
+    }
+
+    // Saving an app with nothing overridden leaves no keys behind
+    QSettings settings;
+    settings.beginGroup(SER_APPOVERRIDES);
+    settings.beginGroup(uuid);
+    return !settings.allKeys().isEmpty();
+}
+
+int StreamingPreferences::overridesRevision() const
+{
+    return s_OverridesRevision.loadAcquire();
 }
 
 void StreamingPreferences::removeHostOverrides(const QString& uuid)
@@ -916,16 +987,30 @@ void StreamingPreferences::removeHostOverrides(const QString& uuid)
     QSettings settings;
     settings.beginGroup(SER_HOSTOVERRIDES);
     settings.remove(uuid);
+    settings.endGroup();
+    settings.beginGroup(SER_APPOVERRIDES);
+    settings.remove(uuid);
 }
 
-StreamingPreferences* StreamingPreferences::createForHost(const QString& uuid)
+StreamingPreferences* StreamingPreferences::createForHost(const QString& uuid, int appId)
 {
-    const QVariantMap overrides = getHostOverrides(uuid);
-    if (overrides.isEmpty()) {
+    QVariantMap overrides = getHostOverrides(uuid);
+    const QVariantMap appOverrides = getAppOverrides(uuid, appId);
+    if (overrides.isEmpty() && appOverrides.isEmpty()) {
         return nullptr;
     }
 
-    qInfo() << "Using this PC's own settings for:" << overrides.keys();
+    if (!overrides.isEmpty()) {
+        qInfo() << "Using this PC's own settings for:" << overrides.keys();
+    }
+    if (!appOverrides.isEmpty()) {
+        qInfo() << "Using this app's own settings for:" << appOverrides.keys();
+    }
+
+    // The app's groups replace the PC's whole
+    for (auto it = appOverrides.cbegin(); it != appOverrides.cend(); ++it) {
+        overrides.insert(it.key(), it.value());
+    }
 
     // The settings page saves before a stream can start, so the saved
     // preferences are the global ones in effect
@@ -934,13 +1019,15 @@ StreamingPreferences* StreamingPreferences::createForHost(const QString& uuid)
     return prefs;
 }
 
-void StreamingPreferences::saveStreamSetting(const QString& hostUuid, StreamSetting setting) const
+void StreamingPreferences::saveStreamSetting(const QString& hostUuid, int appId, StreamSetting setting) const
 {
     // The override group holding the setting, for those a PC can override
     const char* group = setting == SS_BITRATE ? "bitrate" :
                         setting == SS_PACING ? "vsync" : nullptr;
     if (group != nullptr && !hostUuid.isEmpty()) {
-        QVariantMap overrides = getHostOverrides(hostUuid);
+        // The app's own settings, or else the PC's
+        const bool appOverrides = getAppOverrides(hostUuid, appId).contains(group);
+        QVariantMap overrides = appOverrides ? getAppOverrides(hostUuid, appId) : getHostOverrides(hostUuid);
         if (overrides.contains(group)) {
             QVariantMap values = overrides.value(group).toMap();
             if (setting == SS_BITRATE) {
@@ -952,7 +1039,12 @@ void StreamingPreferences::saveStreamSetting(const QString& hostUuid, StreamSett
                 values.insert("timestampPacing", m_TimestampPacing.enabled);
             }
             overrides.insert(group, values);
-            setHostOverrides(hostUuid, overrides);
+            if (appOverrides) {
+                setAppOverrides(hostUuid, appId, overrides);
+            }
+            else {
+                setHostOverrides(hostUuid, overrides);
+            }
             return;
         }
     }

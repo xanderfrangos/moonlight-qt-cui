@@ -6,15 +6,18 @@ import QtQuick.Layouts 1.3
 import SystemProperties 1.0
 import TvTheme 1.0
 
-// One setting in a PC's settings dialog: its name, the global setting, a
-// switch that overrides it for this PC, and the controls for the override,
-// which are shown while it is on. TV mode draws it as a card.
+// One setting in a PC's or app's settings dialog: its name, the global (or
+// the PC's) setting, a switch that overrides it for this PC (or app), and the
+// controls for the override, which are shown while it is on. TV mode draws it
+// as a card.
 Rectangle {
     id: row
 
     property string title
-    // The global setting, in words
+    // The global setting, or the PC's for an app, in words
     property string globalText
+    // Whether this overrides an app's PC instead of the global settings
+    property bool forApp: false
     property bool overridden: false
     property alias overrideSwitch: overrideSwitch
 
@@ -56,8 +59,10 @@ Rectangle {
                 Label {
                     id: globalLabel
                     Layout.fillWidth: true
-                    text: row.overridden ? qsTr("Global setting: %1").arg(row.globalText)
-                                         : qsTr("Uses the global setting: %1").arg(row.globalText)
+                    text: row.forApp ? (row.overridden ? qsTr("PC setting: %1").arg(row.globalText)
+                                                       : qsTr("Uses the PC setting: %1").arg(row.globalText))
+                                     : (row.overridden ? qsTr("Global setting: %1").arg(row.globalText)
+                                                       : qsTr("Uses the global setting: %1").arg(row.globalText))
                     color: SystemProperties.tvMode ? TvTheme.textSecondary : Material.foreground
                     opacity: SystemProperties.tvMode ? 1.0 : 0.7
                     font.pointSize: 9
@@ -81,9 +86,11 @@ Rectangle {
                 onToggled: row.overrideToggled(checked)
 
                 // What the gamepad's select button does here
-                readonly property string tvHintSelect: checked ? qsTr("Use global") : qsTr("Override")
+                readonly property string tvHintSelect: !checked ? qsTr("Override") :
+                                                       row.forApp ? qsTr("Use PC's") : qsTr("Use global")
 
-                Accessible.name: qsTr("Override %1 for this PC").arg(row.title)
+                Accessible.name: row.forApp ? qsTr("Override %1 for this app").arg(row.title)
+                                            : qsTr("Override %1 for this PC").arg(row.title)
             }
         }
 

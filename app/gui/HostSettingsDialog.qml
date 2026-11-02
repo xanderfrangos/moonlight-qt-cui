@@ -10,16 +10,26 @@ import SdlGamepadKeyNavigation 1.0
 import InputModeTracker 1.0
 import TvTheme 1.0
 
-// Settings a PC streams with in place of the global ones. Each setting
-// either uses the global setting or overrides it for this PC. Changes are
-// edited here and only saved with Save.
+// Settings a PC streams with in place of the global ones, or an app on a PC
+// streams with in place of the PC's. Each setting either uses the global (or
+// the PC's) setting or overrides it for this PC (or app). Changes are edited
+// here and only saved with Save.
 NavigableDialog {
     id: dialog
 
     property string uuid: ""
     property string pcName: ""
+    // The app being edited, or 0 for the PC itself
+    property int appId: 0
+    property string appName: ""
 
-    title: qsTr("Stream settings for %1").arg(pcName)
+    readonly property bool forApp: appId !== 0
+
+    // The settings a setting that isn't overridden uses: the global ones
+    // for a PC, or the PC's own for an app
+    property var basePrefs: StreamingPreferences
+
+    title: qsTr("Stream settings for %1").arg(forApp ? appName : pcName)
     standardButtons: Dialog.Ok | Dialog.Cancel
     acceptText: qsTr("Save")
     tvContentWidth: 760
@@ -67,22 +77,22 @@ NavigableDialog {
     property bool yuv444On: false
     property bool yuv444Enabled: false
 
-    // What a stream from this PC would use
-    readonly property int effectiveWidth: resolutionOn ? resolutionWidth : StreamingPreferences.width
-    readonly property int effectiveHeight: resolutionOn ? resolutionHeight : StreamingPreferences.height
-    readonly property int effectiveFps: fpsOn ? fpsValue : StreamingPreferences.fps
-    readonly property bool effectiveHdr: hdrOn ? hdrEnabled : StreamingPreferences.enableHdr
-    readonly property bool effectiveYuv444: yuv444On ? yuv444Enabled : StreamingPreferences.enableYUV444
-    readonly property bool effectivePyroWave: (codecOn ? codecValue : StreamingPreferences.videoCodecConfig) === StreamingPreferences.VCC_FORCE_PYROWAVE
+    // What a stream from this PC (or app) would use
+    readonly property int effectiveWidth: resolutionOn ? resolutionWidth : dialog.basePrefs.width
+    readonly property int effectiveHeight: resolutionOn ? resolutionHeight : dialog.basePrefs.height
+    readonly property int effectiveFps: fpsOn ? fpsValue : dialog.basePrefs.fps
+    readonly property bool effectiveHdr: hdrOn ? hdrEnabled : dialog.basePrefs.enableHdr
+    readonly property bool effectiveYuv444: yuv444On ? yuv444Enabled : dialog.basePrefs.enableYUV444
+    readonly property bool effectivePyroWave: (codecOn ? codecValue : dialog.basePrefs.videoCodecConfig) === StreamingPreferences.VCC_FORCE_PYROWAVE
     // Gamescope owns V-Sync, so it is always on there
-    readonly property bool effectiveVsync: SystemProperties.isGamescope || (vsyncOn ? vsyncEnabled : StreamingPreferences.enableVsync)
-    readonly property bool effectiveVrr: effectiveVsync && (vsyncOn ? vrrEnabled && !timestampPacing : StreamingPreferences.enableVrr)
+    readonly property bool effectiveVsync: SystemProperties.isGamescope || (vsyncOn ? vsyncEnabled : dialog.basePrefs.enableVsync)
+    readonly property bool effectiveVrr: effectiveVsync && (vsyncOn ? vrrEnabled && !timestampPacing : dialog.basePrefs.enableVrr)
 
     // The global bitrate follows the global settings, and follows this PC's
-    // settings the same way when they differ
-    readonly property bool bitrateFollowsSettings: StreamingPreferences.autoAdjustBitrate &&
+    // (or app's) settings the same way when they differ
+    readonly property bool bitrateFollowsSettings: dialog.basePrefs.autoAdjustBitrate &&
                                                    (resolutionOn || fpsOn || hdrOn || yuv444On || codecOn)
-    readonly property int bitrateWithoutOverride: bitrateFollowsSettings ? defaultBitrate() : StreamingPreferences.bitrateKbps
+    readonly property int bitrateWithoutOverride: bitrateFollowsSettings ? defaultBitrate() : dialog.basePrefs.bitrateKbps
 
     readonly property var codecNames: {
         var names = {}
@@ -129,44 +139,47 @@ NavigableDialog {
     }
 
     function load() {
-        var saved = StreamingPreferences.getHostOverrides(uuid)
+        // An app's settings start from its PC's
+        basePrefs = forApp ? (StreamingPreferences.createForHost(uuid) || StreamingPreferences) : StreamingPreferences
+
+        var saved = forApp ? StreamingPreferences.getAppOverrides(uuid, appId) : StreamingPreferences.getHostOverrides(uuid)
         function value(group, key, fallback) {
             var values = saved[group]
             return values !== undefined && values[key] !== undefined ? values[key] : fallback
         }
 
         resolutionOn = saved.resolution !== undefined
-        resolutionWidth = value("resolution", "width", StreamingPreferences.width)
-        resolutionHeight = value("resolution", "height", StreamingPreferences.height)
-        resolutionNative = value("resolution", "native", StreamingPreferences.nativeResolution)
+        resolutionWidth = value("resolution", "width", dialog.basePrefs.width)
+        resolutionHeight = value("resolution", "height", dialog.basePrefs.height)
+        resolutionNative = value("resolution", "native", dialog.basePrefs.nativeResolution)
 
         fpsOn = saved.fps !== undefined
-        fpsValue = value("fps", "fps", StreamingPreferences.fps)
-        fpsNative = value("fps", "native", StreamingPreferences.nativeFps)
-        fpsRecommended = value("fps", "recommended", StreamingPreferences.recommendedFps)
+        fpsValue = value("fps", "fps", dialog.basePrefs.fps)
+        fpsNative = value("fps", "native", dialog.basePrefs.nativeFps)
+        fpsRecommended = value("fps", "recommended", dialog.basePrefs.recommendedFps)
 
         hdrOn = saved.hdr !== undefined
-        hdrEnabled = value("hdr", "enabled", StreamingPreferences.enableHdr)
+        hdrEnabled = value("hdr", "enabled", dialog.basePrefs.enableHdr)
 
         yuv444On = saved.yuv444 !== undefined
-        yuv444Enabled = value("yuv444", "enabled", StreamingPreferences.enableYUV444)
+        yuv444Enabled = value("yuv444", "enabled", dialog.basePrefs.enableYUV444)
 
         codecOn = saved.codec !== undefined
-        codecValue = value("codec", "value", StreamingPreferences.videoCodecConfig)
+        codecValue = value("codec", "value", dialog.basePrefs.videoCodecConfig)
 
         vsyncOn = saved.vsync !== undefined
-        vsyncEnabled = value("vsync", "vsync", StreamingPreferences.enableVsync)
-        framePacing = value("vsync", "framePacing", StreamingPreferences.framePacing)
-        vrrEnabled = value("vsync", "vrr", StreamingPreferences.enableVrr)
-        timestampPacing = value("vsync", "timestampPacing", StreamingPreferences.timestampPacing)
-        timestampSmoothing = value("vsync", "timestampSmoothing", StreamingPreferences.timestampSmoothing)
-        vrrLatencyMode = value("vsync", "vrrLatencyMode", StreamingPreferences.vrrLatencyMode)
-        vrrBufferPerMille = value("vsync", "vrrBufferPerMille", StreamingPreferences.vrrBufferPerMille)
-        vrrTargetHundredths = value("vsync", "vrrTargetHundredths", StreamingPreferences.vrrTargetHundredths)
-        vrrHistorySeconds = value("vsync", "vrrHistorySeconds", StreamingPreferences.vrrHistorySeconds)
-        vrrToleranceUs = value("vsync", "vrrToleranceUs", StreamingPreferences.vrrToleranceUs)
-        smoothVrrFrameTiming = value("vsync", "smoothVrrFrameTiming", StreamingPreferences.smoothVrrFrameTiming)
-        absorbVrrMicrostutter = value("vsync", "absorbVrrMicrostutter", StreamingPreferences.absorbVrrMicrostutter)
+        vsyncEnabled = value("vsync", "vsync", dialog.basePrefs.enableVsync)
+        framePacing = value("vsync", "framePacing", dialog.basePrefs.framePacing)
+        vrrEnabled = value("vsync", "vrr", dialog.basePrefs.enableVrr)
+        timestampPacing = value("vsync", "timestampPacing", dialog.basePrefs.timestampPacing)
+        timestampSmoothing = value("vsync", "timestampSmoothing", dialog.basePrefs.timestampSmoothing)
+        vrrLatencyMode = value("vsync", "vrrLatencyMode", dialog.basePrefs.vrrLatencyMode)
+        vrrBufferPerMille = value("vsync", "vrrBufferPerMille", dialog.basePrefs.vrrBufferPerMille)
+        vrrTargetHundredths = value("vsync", "vrrTargetHundredths", dialog.basePrefs.vrrTargetHundredths)
+        vrrHistorySeconds = value("vsync", "vrrHistorySeconds", dialog.basePrefs.vrrHistorySeconds)
+        vrrToleranceUs = value("vsync", "vrrToleranceUs", dialog.basePrefs.vrrToleranceUs)
+        smoothVrrFrameTiming = value("vsync", "smoothVrrFrameTiming", dialog.basePrefs.smoothVrrFrameTiming)
+        absorbVrrMicrostutter = value("vsync", "absorbVrrMicrostutter", dialog.basePrefs.absorbVrrMicrostutter)
 
         // Loaded after the settings it depends on
         bitrateOn = saved.bitrate !== undefined
@@ -213,7 +226,12 @@ NavigableDialog {
         if (yuv444On) {
             overrides.yuv444 = { "enabled": yuv444Enabled }
         }
-        StreamingPreferences.setHostOverrides(uuid, overrides)
+        if (forApp) {
+            StreamingPreferences.setAppOverrides(uuid, appId, overrides)
+        }
+        else {
+            StreamingPreferences.setHostOverrides(uuid, overrides)
+        }
     }
 
     // The frame rate choices depend on whether VRR is on
@@ -296,17 +314,20 @@ NavigableDialog {
             Label {
                 Layout.fillWidth: true
                 Layout.bottomMargin: SystemProperties.tvMode ? TvTheme.spacingSmall : 0
-                text: qsTr("Choose the settings this PC streams with instead of your global settings. The rest of your settings still apply.")
+                text: dialog.forApp ?
+                          qsTr("Choose the settings this app streams with instead of the settings for %1. The rest of your settings still apply.").arg(dialog.pcName) :
+                          qsTr("Choose the settings this PC streams with instead of your global settings. The rest of your settings still apply.")
                 color: SystemProperties.tvMode ? TvTheme.textSecondary : Material.foreground
                 wrapMode: Text.Wrap
             }
 
             HostSettingRow {
+                forApp: dialog.forApp
                 id: resolutionRow
                 Layout.fillWidth: true
                 title: qsTr("Resolution")
-                globalText: StreamingPreferences.nativeResolution ? qsTr("Native") :
-                                qsTr("%1x%2").arg(StreamingPreferences.width).arg(StreamingPreferences.height)
+                globalText: dialog.basePrefs.nativeResolution ? qsTr("Native") :
+                                qsTr("%1x%2").arg(dialog.basePrefs.width).arg(dialog.basePrefs.height)
                 overridden: dialog.resolutionOn
                 onOverrideToggled: function(on) { dialog.resolutionOn = on }
 
@@ -455,11 +476,12 @@ NavigableDialog {
             }
 
             HostSettingRow {
+                forApp: dialog.forApp
                 Layout.fillWidth: true
                 title: qsTr("Frame rate")
-                globalText: StreamingPreferences.nativeFps ? qsTr("Native") :
-                            StreamingPreferences.recommendedFps ? qsTr("Recommended") :
-                            qsTr("%1 FPS").arg(StreamingPreferences.fps)
+                globalText: dialog.basePrefs.nativeFps ? qsTr("Native") :
+                            dialog.basePrefs.recommendedFps ? qsTr("Recommended") :
+                            qsTr("%1 FPS").arg(dialog.basePrefs.fps)
                 overridden: dialog.fpsOn
                 onOverrideToggled: function(on) { dialog.fpsOn = on }
 
@@ -583,11 +605,13 @@ NavigableDialog {
             }
 
             HostSettingRow {
+                forApp: dialog.forApp
                 Layout.fillWidth: true
                 title: qsTr("Video bitrate")
                 globalText: dialog.bitrateFollowsSettings ?
-                                qsTr("Automatic, %1 Mbps for this PC's settings").arg(dialog.bitrateWithoutOverride / 1000.0) :
-                                qsTr("%1 Mbps").arg(StreamingPreferences.bitrateKbps / 1000.0)
+                                (dialog.forApp ? qsTr("Automatic, %1 Mbps for this app's settings") :
+                                                 qsTr("Automatic, %1 Mbps for this PC's settings")).arg(dialog.bitrateWithoutOverride / 1000.0) :
+                                qsTr("%1 Mbps").arg(dialog.basePrefs.bitrateKbps / 1000.0)
                 overridden: dialog.bitrateOn
                 onOverrideToggled: function(on) {
                     if (on) {
@@ -612,7 +636,7 @@ NavigableDialog {
                         hoverEnabled: !SystemProperties.hoverEffectsDisabled
                         stepSize: dialog.effectivePyroWave ? 5000 : 500
                         from: dialog.effectivePyroWave ? 5000 : 500
-                        to: dialog.effectivePyroWave ? 3000000 : (StreamingPreferences.unlockBitrate ? 500000 : 150000)
+                        to: dialog.effectivePyroWave ? 3000000 : (dialog.basePrefs.unlockBitrate ? 500000 : 150000)
                         snapMode: "SnapOnRelease"
                         value: dialog.bitrateKbps
                         onMoved: dialog.bitrateKbps = Math.round(value / stepSize) * stepSize
@@ -629,9 +653,10 @@ NavigableDialog {
             }
 
             HostSettingRow {
+                forApp: dialog.forApp
                 Layout.fillWidth: true
                 title: qsTr("HDR")
-                globalText: dialog.onOff(StreamingPreferences.enableHdr)
+                globalText: dialog.onOff(dialog.basePrefs.enableHdr)
                 overridden: dialog.hdrOn
                 onOverrideToggled: function(on) { dialog.hdrOn = on }
 
@@ -654,10 +679,11 @@ NavigableDialog {
             }
 
             HostSettingRow {
+                forApp: dialog.forApp
                 Layout.fillWidth: true
                 title: qsTr("V-Sync and pacing")
-                globalText: dialog.vsyncSummary(StreamingPreferences.enableVsync, StreamingPreferences.framePacing,
-                                                StreamingPreferences.enableVrr, StreamingPreferences.timestampPacing)
+                globalText: dialog.vsyncSummary(dialog.basePrefs.enableVsync, dialog.basePrefs.framePacing,
+                                                dialog.basePrefs.enableVrr, dialog.basePrefs.timestampPacing)
                 overridden: dialog.vsyncOn
                 onOverrideToggled: function(on) { dialog.vsyncOn = on }
 
@@ -766,9 +792,10 @@ NavigableDialog {
             }
 
             HostSettingRow {
+                forApp: dialog.forApp
                 Layout.fillWidth: true
                 title: qsTr("Video codec")
-                globalText: dialog.codecNames[StreamingPreferences.videoCodecConfig] || qsTr("Automatic (Recommended)")
+                globalText: dialog.codecNames[dialog.basePrefs.videoCodecConfig] || qsTr("Automatic (Recommended)")
                 overridden: dialog.codecOn
                 onOverrideToggled: function(on) { dialog.codecOn = on }
 
@@ -808,9 +835,10 @@ NavigableDialog {
             }
 
             HostSettingRow {
+                forApp: dialog.forApp
                 Layout.fillWidth: true
                 title: qsTr("YUV 4:4:4")
-                globalText: dialog.onOff(StreamingPreferences.enableYUV444)
+                globalText: dialog.onOff(dialog.basePrefs.enableYUV444)
                 overridden: dialog.yuv444On
                 onOverrideToggled: function(on) { dialog.yuv444On = on }
 

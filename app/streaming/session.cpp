@@ -720,20 +720,20 @@ bool Session::populateDecoderProperties(SDL_Window* window)
     return true;
 }
 
-// The global preferences with the PC's own settings applied, or nullptr if
-// it has none
-static StreamingPreferences* createHostPreferences(NvComputer* computer)
+// The global preferences with the PC's and the app's own settings applied,
+// or nullptr if neither has any
+static StreamingPreferences* createHostPreferences(NvComputer* computer, const NvApp& app)
 {
     QString uuid;
     {
         QReadLocker lock(&computer->lock);
         uuid = computer->uuid;
     }
-    return StreamingPreferences::createForHost(uuid);
+    return StreamingPreferences::createForHost(uuid, app.id);
 }
 
 Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *preferences)
-    : m_HostPreferences(preferences ? nullptr : createHostPreferences(computer)),
+    : m_HostPreferences(preferences ? nullptr : createHostPreferences(computer, app)),
       m_CallerPreferences(preferences),
       m_Preferences(preferences ? preferences :
                     m_HostPreferences ? m_HostPreferences.get() : StreamingPreferences::get()),
@@ -2841,13 +2841,14 @@ void Session::activateGamepadMenuSetting(GamepadMenuItem item, int value)
 
 void Session::applyStreamSetting(StreamingPreferences::StreamSetting setting)
 {
-    // Saved where the stream got it: the PC's own settings if they have it
+    // Saved where the stream got it: the app's or the PC's own settings if
+    // they have it
     QString hostUuid;
     if (m_HostPreferences) {
         QReadLocker lock(&m_Computer->lock);
         hostUuid = m_Computer->uuid;
     }
-    m_Preferences->saveStreamSetting(hostUuid, setting);
+    m_Preferences->saveStreamSetting(hostUuid, m_App.id, setting);
 
     // The host reads the bitrate when the stream starts
     if (setting == StreamingPreferences::SS_BITRATE) {

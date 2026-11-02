@@ -385,6 +385,13 @@ CenteredGridView {
             }
         }
 
+        StreamSettingsBadge {
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: SystemProperties.tvMode ? TvTheme.spacingMedium : 8
+            uuid: computerModel.uuidAt(index)
+        }
+
         Loader {
             id: pcContextMenuLoader
             asynchronous: true

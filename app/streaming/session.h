@@ -465,8 +465,9 @@ private:
         StreamingPreferences::RendererSelection rendererSelection = StreamingPreferences::RS_AUTO;
     };
 
-    // The PC's own settings, when it has any and the caller didn't pass
-    // preferences. Must be declared before m_Preferences, which points to it.
+    // The PC's and the app's own settings, when they have any and the caller
+    // didn't pass preferences. Must be declared before m_Preferences, which
+    // points to it.
     std::unique_ptr<StreamingPreferences> m_HostPreferences;
     // Preferences the caller passed in (the command line's), if any
     StreamingPreferences* m_CallerPreferences;
