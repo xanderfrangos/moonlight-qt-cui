@@ -16,6 +16,16 @@ CenteredGridView {
     property bool activated
     property bool showHiddenGames
     property bool showGames
+    property bool sleepPending: false
+    Connections {
+        target: appModel
+        function onHostSleepCompleted(error) {
+            appGrid.sleepPending = false
+            sleepResult.imageSrc = error.length ? "qrc:/res/baseline-error_outline-24px.svg" : "qrc:/res/baseline-check_circle_outline-24px.svg"
+            sleepResult.text = error.length ? error : qsTr("The host accepted the sleep request. Sleep completion depends on the host. No stream was started.")
+            sleepResult.open()
+        }
+    }
 
     id: appGrid
     focus: true
@@ -91,6 +101,7 @@ import AppModel 1.0; AppModel {}', parent, '')
     delegate: NavigableItemDelegate {
         width: SystemProperties.tvMode ? appGrid.tvCardWidth : 220
         height: SystemProperties.tvMode ? 430 : 320
+        objectName: model.sleepAction ? "hostSleepTile" : ""
         grid: appGrid
         tvCardStyle: true
         tvGridScale: appGrid.tvScale
@@ -343,6 +354,10 @@ import AppModel 1.0; AppModel {}', parent, '')
 
         function launchOrResumeSelectedApp(quitExistingApp)
         {
+            if (model.sleepAction) {
+                if (!appGrid.sleepPending) sleepDialog.open()
+                return
+            }
             var runningId = appModel.getRunningAppId()
             if (runningId !== 0 && runningId !== model.appid) {
                 if (quitExistingApp) {
@@ -378,6 +393,10 @@ import AppModel 1.0; AppModel {}', parent, '')
 
         onPressAndHold: {
             // popup() ensures the menu appears under the mouse cursor
+            if (model.sleepAction) {
+                if (!appGrid.sleepPending) sleepDialog.open()
+                return
+            }
             if (appContextMenu.popup) {
                 appContextMenu.popup()
             }
@@ -419,7 +438,9 @@ import AppModel 1.0; AppModel {}', parent, '')
 
         Keys.onMenuPressed: {
             // This will be keyboard/gamepad driven so use open() instead of popup()
-            appContextMenu.openCentered()
+            if (model.sleepAction) {
+                if (!appGrid.sleepPending) sleepDialog.open()
+            } else appContextMenu.openCentered()
         }
 
         function doQuitGame() {
@@ -431,6 +452,7 @@ import AppModel 1.0; AppModel {}', parent, '')
         Loader {
             id: appContextMenuLoader
             asynchronous: true
+            active: !model.sleepAction
             sourceComponent: NavigableMenu {
                 id: appContextMenu
                 initiator: appContextMenuLoader.parent
@@ -522,6 +544,27 @@ import AppModel 1.0; AppModel {}', parent, '')
         }
 
         onAccepted: quitApp()
+    }
+
+    NavigableMessageDialog {
+        id: sleepDialog
+        objectName: "hostSleepConfirmation"
+        title: qsTr("Put PC to Sleep")
+        text: qsTr("Put this host PC to sleep? All host applications and streaming sessions must be closed first. You will need a way to wake the PC again.")
+        standardButtons: Dialog.Yes | Dialog.No
+        onAccepted: {
+            if (!appGrid.sleepPending) {
+                appGrid.sleepPending = true
+                appModel.requestHostSleep()
+            }
+        }
+    }
+
+    NavigableMessageDialog {
+        id: sleepResult
+        objectName: "hostSleepResult"
+        title: qsTr("Host Sleep")
+        standardButtons: Dialog.Ok
     }
 
     ScrollBar.vertical: ScrollBar {}

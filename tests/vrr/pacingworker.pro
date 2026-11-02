@@ -11,6 +11,7 @@ SOURCES += \
     $$PWD/tst_vrrpacingworker.cpp \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrrpacingworker.cpp \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/tracefile.cpp \
+    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrrpacingtrace.cpp \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/vrrtimingcontroller.cpp \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/vrrtargetwaiter.cpp
 
@@ -54,10 +55,9 @@ HEADERS += \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/vrrframedroppolicy.h \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/presentationtiming.h \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/prediction.h \
-    $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/recentreadiness.h \
     $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/smoothnessfeedback.h
 
-HEADERS += $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/absorbedjitter.h \
-           $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/intervalbuffer.h
+HEADERS += $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/intervalbuffer.h
 
-HEADERS += $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/inputpercentilebuffer.h
+HEADERS += $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/inputbuffer.h
+HEADERS += $$PWD/../../app/streaming/video/ffmpeg-renderers/pacer/vrr/inputgoalbuffer.h

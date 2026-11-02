@@ -516,7 +516,7 @@ NavigableDialog {
 
                         var selected = dialog.fpsNative ? 0 : dialog.fpsRecommended ? 1 : -1
                         var hasCustomChoice = false
-                        var choices = StreamingPreferences.getFpsChoicesFor(refreshRates, dialog.fpsValue, dialog.effectiveVrr)
+                        var choices = StreamingPreferences.getFpsChoicesFor(refreshRates, dialog.fpsValue)
                         for (var i = 0; i < choices.length; i++) {
                             var choice = choices[i]
                             var choiceFps = parseInt(choice.video_fps)
@@ -531,17 +531,14 @@ NavigableDialog {
                                 continue
                             }
                             // Already listed as the VRR choice
-                            if (!detectable && choice.kind === "vrr" && choiceFps === recommended) {
+                            if (!detectable && choiceFps === recommended) {
                                 if (selected < 0 && choiceFps === dialog.fpsValue) {
                                     selected = 1
                                 }
                                 continue
                             }
 
-                            var text = choice.kind === "vrr" ? qsTr("VRR (%1 FPS)").arg(choiceFps) :
-                                       choice.kind === "low-latency-vrr" ? qsTr("Low-latency VRR (%1 FPS)").arg(choiceFps) :
-                                       qsTr("%1 FPS").arg(choiceFps)
-                            fpsModel.append({ "text": text, "fps": choiceFps, "native": false, "recommended": false, "custom": false })
+                            fpsModel.append({ "text": qsTr("%1 FPS").arg(choiceFps), "fps": choiceFps, "native": false, "recommended": false, "custom": false })
                             if (selected < 0 && choiceFps === dialog.fpsValue) {
                                 selected = fpsModel.count - 1
                             }

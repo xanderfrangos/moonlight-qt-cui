@@ -1,9 +1,9 @@
 #pragma once
-#include "inputpercentilebuffer.h"
+#include "inputbuffer.h"
 #include <deque>
 
 namespace Vrr13 {
-// Session coverage. Each actual eligible outcome enters once and ages on the
+// Reporting only. Each actual eligible outcome enters once and ages on the
 // session clock, independent of which rate layer currently owns adaptation.
 class InputCoverageHistory {
 public:
@@ -12,8 +12,8 @@ public:
         // erase history. The controller explicitly resets a new session.
         if (nowUs < m_LastUs) return;
         m_LastUs = nowUs;
-        windowUs = std::clamp(windowUs, InputPercentileBuffer::MinimumWindowUs,
-                             InputPercentileBuffer::MaximumWindowUs);
+        windowUs = std::clamp(windowUs, InputGoalBuffer::MinimumWindowUs,
+                             InputGoalBuffer::MaximumWindowUs);
         while (!m_Outcomes.empty() && nowUs - m_Outcomes.front().atUs >= windowUs)
             pop();
         m_ReportingWindowUs = std::min<uint64_t>(windowUs, 10000000);
@@ -26,22 +26,12 @@ public:
         if (!eligible) return;
         m_Outcomes.push_back({nowUs, absorbed, missed});
         m_Absorbed += absorbed; m_Missed += missed;
-        while (m_Outcomes.size() > InputPercentileBuffer::MaximumSamples) pop();
+        while (m_Outcomes.size() > InputGoalBuffer::MaximumSamples) pop();
         m_ReportingOutcomes.push_back({nowUs, absorbed, missed});
         m_ReportingAbsorbed += absorbed; m_ReportingMissed += missed;
-        while (m_ReportingOutcomes.size() > InputPercentileBuffer::MaximumSamples) popReporting();
+        while (m_ReportingOutcomes.size() > InputGoalBuffer::MaximumSamples) popReporting();
     }
-    // The full selected window authorizes revision-4 release. The separate
-    // short reporting window never controls this gate. An empty window has
-    // no failing score; existing unknown-history expiry still applies.
-    bool belowGoal(uint64_t probabilityPpm) const {
-        const uint64_t tail = 1000000 - std::clamp<uint64_t>(probabilityPpm, 1, 999999);
-        return !m_Outcomes.empty() && m_Missed * 1000000 > m_Outcomes.size() * tail;
-    }
-    uint64_t estimateProbability(uint64_t probabilityPpm) const {
-        return InputBufferEstimate::calibratedProbability(probabilityPpm, m_Outcomes.size(), m_Missed);
-    }
-    void report(InputPercentileBuffer::Stats& stats, bool responsive = false) const {
+    void report(InputGoalBuffer::Stats& stats, bool responsive = false) const {
         stats.recentEligible = m_Outcomes.size();
         stats.recentAbsorbed = m_Absorbed;
         stats.recentMissed = m_Missed;

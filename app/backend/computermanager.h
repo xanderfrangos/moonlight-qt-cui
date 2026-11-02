@@ -17,6 +17,7 @@
 #include <QTimer>
 #include <QMutex>
 #include <QWaitCondition>
+#include <QSet>
 
 class ComputerManager;
 
@@ -239,6 +240,8 @@ public:
 
     void quitRunningApp(NvComputer* computer);
 
+    bool requestHostSleep(NvComputer* computer);
+
     QVector<NvComputer*> getComputers();
 
     // computer is deleted inside this call
@@ -257,6 +260,8 @@ signals:
 
     void quitAppCompleted(QVariant error);
 
+    void hostSleepCompleted(QString uuid, QString error);
+
 private slots:
     void handleAboutToQuit();
 
@@ -265,6 +270,8 @@ private slots:
     void handleMdnsServiceResolved(MdnsPendingComputer* computer, QVector<QHostAddress>& addresses);
 
 private:
+    QSet<QString> m_PendingSleepRequests;
+
     void saveHosts();
 
     void saveHost(NvComputer* computer);

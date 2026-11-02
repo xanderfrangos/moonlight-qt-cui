@@ -5,11 +5,15 @@ CONFIG += ordered
 
 contains(CONFIG, tests) {
     SUBDIRS += common
+    powerActions.file = $$PWD/power/poweractions.pro
+    powerActionView.file = $$PWD/power/poweractionview.pro
+    SUBDIRS += powerActions powerActionView
     launchWarning.file = $$PWD/backend/launchwarning.pro
     SUBDIRS += launchWarning
     SUBDIRS += updates
     SUBDIRS += vrr
     SUBDIRS += haptics
+    SUBDIRS += steamcontroller
     SUBDIRS += pyrowave
     win32: SUBDIRS += rendering
     toleranceInput.file = $$PWD/input/tolerance.pro

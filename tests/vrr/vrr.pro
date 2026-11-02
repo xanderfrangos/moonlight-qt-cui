@@ -28,8 +28,6 @@ unix:!macx:packagesExist(libplacebo) {
     SUBDIRS += plvkpresentation
     plvkswapchain.file = $$PWD/plvkswapchain.pro
     SUBDIRS += plvkswapchain
-    plvkoffscreen.file = $$PWD/plvkoffscreen.pro
-    SUBDIRS += plvkoffscreen
 }
 
 unix:!macx:packagesExist(sdl2) {
@@ -72,10 +70,19 @@ unix:!macx:packagesExist(wayland-server sdl2) {
     SUBDIRS += waylandfeedback
 }
 
+receivedriftclock.file = $$PWD/receivedriftclock.pro
+rollingquantile.file = $$PWD/rollingquantile.pro
+vrrcacheidentity.file = $$PWD/vrrcacheidentity.pro
+SUBDIRS += receivedriftclock rollingquantile vrrcacheidentity
+
 preferences.file = $$PWD/preferences.pro
 SUBDIRS += preferences
 
 timingcontroller.file = $$PWD/timingcontroller.pro
+productionpolicybaseline.file = $$PWD/productionpolicybaseline.pro
+SUBDIRS += productionpolicybaseline
+intervalpolicybaseline.file = $$PWD/intervalpolicybaseline.pro
+SUBDIRS += intervalpolicybaseline
 sourcegapsmoothing.file = $$PWD/sourcegapsmoothing.pro
 SUBDIRS += sourcegapsmoothing
 framelimitercapabilities.file = $$PWD/framelimitercapabilities.pro
@@ -83,8 +90,6 @@ ratepolicy.file = $$PWD/ratepolicy.pro
 diagnostics.file = $$PWD/diagnostics.pro
 pacingworker.file = $$PWD/pacingworker.pro
 replay.file = $$PWD/replay.pro
-workerreplay.file = $$PWD/workerreplay.pro
-SUBDIRS += workerreplay
 replayconfig.file = $$PWD/replayconfig.pro
 queuesim.file = $$PWD/queuesim.pro
 
@@ -112,15 +117,8 @@ linux:packagesExist(wayland-client wayland-server) {
 
 phasetrajectory.file = $$PWD/phasetrajectory.pro
 SUBDIRS += phasetrajectory
-inputpercentileintegration.file = $$PWD/inputpercentileintegration.pro
-SUBDIRS += inputpercentileintegration
-inputcontracts.file = $$PWD/inputcontracts.pro
-SUBDIRS += inputcontracts
-# Production-policy buffer regression gate; fast enough to run on every build.
-bufferregressions.file = $$PWD/bufferregressions.pro
-SUBDIRS += bufferregressions
-rollingquantile.file = $$PWD/rollingquantile.pro
-SUBDIRS += rollingquantile
+inputgoalintegration.file = $$PWD/inputgoalintegration.pro
+SUBDIRS += inputgoalintegration
 
 performancestats.file = $$PWD/performancestats.pro
 SUBDIRS += performancestats
@@ -128,13 +126,3 @@ SUBDIRS += performancestats
 # Clock-relative history and bounded recovery credit regression.
 SUBDIRS += inputaccounting
 inputaccounting.file = $$PWD/inputaccounting.pro
-
-receivedriftclock.file = $$PWD/receivedriftclock.pro
-SUBDIRS += receivedriftclock
-
-# Effective production policy must select the matching cache namespace.
-vrrcacheidentity.file = $$PWD/vrrcacheidentity.pro
-SUBDIRS += vrrcacheidentity
-
-inputtracechunks.file = $$PWD/inputtracechunks.pro
-SUBDIRS += inputtracechunks
