@@ -241,9 +241,9 @@ private slots:
         QVERIFY(!host->autoAdjustBitrate);
 
         host->bitrateKbps = 45000;
-        host->saveStreamSetting(uuid, StreamingPreferences::SS_BITRATE);
+        host->saveStreamSetting(uuid, 0, StreamingPreferences::SS_BITRATE);
         host->setTimestampPacing(true);
-        host->saveStreamSetting(uuid, StreamingPreferences::SS_PACING);
+        host->saveStreamSetting(uuid, 0, StreamingPreferences::SS_PACING);
 
         const QVariantMap overrides = StreamingPreferences::getHostOverrides(uuid);
         QCOMPARE(overrides.value("bitrate").toMap().value("kbps").toInt(), 45000);
@@ -265,10 +265,10 @@ private slots:
         global->reload();
 
         host->debandMode = StreamingPreferences::DB_MEDIUM;
-        host->saveStreamSetting(uuid, StreamingPreferences::SS_DEBAND);
+        host->saveStreamSetting(uuid, 0, StreamingPreferences::SS_DEBAND);
         host->bitrateKbps = 12000;
         host->autoAdjustBitrate = false;
-        host->saveStreamSetting(uuid, StreamingPreferences::SS_BITRATE);
+        host->saveStreamSetting(uuid, 0, StreamingPreferences::SS_BITRATE);
 
         QCOMPARE(QSettings().value("debandmode").toInt(), (int)StreamingPreferences::DB_MEDIUM);
         QCOMPARE(global->debandMode, (int)StreamingPreferences::DB_MEDIUM);
@@ -283,7 +283,7 @@ private slots:
         host->height = 2160;
         host->bitrateKbps = StreamingPreferences::getDefaultBitrate(3840, 2160, host->fps, false);
         host->autoAdjustBitrate = true;
-        host->saveStreamSetting(uuid, StreamingPreferences::SS_BITRATE);
+        host->saveStreamSetting(uuid, 0, StreamingPreferences::SS_BITRATE);
         const int globalDefault = StreamingPreferences::getDefaultBitrate(global->width, global->height,
                                                                           global->fps, global->enableYUV444);
         QCOMPARE(global->bitrateKbps, globalDefault);
@@ -298,7 +298,7 @@ private slots:
         global->reload();
         global->bitrateKbps = 1234;
         global->ditheringMode = StreamingPreferences::DM_ORDERED;
-        global->saveStreamSetting(QString(), StreamingPreferences::SS_DITHERING);
+        global->saveStreamSetting(QString(), 0, StreamingPreferences::SS_DITHERING);
 
         QCOMPARE(QSettings().value("ditheringmode").toInt(), (int)StreamingPreferences::DM_ORDERED);
         QVERIFY(!QSettings().contains("bitrate"));
