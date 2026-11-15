@@ -5,11 +5,23 @@ import QtQuick.Layouts 1.2
 
 import SystemProperties 1.0
 import TvTheme 1.0
+import "PopupFocus.js" as PopupFocus
 
 Dialog {
     id: navigableDialog
     modal: true
     anchors.centerIn: Overlay.overlay
+
+    onVisibleChanged: PopupFocus.setDialogVisible(navigableDialog, visible)
+    Component.onDestruction: {
+        PopupFocus.setDialogVisible(navigableDialog, false)
+
+        // The page changed while this dialog was open, and it is going away
+        // without closing, so focus the new page
+        if (stackView && stackView.focusViewAfterDialog) {
+            restoreFocus(null, false)
+        }
+    }
 
     // What had focus when the dialog opened, so we can return to it
     property Item focusItemBeforeOpen: null
@@ -256,7 +268,8 @@ Dialog {
     onClosed: {
         // We must force focus back to the last item. If we don't,
         // gamepad and keyboard navigation will break after a
-        // dialog appears.
+        // dialog appears. If another dialog is still open, such as an
+        // error shown while a pairing dialog is closing, it keeps focus.
         restoreFocus(focusItemBeforeOpen, focusItemHadVisualFocus)
         focusItemBeforeOpen = null
     }

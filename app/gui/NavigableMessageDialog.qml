@@ -17,6 +17,7 @@ NavigableDialog {
     property string helpText
     property string helpUrl : "https://github.com/moonlight-stream/moonlight-docs/wiki/Troubleshooting"
     property string helpTextSeparator : " "
+    property int initialFocusButton: Dialog.NoButton
 
     // TV mode: a headline above the text, like "Quit Moonlight?". When there
     // is one, the text below it is the secondary explanation.
@@ -33,9 +34,18 @@ NavigableDialog {
         // Force keyboard focus on a button so keyboard navigation works
         if (SystemProperties.tvMode) {
             focusFirstButton()
+            return
         }
-        else if (dialogButtonBox.count > 0) {
-            dialogButtonBox.itemAt(dialogButtonBox.count - 1).forceActiveFocus(Qt.TabFocus)
+
+        // Button ordering varies by platform, so select an explicit button
+        // when the dialog has a preferred action.
+        var focusButton = initialFocusButton !== Dialog.NoButton ?
+                    dialogButtonBox.standardButton(initialFocusButton) : null
+        if (!focusButton && dialogButtonBox.count > 0) {
+            focusButton = dialogButtonBox.itemAt(dialogButtonBox.count - 1)
+        }
+        if (focusButton) {
+            focusButton.forceActiveFocus(Qt.TabFocusReason)
         }
     }
 

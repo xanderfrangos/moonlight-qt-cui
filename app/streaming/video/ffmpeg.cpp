@@ -1339,12 +1339,12 @@ void FFmpegVideoDecoder::sampleStatsGraphCounters(Overlay::StatsGraphCounters& c
         counters.timestampRenderLeadMs = (float)(frametime.timestampRenderLeadUs / 1000.0);
     }
 
-    // Written by the video receive thread. Each field is a single aligned
-    // 32-bit counter, so a read that races an update is merely one sample
-    // stale, which is harmless for a graph.
-    const RTP_VIDEO_STATS* rtpStats = LiGetRTPVideoStats();
-    counters.videoDataPackets = rtpStats->packetCountVideo;
-    counters.videoFecPackets = rtpStats->packetCountFec;
+    // Written by the video receive thread. The streaming core copies its
+    // atomic counters out for us.
+    RTP_VIDEO_STATS rtpStats = {};
+    LiGetRTPVideoStats(&rtpStats);
+    counters.videoDataPackets = rtpStats.packetCountVideo;
+    counters.videoFecPackets = rtpStats.packetCountFec;
     counters.videoPacketWireBytes = m_StatsGraphPacketWireBytes;
 
     // Fixed for the lifetime of this decoder, apart from HDR, which the host

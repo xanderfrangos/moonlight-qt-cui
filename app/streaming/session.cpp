@@ -3051,7 +3051,7 @@ bool Session::startConnectionAsync()
     }
 
     QString rtspSessionUrl;
-    LaunchWarning::Code launchWarning = LaunchWarning::Code::None;
+    LaunchWarning::Warning launchWarning;
 
     m_HostVrrRequested = m_PresentationSettings.enableVrr;
 

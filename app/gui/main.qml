@@ -1,5 +1,5 @@
 import QtQuick 2.9
-import QtQuick.Controls 2.3
+import QtQuick.Controls 2.5
 import QtQuick.Layouts 1.3
 import QtQuick.Window 2.2
 import QtQuick.Controls.Material 2.2
@@ -11,6 +11,7 @@ import SystemProperties 1.0
 import SdlGamepadKeyNavigation 1.0
 import InputModeTracker 1.0
 import TvTheme 1.0
+import "PopupFocus.js" as PopupFocus
 
 ApplicationWindow {
     property bool pollingActive: false
@@ -128,10 +129,17 @@ ApplicationWindow {
         }
     }
 
-    // Escape or Back: leave the current page, or ask whether to quit if this
-    // is the first one. The toolbar calls this too, since it lives outside
-    // the StackView and never sees the StackView's own key handlers.
+    // Escape or Back: close the topmost dialog, leave the current page, or ask
+    // whether to quit if this is the first one. The toolbar calls this too,
+    // since it lives outside the StackView and never sees the StackView's own
+    // key handlers.
     function goBackOrQuit() {
+        // A dialog is dismissed before the page under it changes. Rejecting
+        // it runs the dialog's own cancellation.
+        if (PopupFocus.rejectTopModal()) {
+            return
+        }
+
         if (stackView.depth > 1) {
             goBack()
         }
@@ -206,11 +214,39 @@ ApplicationWindow {
     // page if that isn't possible. We must always put focus somewhere, or
     // gamepad and keyboard navigation will break.
     function restoreFocus(item, hadVisualFocus) {
-        if (canRestoreFocusTo(item)) {
+        // Another dialog is still open, so it keeps focus
+        if (PopupFocus.hasVisibleModal()) {
+            return
+        }
+
+        if (stackView.focusViewAfterDialog) {
+            // The page changed while a dialog was open, so focus the new one
+            PopupFocus.restoreViewFocus(stackView)
+            restoreSavedPageFocus()
+        }
+        else if (canRestoreFocusTo(item)) {
             item.forceActiveFocus(hadVisualFocus ? Qt.TabFocusReason : Qt.OtherFocusReason)
         }
         else {
             stackView.forceActiveFocus()
+        }
+    }
+
+    // If we're returning to a page, go back to what had focus there. This is
+    // deferred so bindings that depend on the current page (like toolbar
+    // button visibility) are up to date.
+    function restoreSavedPageFocus() {
+        for (var i = 0; i < stackView.savedFocus.length; i++) {
+            if (stackView.savedFocus[i].page === stackView.currentItem) {
+                var savedEntry = stackView.savedFocus[i]
+                Qt.callLater(function() {
+                    if (savedEntry.page === stackView.currentItem && !PopupFocus.hasVisibleModal() &&
+                            canRestoreFocusTo(savedEntry.item)) {
+                        savedEntry.item.forceActiveFocus(savedEntry.visualFocus ? Qt.TabFocusReason : Qt.OtherFocusReason)
+                    }
+                })
+                return
+            }
         }
     }
 
@@ -238,6 +274,7 @@ ApplicationWindow {
 
     StackView {
         id: stackView
+        property bool focusViewAfterDialog: false
         anchors.fill: parent
         anchors.leftMargin: SystemProperties.tvMode ? tvSafeX - TvTheme.focusBleed : 0
         anchors.rightMargin: SystemProperties.tvMode ? tvSafeX - TvTheme.focusBleed : 0
@@ -277,26 +314,17 @@ ApplicationWindow {
             savedFocus = entries
             previousItem = currentItem
 
-            // Ensure focus travels to the next view when going back
-            if (currentItem) {
-                currentItem.forceActiveFocus()
-
-                // If we're returning to a page, go back to what had focus there.
-                // This is deferred so bindings that depend on the current page
-                // (like toolbar button visibility) are up to date.
-                for (i = 0; i < savedFocus.length; i++) {
-                    if (savedFocus[i].page === currentItem) {
-                        var savedEntry = savedFocus[i]
-                        Qt.callLater(function() {
-                            if (savedEntry.page === stackView.currentItem && canRestoreFocusTo(savedEntry.item)) {
-                                savedEntry.item.forceActiveFocus(savedEntry.visualFocus ? Qt.TabFocusReason : Qt.OtherFocusReason)
-                            }
-                        })
-                        break
-                    }
-                }
+            // Ensure focus travels to the next view when going back. An open
+            // dialog keeps focus, and the view gets it when the dialog closes.
+            PopupFocus.focusCurrentView(stackView)
+            if (!focusViewAfterDialog) {
+                restoreSavedPageFocus()
             }
         }
+
+        // Keep focus in the topmost dialog, so navigation can't reach the
+        // page behind it
+        Window.onActiveFocusItemChanged: PopupFocus.keepModalFocus(Overlay.overlay)
 
         Keys.onEscapePressed: goBackOrQuit()
 

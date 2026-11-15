@@ -1,0 +1,2 @@
+module TvTheme
+singleton TvTheme 1.0 ../../../../app/gui/TvTheme.qml
