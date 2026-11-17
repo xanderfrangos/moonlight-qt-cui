@@ -28,7 +28,7 @@ constexpr char kHeader[] =
     "display_mode,display_mode_measured,refresh_share_per_mille,"
     "stream_fps,display_hz,smoothing,target_per_mille,min_buffer_ms,max_buffer_ms,vsync_margin_us,"
     "vblank_grid_available,present_flips_immediately,compositor_probe,measure_refresh,"
-    "decode_wait_us,decode_delay_us,limit_refreshes,late_shift,postponed_refreshes,hold_us\n";
+    "decode_wait_us,decode_delay_us,limit_refreshes,late_shift,postponed_refreshes,hold_us,buffer_rule\n";
 
 const char* eventName(TimestampTrace::Event event)
 {
@@ -256,6 +256,7 @@ void TimestampTrace::write(const Row& row)
     addBool(row.lateShift);
     addUnsigned(row.postponedRefreshes);
     addUnsigned(row.holdUs);
+    addSigned(row.bufferRule);
     line.append('\n');
 
     // After a write failure or at the size cap, stop queueing rows

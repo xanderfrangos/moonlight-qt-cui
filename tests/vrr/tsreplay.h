@@ -101,6 +101,8 @@ struct Row {
     int32_t minBufferMs = 0;
     int32_t maxBufferMs = 0;
     int32_t vsyncMarginUs = 0;
+    // Zero (percentile) in traces from before the column
+    int32_t bufferRule = 0;
     bool vblankGridAvailable = false;
     bool compositorProbe = false;
 };
@@ -381,6 +383,7 @@ inline bool load(const QString& path, Trace& trace, QString& error)
         row.minBufferMs = int32_t(p.s("min_buffer_ms"));
         row.maxBufferMs = int32_t(p.s("max_buffer_ms"));
         row.vsyncMarginUs = int32_t(p.s("vsync_margin_us"));
+        row.bufferRule = int32_t(p.s("buffer_rule"));
         row.vblankGridAvailable = p.b("vblank_grid_available");
         row.compositorProbe = p.b("compositor_probe");
         row.vblankGrid = p.b("vblank_grid");
@@ -491,6 +494,7 @@ inline Settings sessionSettings(const Trace& trace)
     if (trace.session.vsyncMarginUs != 0) {
         settings.options.vsyncMarginUs = trace.session.vsyncMarginUs;
     }
+    settings.options.bufferRule = trace.session.bufferRule;
     settings.options = settings.options.resolved();
     settings.streamFps = trace.session.streamFps;
     settings.displayHz = trace.session.displayHz;
@@ -506,6 +510,15 @@ inline QString smoothingName(int smoothing)
     case TimestampPacingOptions::SmoothingStandard: return QStringLiteral("standard");
     }
     return QString::number(smoothing);
+}
+
+inline QString bufferRuleName(int rule)
+{
+    switch (rule) {
+    case TimestampPacingOptions::BufferPercentile: return QStringLiteral("percentile");
+    case TimestampPacingOptions::BufferCarry: return QStringLiteral("carry");
+    }
+    return QString::number(rule);
 }
 
 // Applies one scenario key. Config files and --set share these keys.
@@ -642,6 +655,18 @@ inline bool applySetting(Settings& settings, const Settings& session, const QStr
     }
     if (key == QLatin1String("phases")) {
         return integer(1, 64, settings.phases);
+    }
+    if (key == QLatin1String("buffer_rule")) {
+        if (text == QLatin1String("percentile")) {
+            settings.options.bufferRule = TimestampPacingOptions::BufferPercentile;
+            return true;
+        }
+        if (text == QLatin1String("carry")) {
+            settings.options.bufferRule = TimestampPacingOptions::BufferCarry;
+            return true;
+        }
+        error = QStringLiteral("buffer_rule must be \"percentile\" or \"carry\"");
+        return false;
     }
     error = QStringLiteral("unknown scenario key \"%1\"").arg(key);
     return false;
@@ -1392,6 +1417,7 @@ inline QJsonObject settingsJson(const Settings& settings)
         object[QStringLiteral("buffer_lead_us")] = settings.bufferLeadUs >= 0 ? QJsonValue(qint64(settings.bufferLeadUs))
                                                                              : QJsonValue(QStringLiteral("recorded"));
         object[QStringLiteral("hold_ms")] = qint64(settings.resolvedHoldLimitUs() / 1000);
+        object[QStringLiteral("buffer_rule")] = bufferRuleName(settings.options.bufferRule);
     }
     return object;
 }
@@ -1708,6 +1734,7 @@ inline QJsonObject sessionJson(const Trace& trace)
     object[QStringLiteral("min_buffer_ms")] = s.minBufferMs;
     object[QStringLiteral("max_buffer_ms")] = s.maxBufferMs;
     object[QStringLiteral("vsync_margin_us")] = s.vsyncMarginUs;
+    object[QStringLiteral("buffer_rule")] = bufferRuleName(s.bufferRule);
     object[QStringLiteral("vblank_grid_available")] = s.vblankGridAvailable;
     return object;
 }

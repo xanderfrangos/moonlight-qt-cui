@@ -134,6 +134,7 @@ bool TimestampPacer::start()
         row.minBufferMs = m_Options.minBufferMs;
         row.maxBufferMs = m_Options.maxBufferMs;
         row.vsyncMarginUs = m_Options.vsyncMarginUs;
+        row.bufferRule = m_Options.bufferRule;
         row.vblankGridAvailable = m_UseVblankGrid;
         row.presentFlipsImmediately = m_PresentFlipsImmediately;
         std::lock_guard<std::mutex> lock(m_Lock);

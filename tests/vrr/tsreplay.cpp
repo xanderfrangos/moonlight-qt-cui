@@ -60,6 +60,8 @@ void printHelp()
         "  hold_ms           under a frame limit, how long a refresh of delay may be\n"
         "                    held instead of replacing a frame, or \"level\" for the\n"
         "                    smoothing level's (default; 0 replaces, as before)\n"
+        "  buffer_rule       carry (the pacer's since 2026-11-16) | percentile (before;\n"
+        "                    the session's, as its trace records it, is the default)\n"
         "\n"
         "Every run scores \"session-policy\" (the capture's settings),\n"
         "\"pacing-off\" (each frame shown once rendered) and \"pacing-stock\"\n"
@@ -338,11 +340,12 @@ int main(int argc, char** argv)
 
     std::printf("Trace: %s (%lld bytes, sha256 %s)\n", tracePath.toUtf8().constData(),
                 (long long)trace.bytes, trace.fileSha256.constData());
-    std::printf("Session: %d FPS on %d Hz, %s, smoothing %s, %d per mille, buffer %d-%d ms\n",
+    std::printf("Session: %d FPS on %d Hz, %s, smoothing %s, %d per mille, buffer %d-%d ms, %s\n",
                 trace.session.streamFps, trace.session.displayHz,
                 session.fixedRefresh ? "V-blank grid" : "no V-blank grid",
                 TsReplay::smoothingName(trace.session.smoothing).toUtf8().constData(),
-                trace.session.targetPerMille, trace.session.minBufferMs, trace.session.maxBufferMs);
+                trace.session.targetPerMille, trace.session.minBufferMs, trace.session.maxBufferMs,
+                TsReplay::bufferRuleName(trace.session.bufferRule).toUtf8().constData());
     std::printf("Integrity: %s (footer %s, clean shutdown %s, dropped %llu, hash %s, sequence %s)\n",
                 trace.integrityValid() ? "valid" : "NOT VALID",
                 trace.footerPresent ? "present" : "missing", trace.cleanShutdown ? "yes" : "no",

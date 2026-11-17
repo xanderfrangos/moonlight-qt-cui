@@ -246,6 +246,26 @@ private:
 // The baseline moves toward the window minimum at a bounded rate, as VRR
 // Pacing Mode's playout offset does: fast next to clock drift, too slow to
 // see, so the minimum buffer never steps the target either.
+//
+// The carry (2026-11-16, from Nightjar's PresentClock: RamazanKara/nightjar,
+// protocol/core/src/present_clock.rs). A frame later than the target is shown
+// when it is ready. Without the carry the frame behind it kept its own slot,
+// so one late frame made a long interval and then a short one: two jerks.
+// The carry raises the target to that frame's lateness, so the frames behind
+// it keep their spacing to it, and fades with a 0.1 s time constant of source
+// time. Late frames come in bursts (Nightjar's Wi-Fi recordings: the frame
+// after a late one was late 33-43% of the time, against 11-17% of all
+// frames), and this covers the rest of the burst too. It never rises more
+// than 6.5 ms past the median offset, and a source pause of 0.1 s or more
+// clears it. Replayed (tsreplay) on all 16 local captures on a modelled
+// 144 Hz VRR display, it lowered presented jerk over 2 ms on every one: on
+// the 7 that replay exactly from 20.0 to 18.9 per mille, with 8.3 to 7.2 per
+// mille late, for 0.03 ms more mean delay. On their recorded fixed refresh it
+// changed nothing (10.94 to 10.93) and fewer frames were late. Nightjar's
+// buffer sizing (the knee of recent lateness, and a 0.1 s fall toward it)
+// was replayed too and not adopted: about 1.9 ms less delay for more jerk
+// (21.4 per mille), and the knee alone was worse (25.6). See
+// docs/timestamp-pacing-findings.md, section 11.
 class PlayoutBuffer
 {
 public:
@@ -263,11 +283,26 @@ public:
     // arrival is adopted at once, so startup isn't paid for at the slew rate
     static constexpr uint32_t BaselineWarmupFrames = 64;
 
-    void configure(int targetPerMille, uint64_t minimumUs, uint64_t maximumUs)
+    // The carry's fade: time constant and largest step, in source time, so
+    // a stall in delivery doesn't fade it while a pause in the source does,
+    // and the smallest fade per frame. Nightjar's values: 50 ms gave the
+    // burst away too early, 200 ms held 0.3 ms longer for 0.7 points fewer
+    // frames off.
+    static constexpr double CarryFadeTauUs = 100000;
+    static constexpr double CarryFadeStepMaximumUs = 100000;
+    static constexpr double CarryFadeMinimumUs = 25;
+    // The carry raises the target no further than this past the median
+    // offset (plus the margin): a frame later than that is a hitch however
+    // late it is, and is shown when ready without holding the ones behind it
+    static constexpr double CarrySpreadUs = 6000;
+
+    void configure(int targetPerMille, uint64_t minimumUs, uint64_t maximumUs,
+                   int rule = TimestampPacingOptions::BufferCarry)
     {
         m_TargetPerMille = targetPerMille;
         m_MinimumUs = double(minimumUs);
         m_MaximumUs = double(std::max(minimumUs, maximumUs));
+        m_Carry = rule == TimestampPacingOptions::BufferCarry;
         m_DelayUs = m_MinimumUs;
         m_LastUpdateUs = 0;
         resetHistory();
@@ -285,6 +320,9 @@ public:
         m_BaselineFrames = 0;
         m_LastSampleUs = 0;
         m_HaveTarget = false;
+        m_CarryUs = 0;
+        m_LastSourceUs = 0;
+        m_HaveLastSource = false;
     }
 
     // Records one frame's offset from source time to readiness and returns
@@ -343,10 +381,33 @@ public:
         m_HistoryCount = std::min(m_HistoryCount + 1, HistoryCapacity);
     }
 
-    // Moves the target toward the configured share of recent offsets. Called
+    // Fades the carry by the source time since the frame before. Called
+    // before a frame's target is chosen, as Nightjar does, so a pause in the
+    // source has cleared it by the first frame after the pause.
+    void fadeCarry(double sourceUs)
+    {
+        if (!m_Carry) {
+            return;
+        }
+        double stepUs = 0;
+        if (m_HaveLastSource && sourceUs > m_LastSourceUs) {
+            stepUs = std::min(CarryFadeStepMaximumUs, sourceUs - m_LastSourceUs);
+        }
+        m_LastSourceUs = m_HaveLastSource ? std::max(m_LastSourceUs, sourceUs) : sourceUs;
+        m_HaveLastSource = true;
+        if (m_CarryUs > 0) {
+            const double fadeUs = std::max(m_CarryUs * stepUs / CarryFadeTauUs, CarryFadeMinimumUs);
+            m_CarryUs = std::max(0.0, m_CarryUs - fadeUs);
+            holdTargetInBounds();
+        }
+    }
+
+    // Moves the target toward the configured share of recent offsets, and
+    // raises the carry to the offset of the frame just scheduled when its
+    // lateness says something about the frames behind it (carries). Called
     // after the frame's target is chosen, so that target uses the one in
     // force before it arrived.
-    void updateDelay(uint64_t nowUs)
+    void updateDelay(uint64_t nowUs, double offsetUs = 0, bool carries = false)
     {
         size_t count = 0;
         for (size_t i = 0; i < m_HistoryCount; i++) {
@@ -359,10 +420,17 @@ public:
         // With no admitted frames in the window there is no evidence for
         // holding a delay, so it releases toward the minimum
         double wantUs = m_AppliedBaselineUs + m_MinimumUs;
+        double medianUs = 0;
         if (count != 0) {
             const size_t rank = std::min(count - 1, (size_t(m_TargetPerMille) * (count - 1) + 500) / 1000);
             std::nth_element(m_Scratch.begin(), m_Scratch.begin() + rank, m_Scratch.begin() + count);
             wantUs = m_Scratch[rank] + MarginUs;
+            if (m_Carry) {
+                // The median lies among the rank + 1 smallest offsets
+                const size_t middle = (count - 1) / 2;
+                std::nth_element(m_Scratch.begin(), m_Scratch.begin() + middle, m_Scratch.begin() + rank + 1);
+                medianUs = m_Scratch[middle];
+            }
         }
         if (wantUs > m_TargetUs) {
             m_TargetUs = wantUs;
@@ -371,6 +439,13 @@ public:
             m_TargetUs = std::max(wantUs, m_TargetUs - (nowUs - m_LastUpdateUs) * ReleasePerUs);
         }
         m_LastUpdateUs = nowUs;
+
+        if (m_Carry && carries && count != 0) {
+            const double lateUs = std::min(offsetUs, medianUs + CarrySpreadUs + MarginUs);
+            if (lateUs > m_TargetUs + m_CarryUs) {
+                m_CarryUs = lateUs - m_TargetUs;
+            }
+        }
         holdTargetInBounds();
     }
 
@@ -381,15 +456,16 @@ public:
     // The buffer: how far past the baseline frames are shown
     double delayUs() const { return m_DelayUs; }
     // The offset from source time at which frames are shown
-    double targetOffsetUs() const { return m_TargetUs; }
+    double targetOffsetUs() const { return m_TargetUs + m_CarryUs; }
 
 private:
-    // Keeps the buffer between its minimum and maximum. Only a baseline
-    // moving past those bounds moves the target with it.
+    // Keeps the buffer, the carry included, between its minimum and maximum.
+    // Only a baseline moving past those bounds moves the target with it.
     void holdTargetInBounds()
     {
         m_TargetUs = std::max(m_AppliedBaselineUs + m_MinimumUs, std::min(m_AppliedBaselineUs + m_MaximumUs, m_TargetUs));
-        m_DelayUs = m_TargetUs - m_AppliedBaselineUs;
+        m_CarryUs = std::max(0.0, std::min(m_CarryUs, m_AppliedBaselineUs + m_MaximumUs - m_TargetUs));
+        m_DelayUs = (m_TargetUs + m_CarryUs) - m_AppliedBaselineUs;
     }
 
     struct Slot {
@@ -420,6 +496,12 @@ private:
     uint32_t m_BaselineFrames = 0;
     uint64_t m_LastSampleUs = 0;
     uint64_t m_LastUpdateUs = 0;
+    // TimestampPacingOptions::BufferCarry: how far a late frame holds the
+    // target past the share of recent offsets, and the source time it fades by
+    bool m_Carry = true;
+    double m_CarryUs = 0;
+    double m_LastSourceUs = 0;
+    bool m_HaveLastSource = false;
 };
 
 // Whether the client keeps up with the stream: the mean time frames waited
@@ -1040,7 +1122,8 @@ public:
         m_Timeline.configure(resolved.smoothing, periodUs);
         m_Buffer.configure(resolved.targetPerMille,
                            uint64_t(resolved.minBufferMs) * 1000,
-                           uint64_t(resolved.maxBufferMs) * 1000);
+                           uint64_t(resolved.maxBufferMs) * 1000,
+                           resolved.bufferRule);
         m_MaximumBufferUs = resolved.maxBufferMs * 1000.0;
         m_Repeats = {};
         m_Service.reset();
@@ -1114,11 +1197,16 @@ public:
         if (decision.admitted) {
             m_Buffer.admit(readyUs, offsetUs);
         }
+        m_Buffer.fadeCarry(source.sourceUs);
         const double targetUs = source.sourceUs + m_Buffer.targetOffsetUs();
         decision.targetUs = targetUs > 0 ? uint64_t(std::llround(targetUs)) : 0;
         decision.bufferUs = uint64_t(m_Buffer.delayUs());
         decision.paced = true;
-        m_Buffer.updateDelay(readyUs);
+        // A new or re-anchored timeline's lateness is against a phase that no
+        // longer applies, so it doesn't carry. A stall's does, up to the
+        // carry's ceiling, so the frames that arrive bunched behind it keep
+        // their spacing.
+        m_Buffer.updateDelay(readyUs, offsetUs, !source.restarted && !source.reanchored);
         return decision;
     }
 

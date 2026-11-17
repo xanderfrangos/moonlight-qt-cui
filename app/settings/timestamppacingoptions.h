@@ -32,6 +32,19 @@ struct TimestampPacingOptions {
     // starts here instead unless a test key sets it
     static constexpr int GamescopeVsyncMarginUs = 4500;
 
+    // How the buffer follows lateness. Not a user setting: the pacer always
+    // runs the default, and traces record it so tsreplay (its buffer_rule
+    // key) can replay captures made before the carry exactly.
+    enum BufferRule {
+        // The configured share of recent frames, grown at once and released
+        // at 0.5 ms/s. Up to 2026-11-16.
+        BufferPercentile = 0,
+        // Percentile, plus a late frame's lateness carried to the frames
+        // behind it (PlayoutBuffer)
+        BufferCarry = 1,
+    };
+    int bufferRule = BufferCarry;
+
     // Under a frame limit (FIFO), a frame whose refresh is already taken is
     // shown at the next one instead of being replaced by the frame behind
     // it, which then waits a refresh too. This is how long such a refresh of
@@ -63,6 +76,7 @@ struct TimestampPacingOptions {
         out.minBufferMs = std::max(0, std::min(20, minBufferMs));
         out.maxBufferMs = std::max(std::max(1, out.minBufferMs), std::min(50, maxBufferMs));
         out.vsyncMarginUs = ((std::max(250, std::min(8000, vsyncMarginUs)) + 125) / 250) * 250;
+        out.bufferRule = std::max<int>(BufferPercentile, std::min<int>(BufferCarry, bufferRule));
         return out;
     }
 };
