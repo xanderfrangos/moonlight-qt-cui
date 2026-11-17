@@ -294,6 +294,71 @@ void bufferCoversRenderLead(int smoothing)
 // A delivery stall: 150 ms without frames, then the ones held up arrive
 // together. Without leaving most of them out, this one stall would hold the
 // buffer at its maximum for half a minute.
+// A late frame is shown when it is ready. With the carry, the frame behind it
+// keeps its spacing to that frame instead of coming a lateness early, and the
+// carry fades with a 0.1 s time constant of source time. The percentile rule
+// before it left the next frame in its own slot.
+void lateFrameCarriesToTheNext(int smoothing)
+{
+    const double periodUs = 1000000.0 / 120;
+    for (const int rule : { int(TimestampPacingOptions::BufferPercentile), int(TimestampPacingOptions::BufferCarry) }) {
+        const bool carry = rule == TimestampPacingOptions::BufferCarry;
+        TimestampPacingOptions o = options(smoothing);
+        o.bufferRule = rule;
+
+        Stream stream(o, 120);
+        for (int i = 0; i < 600; i++) {
+            stream.next(periodUs);
+        }
+        check(stream.policy.bufferUs() == 2000, "a clean stream holds the minimum buffer");
+        // 5 ms late against a 2 ms buffer: shown 3 ms after its target
+        stream.next(periodUs, 0, 5000);
+        const double lateShownUs = double(std::max(stream.decisions.back().targetUs, stream.readyUs));
+        const auto behind = stream.next(periodUs);
+        const double spacingUs = double(behind.targetUs) - lateShownUs;
+        if (carry) {
+            check(std::fabs(spacingUs - periodUs) < 400,
+                  "with the carry, the frame behind a late one keeps its spacing to it");
+            check(stream.policy.bufferUs() > 4000, "the buffer reports the carry");
+        }
+        else {
+            check(spacingUs < periodUs - 2500, "without it, the frame behind came a lateness early");
+        }
+        for (int i = 0; i < 60; i++) {
+            stream.next(periodUs);
+        }
+        check(stream.policy.bufferUs() == 2000, "the carry is gone half a second later");
+
+        // A source pause of 0.1 s or more clears it before the next frame
+        Stream paused(o, 120);
+        for (int i = 0; i < 600; i++) {
+            paused.next(periodUs);
+        }
+        paused.next(periodUs, 0, 5000);
+        const auto resumed = paused.next(150000);
+        check(std::fabs(double(resumed.targetUs) - double(paused.readyUs) - 2000) < 100,
+              "the first frame after a pause is held only for the buffer");
+
+        // A hitch far later than the rest raises it no further than its
+        // ceiling, 6.5 ms past the median offset, so the frames that arrive
+        // bunched behind it catch up instead of all waiting out the hitch
+        Stream hitch(o, 120);
+        for (int i = 0; i < 600; i++) {
+            hitch.next(periodUs);
+        }
+        hitch.next(periodUs, 0, 30000);
+        if (carry) {
+            // The buffer is measured from the smallest offset, and the
+            // stamps' rounding puts the median a little above it
+            check(hitch.policy.bufferUs() > 6000 && hitch.policy.bufferUs() < 6600,
+                  "a hitch's carry stops at its ceiling");
+        }
+        else {
+            check(hitch.policy.bufferUs() == 2000, "the percentile rule ignores one late frame");
+        }
+    }
+}
+
 void deliveryStallsDontGrowBuffer(int smoothing)
 {
     const double periodUs = 1000000.0 / 60;
@@ -873,6 +938,7 @@ int main()
         { earlyArrivalDoesntMoveTarget, 0 },
         { earlierArrivalsAreReleased, 0 },
         { bufferCoversRenderLead, 0 },
+        { lateFrameCarriesToTheNext, 2 },
         { deliveryStallsDontGrowBuffer, 2 },
         { overloadDoesntGrowBuffer, 2 },
         { repeatsAreShownOnArrival, 2 },

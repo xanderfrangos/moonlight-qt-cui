@@ -142,6 +142,9 @@ public:
         // (TimestampPacer::holdsFrontLocked())
         uint32_t postponedRefreshes = 0;
         uint64_t holdUs = 0;
+        // Session: TimestampPacingOptions::BufferRule. Traces from before
+        // the column read as 0, the percentile rule they were made with.
+        int32_t bufferRule = 0;
     };
 
     // The trace path for a VRR trace path: its .vrrtrace (or other) suffix

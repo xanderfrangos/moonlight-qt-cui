@@ -1,0 +1,11 @@
+{
+    "version": 1,
+    "description": "The late-frame carry (buffer_rule) against the percentile rule before it, on the session's display and on a 144 Hz VRR display model (above every capture's stream rate, so the model is not saturated at its refresh limit)",
+    "scenarios": [
+        { "name": "percentile", "buffer_rule": "percentile" },
+        { "name": "carry", "buffer_rule": "carry" },
+        { "name": "vrr-percentile", "display": "vrr", "display_hz": 144, "buffer_rule": "percentile" },
+        { "name": "vrr-carry", "display": "vrr", "display_hz": 144, "buffer_rule": "carry" },
+        { "name": "vrr-off", "display": "vrr", "display_hz": 144, "pacing": "off" }
+    ]
+}

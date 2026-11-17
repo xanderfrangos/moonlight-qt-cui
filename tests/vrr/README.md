@@ -225,6 +225,12 @@ Compressed and plain CSV traces both work, including those expanded by
     under a frame limit, how long a refresh of delay may be held instead of
     replacing a frame. 0 replaces, as before 2026-10-22.
     `configs/tsreplay-fifo-hold.json` compares both at each level.
+  - buffer_rule (default: the session's, from the trace's `buffer_rule`
+    column): carry, the pacer's since 2026-11-16, or percentile, the rule
+    before it. Traces without the column were made with percentile and replay
+    with it. `configs/tsreplay-carry.json` compares both on the session's
+    display and on a 144 Hz VRR model. A VRR model at the stream's own rate
+    saturates at the refresh limit, so model VRR above the stream rate.
   Unknown keys and out-of-range values are errors.
 - **Presentation model.**
   - **Fixed refresh:** a paced frame takes the V-blank its target falls on,

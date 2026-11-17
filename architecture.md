@@ -2176,6 +2176,33 @@ Pure and header-only; tested by `tst_timestamppacing`.
     - This is model output, not display timing, and its misses are judged by
       the same recorded lead.
   - A frame's target uses the target in force before it arrived.
+  - **Carry (2026-11-16):** taken from Nightjar's PresentClock
+    (RamazanKara/nightjar). A late frame is still shown when ready, but the
+    target is raised to its offset, so the frames behind it keep their
+    spacing to it. Before, the next frame kept its own slot, so one late
+    frame made a long interval and then a short one.
+    - The carry is capped at the median offset plus 6.5 ms. A bigger hitch
+      lets the frames bunched behind it catch up.
+    - It fades with a 0.1 s time constant of source time (at least 25 us a
+      frame), applied before each frame's target, so a source pause of 0.1 s
+      or more clears it. A restarted or re-anchored timeline doesn't carry.
+    - It counts in the reported buffer and stays within the maximum.
+    - `TimestampPacingOptions::bufferRule` (carry; percentile before) is not
+      a user setting. The session row records it as `buffer_rule`. Traces
+      without the column read as percentile, so they still replay exactly.
+      tsreplay's `buffer_rule` key compares the two
+      (`configs/tsreplay-carry.json`).
+    - Replayed on all 16 local captures (7 exact):
+      - On a modelled 144 Hz VRR display, presented jerk over 2 ms fell on
+        every capture. On the exact ones it went from 20.0 to 18.9 per mille,
+        late frames from 8.3 to 7.2, for 0.03 ms more mean delay.
+      - On their recorded fixed refresh nothing changed (10.94 → 10.93) and
+        fewer frames were late (7.1 → 6.0).
+      - This is model output, not display timing.
+    - Nightjar's buffer sizing was replayed too and not taken. Its rule
+      covers the knee of recent lateness, not 99%, and falls toward it with a
+      0.1 s time constant. It cost jerk for about 1.9 ms less delay. See
+      [findings](docs/timestamp-pacing-findings.md), section 11.
 - Admission (2026-10-07): a paced frame's lateness sizes the delay only when
   its timeline didn't restart or re-anchor, it is no more than three times the
   maximum buffer late (a stall), and over the last second frames waited on

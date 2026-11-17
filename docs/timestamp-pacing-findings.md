@@ -430,3 +430,53 @@ SteamOS Desktop Mode:
 - How often does Windows skip refreshes on other GPUs and displays, and does
   it happen in exclusive fullscreen?
 - Does the Deck's 6–8% late share disappear once host repeats are detected?
+
+## 11. Nightjar's buffer rules (2026-11-16)
+
+Nightjar (RamazanKara/nightjar, a Rust Moonlight client) has a "Real VRR"
+mode close to timestamp pacing (`protocol/core/src/present_clock.rs`). Its
+buffer follows lateness differently in two ways:
+- **Carry:** a frame later than the buffer raises it to its own lateness,
+  capped at the median plus 6.5 ms. The frames behind it then keep their
+  spacing to it. The raise fades with a 0.1 s time constant of host time.
+- **Knee:** the buffer covers the knee of recent lateness instead of the 99th
+  percentile. That is the first value from the median up past which waiting
+  2 ms longer brings in no more than 7% of frames, capped at the 97th
+  percentile. The buffer falls toward it with the same 0.1 s time constant,
+  instead of 0.5 ms/s.
+
+**How it was tested:**
+- The rules ran in tsreplay as `buffer_rule` scenarios on all 16 local
+  captures.
+- 7 replay exactly: Deck 2026-10-18 to 10-22, desktop 10-23. The nine
+  2026-10-08 Gamescope captures don't, so they are exploratory.
+- Each ran on its recorded display, and on a 144 Hz VRR model. The VRR model
+  must run above the stream rate: at 90 FPS on a 90 Hz VRR model every
+  scenario saturates at the refresh limit, and even pacing off shows 14 ms
+  of delay.
+
+**Results.** Frame-weighted over the 7 exact captures, on the 144 Hz VRR
+model:
+
+| Rule | Jerk over 2 ms (per mille) | Late (per mille) | Mean delay |
+|---|---|---|---|
+| Percentile (before) | 20.0 | 8.3 | 5.74 ms |
+| **Carry (adopted)** | **18.9** | 7.2 | 5.77 ms |
+| Knee, released at 0.5 ms/s | 25.6 | 54 | 4.36 ms |
+| Knee with the 0.1 s fall and the carry (Nightjar's whole rule) | 21.4 | 46 | 3.88 ms |
+
+- **Carry:** lowered jerk on every one of the 16 captures. The largest gains
+  were where delivery was otherwise clean: 5.90 → 4.18, 5.30 → 3.54 and
+  1.55 → 0.71 per mille.
+- **Fixed refresh:** the carry changed jerk by 0.01 per mille at most on
+  each capture (10.94 → 10.93 overall), with fewer late frames (7.1 → 6.0).
+- **Nightjar's whole rule:** often halved delay p95 (desktop: 12.4 → 6.2 ms).
+  But its jerk was higher, and 2–4x higher on the older Gamescope captures.
+  On fixed refresh it held more frames a refresh late.
+- The knee and whole-rule rows come from an earlier build that faded the
+  carry one frame later. The carry rows are from the shipped code.
+
+**Decision:** the carry is the default (architecture.md, "Carry"). Nightjar's
+sizing is a latency-for-smoothness trade. It is not taken, and it would need
+a live capture before becoming an option. All of this is model output, not
+display timing.
