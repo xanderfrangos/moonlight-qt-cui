@@ -416,7 +416,6 @@ public:
     Q_PROPERTY(int vrrHistorySeconds READ vrrHistorySeconds WRITE setVrrHistorySeconds NOTIFY vrrTimingChanged)
     Q_PROPERTY(int vrrToleranceUs READ vrrToleranceUs WRITE setVrrToleranceUs NOTIFY vrrTimingChanged)
     Q_PROPERTY(bool smoothVrrFrameTiming MEMBER smoothVrrFrameTiming NOTIFY smoothVrrFrameTimingChanged)
-    Q_PROPERTY(bool absorbVrrMicrostutter MEMBER absorbVrrMicrostutter NOTIFY absorbVrrMicrostutterChanged)
     Q_PROPERTY(bool timestampPacing READ timestampPacing WRITE setTimestampPacing NOTIFY timestampPacingChanged)
     Q_PROPERTY(int timestampSmoothing READ timestampSmoothing WRITE setTimestampSmoothing NOTIFY timestampPacingChanged)
     Q_PROPERTY(bool highPerformanceGpuPower MEMBER highPerformanceGpuPower NOTIFY highPerformanceGpuPowerChanged)
@@ -531,7 +530,6 @@ public:
     bool smoothVrrFrameTiming;
     // Holds a standing presentation reserve so Reduce judder can even out
     // late host frames; applies only while smoothVrrFrameTiming is set.
-    bool absorbVrrMicrostutter;
     bool highPerformanceGpuPower;
     bool traceVrrFrames;
     bool gameOptimizations;
@@ -654,7 +652,6 @@ signals:
     void vrrLatencyModeChanged();
     void vrrTimingChanged();
     void smoothVrrFrameTimingChanged();
-    void absorbVrrMicrostutterChanged();
     void timestampPacingChanged();
     void highPerformanceGpuPowerChanged();
     void traceVrrFramesChanged();

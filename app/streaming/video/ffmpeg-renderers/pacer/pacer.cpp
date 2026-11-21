@@ -385,7 +385,6 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                        bool enableVrr, int vrrDisplayRefreshHz,
                        bool smoothVrrFrameTiming, const QString& calibrationKey,
                        int vrrLatencyMode, VrrTimingOptions vrrTimingOptions,
-                       bool absorbVrrMicrostutter,
                        TimestampPacingOptions timestampPacing)
 {
     m_MaxVideoFps = maxVideoFps;
@@ -401,7 +400,6 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
         config.streamRateHz = maxVideoFps;
         config.displayRefreshHz = vrrDisplayRefreshHz;
         config.smoothFrameTiming = smoothVrrFrameTiming;
-        config.absorbMicrostutter = smoothVrrFrameTiming && absorbVrrMicrostutter;
         config = vrrProductionSessionConfig(config);
         VrrFallbackReason fallbackReason = VrrFallbackReason::NoFallback;
         if (!calibrationKey.isEmpty()) {
@@ -450,7 +448,6 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps,
                         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                                     "VRR pacing: target %d Hz with %d FPS stream (adaptive timestamp playout, frame timing %s, buffer %.2f frames, target %.2f%%, history %d s, tolerance %.2f ms)",
                                     m_DisplayFps, m_MaxVideoFps,
-                                    config.absorbMicrostutter ? "smoothed, absorbing microstutter" :
                                     config.smoothFrameTiming ? "smoothed" : "follows host timestamps",
                                     config.timingOptions.bufferPerMille / 1000.0,
                                     config.timingOptions.targetHundredths / 100.0,

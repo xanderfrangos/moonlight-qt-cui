@@ -376,7 +376,7 @@ private:
                        bool gamescopeMailbox = false, int vrrLatencyMode = 0,
                        bool gamescopeRepaint = false,
                        VrrTimingOptions vrrTimingOptions = {},
-                       bool absorbVrrMicrostutter = false, int ditheringMode = 0,
+                       int ditheringMode = 0,
                        bool temporalDithering = false, int debandMode = 0,
                        int ditherGrainMode = 0,
                        TimestampPacingOptions timestampPacing = {});
@@ -449,7 +449,6 @@ private:
         bool gamescopeMailbox = false;
         bool gamescopeRepaint = false;
         bool smoothVrrFrameTiming = true;
-        bool absorbVrrMicrostutter = false;
         int ditheringMode = 0;
         bool temporalDithering = false;
         int ditherGrainMode = 0;

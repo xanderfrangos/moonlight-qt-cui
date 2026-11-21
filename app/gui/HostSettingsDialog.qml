@@ -69,7 +69,6 @@ NavigableDialog {
     property int vrrHistorySeconds: 120
     property int vrrToleranceUs: 500
     property bool smoothVrrFrameTiming: true
-    property bool absorbVrrMicrostutter: false
 
     property bool codecOn: false
     property int codecValue: StreamingPreferences.VCC_AUTO
@@ -179,7 +178,6 @@ NavigableDialog {
         vrrHistorySeconds = value("vsync", "vrrHistorySeconds", dialog.basePrefs.vrrHistorySeconds)
         vrrToleranceUs = value("vsync", "vrrToleranceUs", dialog.basePrefs.vrrToleranceUs)
         smoothVrrFrameTiming = value("vsync", "smoothVrrFrameTiming", dialog.basePrefs.smoothVrrFrameTiming)
-        absorbVrrMicrostutter = value("vsync", "absorbVrrMicrostutter", dialog.basePrefs.absorbVrrMicrostutter)
 
         // Loaded after the settings it depends on
         bitrateOn = saved.bitrate !== undefined
@@ -216,8 +214,7 @@ NavigableDialog {
                 "vrrTargetHundredths": vrrTargetHundredths,
                 "vrrHistorySeconds": vrrHistorySeconds,
                 "vrrToleranceUs": vrrToleranceUs,
-                "smoothVrrFrameTiming": smoothVrrFrameTiming,
-                "absorbVrrMicrostutter": absorbVrrMicrostutter
+                "smoothVrrFrameTiming": smoothVrrFrameTiming
             }
         }
         if (codecOn) {
@@ -778,16 +775,6 @@ NavigableDialog {
                     hoverEnabled: !SystemProperties.hoverEffectsDisabled
                     checked: dialog.smoothVrrFrameTiming
                     onToggled: dialog.smoothVrrFrameTiming = checked
-                }
-
-                CheckBox {
-                    Layout.fillWidth: true
-                    visible: dialog.effectiveVrr
-                    text: qsTr("Absorb microstutter (adds latency)")
-                    hoverEnabled: !SystemProperties.hoverEffectsDisabled
-                    enabled: dialog.smoothVrrFrameTiming
-                    checked: dialog.absorbVrrMicrostutter
-                    onToggled: dialog.absorbVrrMicrostutter = checked
                 }
             }
 

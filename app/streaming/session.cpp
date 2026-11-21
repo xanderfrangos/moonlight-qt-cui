@@ -316,7 +316,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             int vrrDisplayRefreshHz,
                             [[maybe_unused]] bool* effectiveVrr, bool smoothVrrFrameTiming,
                             bool gamescopeMailbox, int vrrLatencyMode, bool gamescopeRepaint,
-                            VrrTimingOptions vrrTimingOptions, bool absorbVrrMicrostutter,
+                            VrrTimingOptions vrrTimingOptions,
                             int ditheringMode, bool temporalDithering, int debandMode,
                             int ditherGrainMode, TimestampPacingOptions timestampPacing)
 {
@@ -345,7 +345,6 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.gamescopeMailbox = gamescopeMailbox;
     params.gamescopeRepaint = gamescopeRepaint;
     params.smoothVrrFrameTiming = smoothVrrFrameTiming;
-    params.absorbVrrMicrostutter = absorbVrrMicrostutter;
     params.ditheringMode = ditheringMode;
     params.temporalDithering = temporalDithering;
     params.ditherGrainMode = ditherGrainMode;
@@ -896,7 +895,6 @@ void Session::snapshotPresentationSettings(SDL_Window* window)
     m_PresentationSettings.gamescopeRepaint = false; // Retired repaint experiment.
     m_PresentationSettings.gamescopeMailbox = false; // Retired Mailbox experiment.
     m_PresentationSettings.smoothVrrFrameTiming = m_Preferences->smoothVrrFrameTiming;
-    m_PresentationSettings.absorbVrrMicrostutter = m_Preferences->absorbVrrMicrostutter;
     m_PresentationSettings.ditheringMode = m_Preferences->ditheringMode;
     m_PresentationSettings.temporalDithering = m_Preferences->temporalDithering;
     m_PresentationSettings.ditherGrainMode = m_Preferences->ditherGrainMode;
@@ -3272,7 +3270,6 @@ void Session::start()
             {"vrr_history_seconds", m_PresentationSettings.vrrTimingOptions.historySeconds},
             {"vrr_tolerance_us", m_PresentationSettings.vrrTimingOptions.toleranceUs},
             {"reduce_judder", m_PresentationSettings.smoothVrrFrameTiming},
-            {"absorb_microstutter", m_PresentationSettings.absorbVrrMicrostutter},
             {"timestamp_pacing", m_PresentationSettings.timestampPacing.enabled},
             {"timestamp_smoothing", m_PresentationSettings.timestampPacing.smoothing},
             {"timestamp_target_per_mille", m_PresentationSettings.timestampPacing.targetPerMille},
@@ -3901,7 +3898,6 @@ void Session::exec()
                                m_PresentationSettings.vrrLatencyMode,
                                m_PresentationSettings.gamescopeRepaint,
                                m_PresentationSettings.vrrTimingOptions,
-                               m_PresentationSettings.absorbVrrMicrostutter,
                                m_PresentationSettings.ditheringMode,
                                m_PresentationSettings.temporalDithering,
                                m_PresentationSettings.debandMode,
