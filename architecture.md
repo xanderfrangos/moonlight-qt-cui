@@ -2,6 +2,7 @@
 
 Source baseline: `master` based on `v6.2.0-daily.202` with VRR18 interval
 feedback revision 7 for new streams and the source-clock deadline correction.
+moonlight-stream `master` is merged through `dc99771b` (2026-11-25).
 Buffer growth uses delivery and decode readiness at both ends of an interval.
 The custom profile exposes the frame allowance, timing target, score history,
 and interval tolerance. The earlier platform changes include the decode-buffer accounting
@@ -403,6 +404,23 @@ Legacy Pacer queues drop old frames at their bounds and move frames according
 to the V-sync/render path. They defer freeing a rendered frame to protect GPU
 use. VRR replaces that pacing mechanism with its worker and explicit presenter
 contract; it does not replace network assembly or codec reference handling.
+
+Pacer owns the start and end of rendering (moonlight-stream `10270ca0`).
+`Pacer::initialize()` calls `prepareToRender()` and attaches the renderer to the
+overlay manager before its render thread starts. The render thread, or
+`Pacer::shutdown()` when there is none, detaches it before
+`cleanupRenderContext()`. The VRR path attaches after its worker starts, which
+is still before the decoder thread can submit a frame, and detaches once the
+worker has stopped. `setOverlayRenderer(nullptr)` returns only when no overlay
+callback is still running in the old renderer. The decoder creates the pacer
+after the codec context, so a codec failure never starts pacing threads.
+
+`IFFmpegRenderer`'s render lock (moonlight-stream `1ced9dd9`) is held around the
+renderer call in `Pacer::renderFrame()` and around the decoder's `setHdrMode()`
+and `notifyWindowChanged()`. Overlay callbacks never take it. Neither do the VRR
+worker's presenter calls: each presenter excludes its own window and HDR
+changes (section 10.1 for D3D11), and the decoder sends window-state changes to
+the pacer outside the lock.
 
 ## 7. VRR worker: queue, execution, and lifecycle
 
@@ -957,8 +975,9 @@ context, swapchain and prepared VRR frame against window-change callbacks. The
 presentation lock includes FFmpeg's lock only when decode and render share one
 immediate context. On separate devices, preparation and `Present` never hold
 FFmpeg's lock; `renderVideo()` and `captureDecodeBoundary()` take it only
-around decode-context `Signal`/`Wait`/`Flush`. Lock order is presentation, then
-context.
+around decode-context `Signal`/`Wait`/`Flush`. Lock order is the render lock
+(legacy rendering and the main thread's window and HDR changes only), then
+presentation, then context.
 
 Preparation binds and clears the backbuffer, renders video and overlays, and sets
 colorspace/HDR state. Direct decoder texture binding follows stock Moonlight on

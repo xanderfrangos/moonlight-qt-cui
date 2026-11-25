@@ -263,7 +263,7 @@ D3D11VARenderer::D3D11VARenderer(int decoderSelectionPass)
       m_RenderAdapterIndex(-1),
       m_VrrRenderAdapterLuidValid(false),
       m_VrrRenderAdapterLuid(0),
-      m_LastColorTrc(AVCOL_TRC_UNSPECIFIED),
+      m_SwapChainColorTrc(AVCOL_TRC_UNSPECIFIED),
       m_AllowTearing(false),
       m_VrrTearingSupported(false),
       m_VrrBorderlessFlipModel(false),
@@ -2526,7 +2526,10 @@ bool D3D11VARenderer::notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO stateInfo)
         DXGI_SWAP_CHAIN_DESC1 swapchainDesc;
         m_SwapChain->GetDesc1(&swapchainDesc);
 
-        // Exclude concurrent rendering and presentation
+        // Exclude concurrent presentation, including the VRR presenter,
+        // which runs outside the render lock. lockPresentation() also locks
+        // the context against decoding, but only when decode and render
+        // share a device, as upstream does here under the render lock.
         lockPresentation();
 
         if (!retirePreparedVrrFrameForMutation()) {
@@ -3271,7 +3274,7 @@ bool D3D11VARenderer::prepareFrameForPresent(AVFrame* frame,
         renderOverlay((Overlay::OverlayType)i);
     }
 
-    if (frame->color_trc != m_LastColorTrc) {
+    if (frame->color_trc != m_SwapChainColorTrc) {
         HRESULT hr;
         if (frame->color_trc == AVCOL_TRC_SMPTE2084) {
             hr = m_CompositionPresenter.active() ?
@@ -3294,7 +3297,7 @@ bool D3D11VARenderer::prepareFrameForPresent(AVFrame* frame,
             }
         }
 
-        m_LastColorTrc = frame->color_trc;
+        m_SwapChainColorTrc = frame->color_trc;
     }
 
     return true;
@@ -4210,7 +4213,7 @@ bool D3D11VARenderer::restoreFixedPresentation(VrrFallbackReason reason)
         if (!setupSwapchainDependentResources()) {
             return false;
         }
-        m_LastColorTrc = AVCOL_TRC_UNSPECIFIED;
+        m_SwapChainColorTrc = AVCOL_TRC_UNSPECIFIED;
     }
     // A failed worker startup falls back to the legacy Present-throttled path.
     // The creation flag must survive ResizeBuffers; simply stop CPU admission

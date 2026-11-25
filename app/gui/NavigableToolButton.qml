@@ -30,8 +30,12 @@ ToolButton {
     activeFocusOnTab: true
 
     icon.source: iconSource
-    icon.width: SystemProperties.tvMode ? TvTheme.pillIconSize : background.width
-    icon.height: SystemProperties.tvMode ? TvTheme.pillIconSize : background.height
+    // Size the icon from the button's height rather than its background.
+    // Material's background spans the full button width when the content
+    // isn't square, so binding the icon to it feeds the button's width back
+    // into its own implicit width and the toolbar layout grows without bound.
+    icon.width: SystemProperties.tvMode ? TvTheme.pillIconSize : height / 2
+    icon.height: SystemProperties.tvMode ? TvTheme.pillIconSize : height / 2
 
     // This determines the size of the Material highlight. We increase it
     // from the default because we use larger than normal icons for TV readability.

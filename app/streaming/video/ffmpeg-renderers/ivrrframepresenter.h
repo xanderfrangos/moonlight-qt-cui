@@ -357,6 +357,11 @@ struct VrrPrepareResult {
     VrrPresentFeedback feedback;
 };
 
+// The VRR pacing worker calls these without IFFmpegRenderer's render lock,
+// which only Pacer::renderFrame(), setHdrMode() and notifyWindowChanged() take.
+// A presenter must exclude its own window and HDR changes from these calls;
+// D3D11 does it with its presentation lock, which it can drop while waiting
+// on the GPU.
 class IVrrFramePresenter {
 public:
     virtual ~IVrrFramePresenter() = default;

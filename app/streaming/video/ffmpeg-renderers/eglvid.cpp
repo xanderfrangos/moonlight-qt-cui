@@ -64,6 +64,7 @@ EGLRenderer::EGLRenderer(IFFmpegRenderer *backendRenderer)
         m_Window(nullptr),
         m_Backend(backendRenderer),
         m_VideoVAO(0),
+        m_VideoVBO(0),
         m_BlockingSwapBuffers(false),
         m_LastRenderSync(EGL_NO_SYNC),
         m_glEGLImageTargetTexture2DOES(nullptr),
@@ -102,6 +103,7 @@ EGLRenderer::~EGLRenderer()
             SDL_assert(m_glDeleteVertexArraysOES != nullptr);
             m_glDeleteVertexArraysOES(1, &m_VideoVAO);
         }
+        glDeleteBuffers(1, &m_VideoVBO);
         glDeleteTextures(EGL_MAX_PLANES, m_Textures);
 
         glDeleteTextures(Overlay::OverlayMax, m_OverlayTextures);
@@ -262,10 +264,9 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
     glDisable(GL_BLEND);
 }
 
-int EGLRenderer::loadAndBuildShader(int shaderType,
-                                    const char *file) {
+GLuint EGLRenderer::loadAndBuildShader(int shaderType, const char *file) {
     GLuint shader = glCreateShader(shaderType);
-    if (!shader || shader == GL_INVALID_ENUM) {
+    if (!shader) {
         EGL_LOG(Error, "Can't create shader: %d", glGetError());
         return 0;
     }
@@ -282,6 +283,7 @@ int EGLRenderer::loadAndBuildShader(int shaderType,
         char shaderLog[512];
         glGetShaderInfoLog(shader, sizeof (shaderLog), nullptr, shaderLog);
         EGL_LOG(Error, "Cannot load shader \"%s\": %s", file, shaderLog);
+        glDeleteShader(shader);
         return 0;
     }
 
@@ -293,7 +295,7 @@ unsigned EGLRenderer::compileShader(const char* vertexShaderSrc, const char* fra
 
     GLuint vertexShader = loadAndBuildShader(GL_VERTEX_SHADER, vertexShaderSrc);
     if (!vertexShader)
-        return false;
+        return 0;
 
     GLuint fragmentShader = loadAndBuildShader(GL_FRAGMENT_SHADER, fragmentShaderSrc);
     if (!fragmentShader)
@@ -647,13 +649,12 @@ bool EGLRenderer::setupVideoRenderingState() {
     };
 
     // Setup the VAO and VBO
-    unsigned int VBO;
     m_glGenVertexArraysOES(1, &m_VideoVAO);
-    glGenBuffers(1, &VBO);
+    glGenBuffers(1, &m_VideoVBO);
 
     m_glBindVertexArrayOES(m_VideoVAO);
 
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_VideoVBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
     // compileShader() ensures that aPosition and aTexCoord are indexes 0 and 1 respectively
@@ -665,7 +666,8 @@ bool EGLRenderer::setupVideoRenderingState() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     m_glBindVertexArrayOES(0);
 
-    glDeleteBuffers(1, &VBO);
+    // The VBO is kept alive as a member since the VAO still references it.
+    // It is deleted in ~EGLRenderer() alongside the other GL resources.
 
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
@@ -789,7 +791,7 @@ void EGLRenderer::renderFrame(AVFrame* frame)
     }
 
     ssize_t plane_count = m_Backend->exportEGLImages(frame, m_EGLDisplay, imgs);
-    if (plane_count < 0)
+    if (plane_count <= 0)
         return;
     for (ssize_t i = 0; i < plane_count; ++i) {
         glActiveTexture(GL_TEXTURE0 + i);

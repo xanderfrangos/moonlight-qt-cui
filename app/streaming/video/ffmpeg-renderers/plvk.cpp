@@ -9,6 +9,7 @@
 #include "streaming/video/vrrrenderpolicy.h"
 
 #include <Limelight.h>
+#include "utils.h"
 
 // Implementation in plvk_c.c
 #define PL_LIBAV_IMPLEMENTATION 0
@@ -27,6 +28,8 @@ extern "C" {
 #endif
 }
 
+#include <cstring>
+#include <memory>
 #include <vector>
 #include <set>
 #include <thread>
@@ -154,6 +157,104 @@ bool isImmediatePresentation(const char* videoDriver)
             SDL_strcmp(videoDriver, "kmsdrm") == 0 ||
             SDL_strcmp(videoDriver, "KMSDRM") == 0);
 }
+
+// libplacebo takes one VkPhysicalDeviceFeatures2 chain, but upstream (internally
+// synchronized queues), LS1 and PyroWave each request features. Requests are
+// merged without relinking their own structs, which are statics that other
+// callers share: core features are ORed into the head and each extension
+// struct is copied, or ORed into an earlier copy of the same type. Feature
+// structs hold nothing but VkBool32s after their sType and pNext.
+class DeviceFeatureChain
+{
+public:
+    DeviceFeatureChain()
+    {
+        m_Head.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    }
+
+    void add(const VkPhysicalDeviceFeatures2* request)
+    {
+        m_Empty = false;
+        orFlags(&m_Head.features, &request->features, sizeof(request->features));
+        for (auto in = static_cast<const VkBaseInStructure*>(request->pNext);
+             in != nullptr; in = in->pNext) {
+            const size_t size = structSize(in->sType);
+            if (size == 0) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "Ignoring unknown Vulkan feature struct: %d",
+                            (int)in->sType);
+                continue;
+            }
+
+            VkBaseOutStructure* existing = find(in->sType);
+            if (existing != nullptr) {
+                orFlags(existing + 1, in + 1, size - sizeof(VkBaseOutStructure));
+                continue;
+            }
+
+            m_Structs.emplace_back(new char[size]);
+            auto out = reinterpret_cast<VkBaseOutStructure*>(m_Structs.back().get());
+            memcpy(out, in, size);
+            out->pNext = nullptr;
+            tail()->pNext = out;
+        }
+    }
+
+    // nullptr when nothing asked for features, as libplacebo's default
+    const VkPhysicalDeviceFeatures2* get() const
+    {
+        return m_Empty ? nullptr : &m_Head;
+    }
+
+private:
+    static size_t structSize(VkStructureType type)
+    {
+        switch (type) {
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES:
+            return sizeof(VkPhysicalDeviceVulkan12Features);
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES:
+            return sizeof(VkPhysicalDeviceVulkan13Features);
+#ifdef VK_KHR_internally_synchronized_queues
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR:
+            return sizeof(VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR);
+#endif
+        default:
+            return 0;
+        }
+    }
+
+    static void orFlags(void* to, const void* from, size_t bytes)
+    {
+        auto out = static_cast<VkBool32*>(to);
+        auto in = static_cast<const VkBool32*>(from);
+        for (size_t i = 0; i < bytes / sizeof(VkBool32); i++) {
+            out[i] |= in[i];
+        }
+    }
+
+    VkBaseOutStructure* find(VkStructureType type)
+    {
+        for (auto s = reinterpret_cast<VkBaseOutStructure*>(m_Head.pNext); s != nullptr; s = s->pNext) {
+            if (s->sType == type) {
+                return s;
+            }
+        }
+        return nullptr;
+    }
+
+    VkBaseOutStructure* tail()
+    {
+        auto s = reinterpret_cast<VkBaseOutStructure*>(&m_Head);
+        while (s->pNext != nullptr) {
+            s = s->pNext;
+        }
+        return s;
+    }
+
+    VkPhysicalDeviceFeatures2 m_Head = {};
+    std::vector<std::unique_ptr<char[]>> m_Structs;
+    bool m_Empty = true;
+};
 
 } // namespace
 
@@ -354,6 +455,7 @@ PlVkRenderer::~PlVkRenderer()
 #ifdef Q_OS_DARWIN
         m_MetalTextureFactory.reset();
 #endif
+        av_buffer_unref(&m_HwDeviceCtx);
         pl_vulkan_destroy(&m_Vulkan);
 
         // This surface was created by SDL, so there's no libplacebo API to destroy it
@@ -361,7 +463,6 @@ PlVkRenderer::~PlVkRenderer()
             fn_vkDestroySurfaceKHR(m_PlVkInstance->instance, m_VkSurface, nullptr);
         }
 
-        av_buffer_unref(&m_HwDeviceCtx);
         pl_vk_inst_destroy(&m_PlVkInstance);
     }
 
@@ -540,6 +641,7 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
     vkParams.get_proc_addr = m_PlVkInstance->get_proc_addr;
     vkParams.surface = m_VkSurface;
     vkParams.device = device;
+    DeviceFeatureChain featureChain;
 #ifdef Q_OS_LINUX
     // LS1's feature image is R8_SNORM, which needs the extended storage-image
     // feature enabled at device creation. libplacebo enables it opportunistically.
@@ -547,7 +649,7 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
     if (decoderParams->ls1Upscaling) {
         ls1Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         ls1Features.features.shaderStorageImageExtendedFormats = VK_TRUE;
-        vkParams.features = &ls1Features;
+        featureChain.add(&ls1Features);
     }
 #endif
 
@@ -590,9 +692,46 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
 #if defined(HAVE_PYROWAVE) && defined(Q_OS_LINUX)
     const bool pyroWave = (decoderParams->videoFormat & VIDEO_FORMAT_MASK_PYROWAVE) != 0;
     if (pyroWave) {
-        vkParams.features = PyroWavePlaceboPool::requestedFeatures();
+        featureChain.add(PyroWavePlaceboPool::requestedFeatures());
     }
 #endif
+
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(60, 31, 101) && defined(VK_KHR_internally_synchronized_queues)
+    // libplacebo needs explicit opt-in to use internally synchronized queues, since
+    // it requires cooperation with the app (ex: using vkGetDeviceQueue2). We know
+    // FFmpeg 9.0+ always wants internally synchronized queues if available, so we
+    // will turn it on when supported by the physical device.
+    if (isExtensionSupportedByPhysicalDevice(device, "VK_KHR_internally_synchronized_queues")) {
+        bool internallySynchronizedQueues;
+        if (!Utils::getEnvironmentVariableOverride("PLVK_INT_SYNC_QUEUES", &internallySynchronizedQueues)) {
+#if LIBAVUTIL_VERSION_MAJOR < 62
+            // The Gamescope WSI layer currently breaks apps using internally synchronized queues
+            // (failing to use vkGetDeviceQueue2), so we disable this feature when the Gamescope
+            // WSI layer is enabled. See gamescope#2261 for details.
+            internallySynchronizedQueues = (qEnvironmentVariableIntValue("ENABLE_GAMESCOPE_WSI") == 0 ||
+                                            qEnvironmentVariableIntValue("DISABLE_GAMESCOPE_WSI") == 1);
+#else
+            // We have no choice but to enable it since the queue locking callbacks are gone
+            internallySynchronizedQueues = true;
+#endif
+        }
+
+        static VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR featInternalSyncQueues = {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR,
+            nullptr,
+            internallySynchronizedQueues,
+        };
+
+        static const VkPhysicalDeviceFeatures2 features = {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            (void*)&featInternalSyncQueues,
+        };
+
+        featureChain.add(&features);
+    }
+#endif
+
+    vkParams.features = featureChain.get();
 
     {
         // Don't let Qt take DRM master from us during pl_vulkan_create()
@@ -968,7 +1107,9 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
 #endif
 
         // Populate the device queues for decoding this video format
-        populateQueues(params->videoFormat);
+        if (!populateQueues(params->videoFormat)) {
+            return false;
+        }
 
         int err = av_hwdevice_ctx_init(m_HwDeviceCtx);
         if (err < 0) {
@@ -1479,13 +1620,14 @@ bool PlVkRenderer::populateQueues(int videoFormat)
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(59, 34, 100)
     Q_UNUSED(videoFormat);
 
-    for (uint32_t i = 0; i < queueFamilyCount; i++) {
+    uint32_t maxQf = SDL_min(queueFamilyCount, (uint32_t)SDL_arraysize(vkDeviceContext->qf));
+    for (uint32_t i = 0; i < maxQf; i++) {
         vkDeviceContext->qf[i].idx = i;
         vkDeviceContext->qf[i].num = queueFamilies[i].queueFamilyProperties.queueCount;
         vkDeviceContext->qf[i].flags = (VkQueueFlagBits)queueFamilies[i].queueFamilyProperties.queueFlags;
         vkDeviceContext->qf[i].video_caps = (VkVideoCodecOperationFlagBitsKHR)queueFamilyVideoProps[i].videoCodecOperations;
     }
-    vkDeviceContext->nb_qf = queueFamilyCount;
+    vkDeviceContext->nb_qf = maxQf;
 #else
     vkDeviceContext->queue_family_index = m_Vulkan->queue_graphics.index;
     vkDeviceContext->nb_graphics_queues = m_Vulkan->queue_graphics.count;
@@ -1495,6 +1637,7 @@ bool PlVkRenderer::populateQueues(int videoFormat)
     vkDeviceContext->nb_comp_queues = m_Vulkan->queue_compute.count;
 
     // Select a video decode queue that is capable of decoding our chosen format
+    vkDeviceContext->queue_family_decode_index = -1;
     for (uint32_t i = 0; i < queueFamilyCount; i++) {
         if (queueFamilies[i].queueFamilyProperties.queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR) {
             if (videoFormat & VIDEO_FORMAT_MASK_H264) {
@@ -1749,6 +1892,14 @@ void PlVkRenderer::waitToRender()
     if (pl_gpu_is_failed(m_Vulkan->gpu)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "GPU is in failed state. Recreating renderer.");
+        queueRenderDeviceReset();
+        return;
+    }
+
+    // If a swapchain (re)creation failed, m_Swapchain is NULL. We can't render
+    // or resize it, and a device reset has already been requested, so skip this
+    // frame and let the main thread recreate the renderer.
+    if (m_Swapchain == nullptr) {
         queueRenderDeviceReset();
         return;
     }
@@ -3041,6 +3192,18 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
     if (m_GpuTrace && m_VrrPreparingFrame) m_GpuTrace->record({"surface_import",
         m_GpuTracePts, m_GpuTraceOutputUs, mapStartUs, LiGetMicroseconds(), 0, mapped});
     if (!mapped) {
+        // Submit the pending swapchain frame so swapchain state stays consistent.
+        // A VRR preparation keeps its image: the worker abandons it when the
+        // prepare reports failure.
+        if (m_HasPendingSwapchainFrame && !m_VrrPreparingFrame) {
+            m_HasPendingSwapchainFrame = false;
+            if (!submitSwapchainFrame()) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "pl_swapchain_submit_frame() failed");
+                queueRenderDeviceReset();
+            }
+        }
+
         // This function logs internally
         return;
     }

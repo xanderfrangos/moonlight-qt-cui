@@ -41,12 +41,15 @@
 #include <asm/hwprobe.h>
 #include <sys/syscall.h>
 #else
-#define __NR_riscv_hwprobe 258
 struct riscv_hwprobe {
     int64_t key;
     uint64_t value;
 };
 #define RISCV_HWPROBE_KEY_IMA_EXT_0 4
+#endif
+
+#ifndef __NR_riscv_hwprobe
+#define __NR_riscv_hwprobe 258
 #endif
 
 // RISC-V Scalar AES [E]ncryption and [D]ecryption
@@ -394,7 +397,7 @@ bool StreamUtils::getNativeDesktopMode(int displayIndex, SDL_DisplayMode* mode, 
     CGDirectDisplayID displayIds[MAX_DISPLAYS];
     uint32_t displayCount = 0;
     CGGetActiveDisplayList(MAX_DISPLAYS, displayIds, &displayCount);
-    if (displayIndex >= (int)displayCount) {
+    if (displayIndex < 0 || displayIndex >= (int)displayCount) {
         return false;
     }
 
@@ -405,6 +408,12 @@ bool StreamUtils::getNativeDesktopMode(int displayIndex, SDL_DisplayMode* mode, 
     // native on macOS using the SDL API alone. We'll talk to CoreGraphics to
     // find the correct resolution and match it in our SDL list.
     CFArrayRef modeList = CGDisplayCopyAllDisplayModes(displayIds[displayIndex], nullptr);
+    if (modeList == nullptr) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "CGDisplayCopyAllDisplayModes() returned NULL for display %d",
+                     displayIndex);
+        return false;
+    }
     CFIndex count = CFArrayGetCount(modeList);
     for (CFIndex i = 0; i < count; i++) {
         auto cgMode = (CGDisplayModeRef)(CFArrayGetValueAtIndex(modeList, i));
@@ -465,7 +474,7 @@ bool StreamUtils::getNativeDesktopMode(int displayIndex, SDL_DisplayMode* mode, 
 #else
     SDL_assert(SDL_WasInit(SDL_INIT_VIDEO));
 
-    if (displayIndex >= SDL_GetNumVideoDisplays()) {
+    if (displayIndex < 0 || displayIndex >= SDL_GetNumVideoDisplays()) {
         return false;
     }
 

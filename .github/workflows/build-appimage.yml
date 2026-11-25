@@ -74,9 +74,14 @@ jobs:
           # compiler/linker/build tool versions, dependency refs and patches.
           { printf '%s\n' "$ImageOS" "$ImageVersion"; dpkg-query -W; gcc --version; g++ --version; ld --version; cmake --version; meson --version; ninja --version; } > toolchain-fingerprint.txt
           # Include the resolved IDs behind version tags, not only their names.
-          for dependency in 'sdl https://github.com/libsdl-org/SDL.git release-3.4.18' 'sdlcompat https://github.com/libsdl-org/sdl2-compat.git release-2.32.74' 'libva https://github.com/intel/libva.git 2.24.1' 'ffmpeg https://github.com/FFmpeg/FFmpeg.git n9.0.2' 'dav1d https://code.videolan.org/videolan/dav1d.git 1.5.4'; do
+          # SDL and sdl2-compat are pinned to commits, as upstream pins them.
+          for dependency in 'sdl https://github.com/libsdl-org/SDL.git d3926e74bd58eaf5f157ff809f0cb781f2a574b0' 'sdlcompat https://github.com/libsdl-org/sdl2-compat.git bebc6eb01397497130ca58a1cb48c8bd141422f5' 'libva https://github.com/intel/libva.git 2.24.1' 'ffmpeg https://github.com/FFmpeg/FFmpeg.git n9.1' 'dav1d https://code.videolan.org/videolan/dav1d.git 1.5.5'; do
             read -r name repository tag <<< "$dependency"
-            refs=$(git ls-remote "$repository" "refs/tags/$tag" "refs/tags/$tag^{}")
+            if [[ "$tag" =~ ^[0-9a-f]{40}$ ]]; then
+              refs="$tag"
+            else
+              refs=$(git ls-remote "$repository" "refs/tags/$tag" "refs/tags/$tag^{}")
+            fi
             test -n "$refs"
             printf '%s\n%s\n' "$repository" "$refs" >> toolchain-fingerprint.txt
             sha=$(awk '{print $1}' <<< "$refs" | tail -n 1)
@@ -178,7 +183,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: haasn/libplacebo
-          ref: 92b5ac6db79f4d680eb656692f7bf51e9606f42a
+          ref: v7.387.0
           path: deps/libplacebo
           submodules: 'recursive'
 
@@ -186,7 +191,6 @@ jobs:
         if: steps.dependencies.outputs.cache-hit != 'true'
         working-directory: deps/libplacebo
         run: |
-          git apply ../../app/deploy/linux/appimage/*.patch
           meson setup build -Dvulkan=enabled -Dopengl=disabled -Ddemos=false
           ninja -j "$BUILD_JOBS" -C build
           DESTDIR="$DEP_STAGE" ninja -j "$BUILD_JOBS" install -C build
@@ -196,7 +200,7 @@ jobs:
         if: steps.dependencies.outputs.cache-hit != 'true'
         working-directory: deps
         env:
-          DAV1D_VER: 1.5.4
+          DAV1D_VER: 1.5.5
         run: |
           git clone --branch $DAV1D_VER --depth 1 https://code.videolan.org/videolan/dav1d.git
           pushd dav1d

@@ -1023,9 +1023,18 @@ public:
         }
 
         // Create the Metal texture cache for our CVPixelBuffers
-        NSDictionary* cacheAttributes = @{ (id)kCVMetalTextureUsage: @(MTLTextureUsageShaderRead) };
-        err = CVMetalTextureCacheCreate(kCFAllocatorDefault, (CFDictionaryRef)cacheAttributes,
-                                       device, nullptr, &m_TextureCache);
+        NSDictionary *textureAttributes = @{
+            // NB: kCVMetalTextureUsage is documented as if it's a key used in the
+            // cacheAttributes dictionary, but it is actually for textureAttributes
+            // (as confirmed by Metal Validation failures for incorrect usages).
+            (__bridge NSString *)kCVMetalTextureUsage: @(MTLTextureUsageShaderRead)
+        };
+
+        err = CVMetalTextureCacheCreate(kCFAllocatorDefault,
+                                        nullptr,
+                                        device,
+                                        (__bridge CFDictionaryRef)textureAttributes,
+                                        &m_TextureCache);
 
         if (err != kCVReturnSuccess) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,

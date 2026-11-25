@@ -114,6 +114,7 @@ private:
     void rumbleForIdentify(const QString& id);
 
     QStringList connectedControllerIdsInOrder() const;
+    void pumpGamepadEvents();
 
 private slots:
     void onPollingTimerFired();

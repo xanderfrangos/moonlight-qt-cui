@@ -763,7 +763,7 @@ void OverlayManager::setOverlayRenderer(IOverlayRenderer* renderer)
 {
     // Wait for any callback into the previous renderer before allowing its
     // destruction. An in-progress CPU raster job is invalidated by revision.
-    std::lock_guard<std::mutex> rendererLock(m_RendererLock);
+    QWriteLocker rendererLock(&m_OverlayRendererLock);
     {
         std::lock_guard<std::mutex> stateLock(m_StateLock);
         m_Renderer = renderer;
@@ -865,7 +865,7 @@ void OverlayManager::run()
         }
         if (type == OverlayDebug) surface = fitToOutput(surface, outputWidth, outputHeight);
         const auto rasterized = Clock::now();
-        std::lock_guard<std::mutex> rendererLock(m_RendererLock);
+        QReadLocker rendererLock(&m_OverlayRendererLock);
         bool publish;
         {
             std::lock_guard<std::mutex> stateLock(m_StateLock);

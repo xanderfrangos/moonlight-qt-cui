@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <QReadWriteLock>
 
 #include "SDL_compat.h"
 #include <SDL_ttf.h>
@@ -198,9 +199,11 @@ private:
     // messages until it's removed. Guarded by m_StateLock.
     bool m_StatusOverlayPainted = false;
     std::condition_variable m_WorkReady;
-    // Only renderer attachment and callbacks take this lock. Producers never
-    // wait for rasterization, texture upload or renderer destruction.
-    std::mutex m_RendererLock;
+    // Written by setOverlayRenderer() and read around the worker's renderer
+    // callbacks, so no callback runs in a renderer once it is detached.
+    // Producers never wait for rasterization, texture upload or renderer
+    // destruction.
+    QReadWriteLock m_OverlayRendererLock;
     bool m_HaveRenderer = false, m_Stopping = false, m_TtfInitialized = false;
     std::thread m_Worker;
 };
