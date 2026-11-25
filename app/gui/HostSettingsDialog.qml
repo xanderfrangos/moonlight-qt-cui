@@ -765,7 +765,7 @@ NavigableDialog {
                     onBufferEdited: function(value) { dialog.vrrBufferPerMille = Math.max(250, Math.min(4000, value)) }
                     onTargetEdited: function(value) { dialog.vrrTargetHundredths = Math.max(9000, Math.min(9999, value)) }
                     onHistoryEdited: function(value) { dialog.vrrHistorySeconds = Math.max(10, Math.min(300, value)) }
-                    onToleranceEdited: function(value) { dialog.vrrToleranceUs = Math.round(Math.max(250, Math.min(2000, value)) / 250) * 250 }
+                    onToleranceEdited: function(value) { dialog.vrrToleranceUs = Math.round(Math.max(200, Math.min(2000, value)) / 50) * 50 }
                 }
 
                 CheckBox {

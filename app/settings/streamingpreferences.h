@@ -528,8 +528,6 @@ public:
     // adaptive-refresh floor, so the panel never engages its own
     // low-framerate compensation.
     bool smoothVrrFrameTiming;
-    // Holds a standing presentation reserve so Reduce judder can even out
-    // late host frames; applies only while smoothVrrFrameTiming is set.
     bool highPerformanceGpuPower;
     bool traceVrrFrames;
     bool gameOptimizations;
